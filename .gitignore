@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+release/
+packaging/*.log
+packaging/generated-version-info.txt
+outputs/pytest-*.xml
+.env
+storage/uploads/
+storage/artifacts/
+storage/backups/
+storage/logs/
+storage/temp/
+*.sqlite3
+*.db
+
+# Local business data and generated tax-workbook artifacts. Keep only the
+# placeholder so the runtime storage directory exists after checkout.
+/个税测试/
+/outputs/
+/storage/*
+!/storage/.gitkeep

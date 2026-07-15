@@ -1,0 +1,9 @@
+-r requirements.txt
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+pywebview==6.2.1
+pythonnet==3.1.0
+clr-loader==0.3.1
+proxy-tools==0.1.0
+bottle==0.13.4
+pillow==10.2.0
