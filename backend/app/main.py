@@ -9,17 +9,22 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import artifacts, files, jobs, ledgers, organization_mappings, periods, personnel_masters, reconciliation_imports, system, tax, workflows
+from app.api import artifacts, files, jobs, ledgers, organization_mappings, periods, personnel_masters, reconciliation_imports, rpa, system, tax, workflows
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
 from app.db.init_db import init_db
+from app.rpa.service import rpa_service
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    yield
+    rpa_service.initialize()
+    try:
+        yield
+    finally:
+        rpa_service.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -44,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix=settings.api_prefix)
     app.include_router(tax.router, prefix=settings.api_prefix)
     app.include_router(system.router, prefix=settings.api_prefix)
+    app.include_router(rpa.router, prefix=settings.api_prefix)
 
     @app.get("/health")
     def health() -> Dict[str, str]:

@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+TASK_SCRIPTS = {
+    "special_deduction": "etax_batch_export.py",
+    "import": "etax_batch_import.py",
+    "tax_certificate": "etax_tax_certificate_download.py",
+    "income_report": "etax_tax_certificate_download.py",
+}
+CDP_URL = "http://127.0.0.1:9222"
+
+
+def validate_month(month: str) -> str:
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise ValueError("申报月份必须使用 YYYY-MM 格式")
+    return month
+
+
+def add_month(month: str) -> str:
+    validate_month(month)
+    year, value = map(int, month.split("-"))
+    return f"{year + (value == 12)}-{1 if value == 12 else value + 1:02d}"
+
+
+def _launcher(app_dir: Path, script_name: str, frozen: bool | None) -> list[str]:
+    use_exe = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    executable = app_dir / Path(script_name).with_suffix(".exe")
+    if use_exe:
+        if not executable.is_file():
+            raise RuntimeError(f"RPA 后台程序不存在：{executable.name}")
+        return [str(executable)]
+    return [sys.executable, str(app_dir / script_name)]
+
+
+def build_task_command(
+    app_dir: Path,
+    task_key: str,
+    month: str,
+    all_orgs: bool = True,
+    org_code: str | None = None,
+    resume_mode: str | None = None,
+    start_org_code: str | None = None,
+    frozen: bool | None = None,
+) -> tuple[list[str], str]:
+    if task_key not in TASK_SCRIPTS:
+        raise ValueError("未知 RPA 任务")
+    validate_month(month)
+    if not all_orgs and not org_code:
+        raise ValueError("指定机构不能为空")
+    backend_month = add_month(month) if task_key == "tax_certificate" else month
+    args = _launcher(app_dir, TASK_SCRIPTS[task_key], frozen)
+    args += ["--cdp", CDP_URL, "--month", backend_month, "--org-excel", str(app_dir / "机构信息表.xlsx")]
+    if task_key == "import":
+        args += ["--input-root", str(app_dir / "input")]
+    args.append("--yes")
+    if not all_orgs:
+        args += ["--org-code", str(org_code)]
+    if start_org_code:
+        args += ["--start-org-code", start_org_code]
+    if task_key == "import" and resume_mode == "resume":
+        args.append("--resume")
+    elif task_key == "import" and resume_mode == "reset":
+        args.append("--reset-progress")
+    if task_key in {"tax_certificate", "income_report"}:
+        args += ["--task", task_key]
+    return args, backend_month
+
+
+def build_chrome_command(app_dir: Path, chrome_path: str = "") -> list[str]:
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(app_dir / "start_debug_chrome.ps1")]
+    if chrome_path.strip():
+        args += ["-ChromePath", chrome_path.strip()]
+    return args

@@ -84,6 +84,12 @@
           :period-id="selectedPeriodId"
         />
 
+        <EtaxRpa
+          v-else-if="activeView === 'etax_rpa'"
+          :period-id="selectedPeriodId"
+          :initial-month="selectedPeriodMonth"
+        />
+
         <TaskCenter
           v-else-if="activeView === 'task_center'"
           :period-id="selectedPeriodId"
@@ -150,6 +156,7 @@ import {
   DocumentChecked,
   Files,
   Memo,
+  Monitor,
   Plus,
   Setting,
   Tickets,
@@ -159,6 +166,7 @@ import {
 } from '@element-plus/icons-vue'
 import TaxDeclaration from './views/TaxDeclaration.vue'
 import GenericWorkflow from './views/GenericWorkflow.vue'
+import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
@@ -172,6 +180,7 @@ type ViewKey =
   | 'deduction_download'
   | 'personnel_masters'
   | 'tax_declaration'
+  | 'etax_rpa'
   | 'annual_bonus_tax'
   | 'broker_tax'
   | 'intern_tax'
@@ -207,6 +216,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
     items: [
       { key: 'personnel_masters', label: '人员主数据', icon: User, kicker: 'Personnel master', description: '员工、经纪人人员主数据初始化与导出。' },
       { key: 'tax_declaration', label: '工资薪金申报', icon: DocumentChecked, kicker: 'Individual income tax', description: '工资资料上传、差异核对、人员确认与申报表生成。' },
+      { key: 'etax_rpa', label: '个税 RPA', icon: Monitor, kicker: 'Etax automation', description: '自然人电子税务局批量自动化。' },
       { key: 'annual_bonus_tax', label: '年终奖申报', icon: Wallet, workflowCode: 'annual_bonus_tax', kicker: 'Annual bonus', description: '全年一次性奖金个税申报数据处理。' },
       { key: 'broker_tax', label: '经纪人申报', icon: TrendCharts, workflowCode: 'broker_tax', kicker: 'Broker tax', description: '证券经纪人佣金收入个税申报。' },
       { key: 'intern_tax', label: '实习生申报', icon: User, workflowCode: 'intern_tax', kicker: 'Intern tax', description: '实习生补贴个税申报与人员采集。' },
@@ -252,6 +262,13 @@ const sessionId = computed(() => session.value?.id)
 const selectedPeriodLabel = computed(() => {
   const period = periods.value.find((item) => item.id === selectedPeriodId.value)
   return period ? `${period.year}年${String(period.month).padStart(2, '0')}月` : '未选择'
+})
+const selectedPeriodMonth = computed(() => {
+  const period = periods.value.find((item) => item.id === selectedPeriodId.value)
+  if (period) return `${period.year}-${String(period.month).padStart(2, '0')}`
+  const date = new Date()
+  date.setMonth(date.getMonth() - 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 })
 
 const activeWorkflow = computed(() => {

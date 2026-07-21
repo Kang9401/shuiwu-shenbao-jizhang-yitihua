@@ -72,6 +72,48 @@ export interface BackupInfo {
   created_at: string
 }
 
+export type RpaTaskKey = 'special_deduction' | 'import' | 'tax_certificate' | 'income_report'
+
+export interface RpaFile {
+  name: string
+  size: number
+  modified_at: string
+  download_url?: string
+}
+
+export interface RpaOrg {
+  code: string
+  name: string
+}
+
+export interface RpaResult extends RpaOrg {
+  month: string
+  special_deduction: string
+  import: string
+  tax_certificate: string
+  income_report: string
+}
+
+export interface RpaStatus {
+  config: { chrome_path: string; org_excel_name: string | null }
+  chrome: { status: 'stopped' | 'starting' | 'ready' | 'unavailable'; message: string }
+  current_run: {
+    run_id: string | null
+    task_key: RpaTaskKey | null
+    month: string | null
+    status: 'idle' | 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+    current_org_code: string | null
+    current_org_name: string | null
+  }
+  results: RpaResult[]
+  history: Array<{ task: string; started_at: string; finished_at: string; status: string }>
+  last_failure: { task_key: RpaTaskKey | null; org_code: string | null; month: string | null }
+  import_files: RpaFile[]
+  can_start: boolean
+  can_stop: boolean
+  can_resume: boolean
+}
+
 export type PersonType = 'employee' | 'broker'
 export type PersonnelScopeType = 'month' | 'org' | 'branch'
 export type ReconciliationImportType = 'bank_statement' | 'declaration_result' | 'accounting_ledger' | 'balance_sheet'
@@ -364,4 +406,34 @@ export const reconciliationImportApi = {
     api.get<ReconciliationImportBatch[]>('/reconciliation-imports', {
       params: { period_id: periodId, import_type: importType || undefined },
     }),
+}
+
+export const rpaApi = {
+  getStatus: () => api.get<RpaStatus>('/rpa/status'),
+  saveConfig: (chromePath: string) => api.put('/rpa/config', { chrome_path: chromePath }),
+  uploadOrgExcel: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/rpa/org-excel', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
+  },
+  uploadImportFiles: (files: File[], overwrite = false) => {
+    const form = new FormData()
+    files.forEach((file) => form.append('files', file))
+    form.append('overwrite', String(overwrite))
+    return api.post<RpaFile[]>('/rpa/import-files', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 })
+  },
+  prepareFromPeriod: (periodId: number, overwrite = false) =>
+    api.post<RpaFile[]>('/rpa/import-files/from-period', { period_id: periodId, overwrite }),
+  clearImportFiles: (names: string[]) => api.delete<RpaFile[]>('/rpa/import-files', { data: { names } }),
+  startChrome: (chromePath: string) => api.post('/rpa/chrome/start', { chrome_path: chromePath }),
+  getChromeStatus: () => api.get<RpaStatus['chrome']>('/rpa/chrome/status'),
+  previewOrgs: (payload: { all_orgs: boolean; org_code: string | null; start_org_code?: string | null }) =>
+    api.post<{ count: number; items: RpaOrg[] }>('/rpa/orgs/preview', payload),
+  startTask: (payload: { task_key: RpaTaskKey; month: string; all_orgs: boolean; org_code: string | null; resume_mode?: 'resume' | 'reset' | null }) =>
+    api.post('/rpa/tasks/start', payload),
+  stopTask: () => api.post('/rpa/tasks/stop'),
+  resumeTask: () => api.post('/rpa/tasks/resume'),
+  getLogs: (offset: number) => api.get<{ text: string; next_offset: number; finished: boolean }>('/rpa/logs', { params: { offset } }),
+  listFiles: () => api.get<RpaFile[]>('/rpa/files'),
+  downloadFile: (name: string) => api.get<Blob>('/rpa/files/download', { params: { name }, responseType: 'blob' }),
 }

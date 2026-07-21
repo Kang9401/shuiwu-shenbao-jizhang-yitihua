@@ -1,0 +1,2 @@
+# Preserve the validated third-party RPA source byte-for-byte.
+backend/vendor/etax_rpa/** -text
