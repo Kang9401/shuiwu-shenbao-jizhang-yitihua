@@ -116,7 +116,15 @@ def _workbook_text_and_metadata(path: Path) -> tuple[str, dict[str, str], int]:
                 for index, value in enumerate(cells[:-1]):
                     normalized = value.replace(" ", "").rstrip("：:")
                     if normalized in labels and cells[index + 1]:
-                        metadata.setdefault(labels[normalized], cells[index + 1])
+                        key = labels[normalized]
+                        candidate = cells[index + 1].strip()
+                        if key == "org_code" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{2,49}", candidate):
+                            continue
+                        if key == "org_name" and not any(
+                            token in candidate for token in ("公司", "营业部", "分公司", "事务所", "中心", "单位")
+                        ):
+                            continue
+                        metadata.setdefault(key, candidate)
         return "\n".join(text_values), metadata, len(workbook.sheetnames)
     finally:
         workbook.close()

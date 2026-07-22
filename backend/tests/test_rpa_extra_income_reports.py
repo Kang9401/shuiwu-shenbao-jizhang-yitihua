@@ -52,6 +52,21 @@ def test_xlsx_validation_accepts_expected_report_and_rejects_invalid_inputs(tmp_
     assert validate_report_xlsx(not_xlsx, spec, "2026-06", "11818", "机构A")[0] is False
 
 
+def test_xlsx_validation_does_not_treat_adjacent_table_header_as_org_code(tmp_path):
+    spec = REPORT_SPECS[0]
+    report = tmp_path / "header-style.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["分类所得申报表", "税款所属月份", "2026年6月"])
+    sheet.append(["机构代码", "是否为非居民个人", "所得项目", "收入额"])
+    for row in range(80):
+        sheet.append(["", "否", "劳务报酬", row])
+    workbook.save(report)
+
+    valid, reason = validate_report_xlsx(report, spec, "2026-06", "10302", "测试营业部")
+    assert valid is True, reason
+
+
 def test_fixed_output_name_and_org_selection(tmp_path, monkeypatch):
     monkeypatch.setattr("app.rpa.extensions.etax_extra_income_reports.OUTPUT_DIR", tmp_path)
     orgs = [SimpleNamespace(name="机构 A", code="11818"), SimpleNamespace(name="机构B", code="11831")]
