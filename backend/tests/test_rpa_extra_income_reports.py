@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.rpa.extensions.etax_extra_income_reports import (
     REPORT_SPECS,
+    export_record_matches,
     load_site_config,
     report_path,
     resolve_orgs,
@@ -26,10 +27,12 @@ def write_report(path: Path, keyword: str, month: str = "2026-06", org_code: str
     workbook.save(path)
 
 
-def test_selector_config_fails_closed_before_site_actions(tmp_path, monkeypatch):
+def test_captured_selector_config_is_available_without_runtime_file(tmp_path, monkeypatch):
     monkeypatch.delenv("ETAX_EXTRA_INCOME_REPORTS_CONFIG", raising=False)
-    with pytest.raises(RuntimeError, match="尚未配置已确认的税务网站选择器"):
-        load_site_config(tmp_path / "missing.json")
+    config = load_site_config(tmp_path / "missing.json")
+    assert config["current_org_scope"] == ".company-name"
+    assert config["status_value"] == ".declare-status .dstatus"
+    assert config["export_dialog"] == ".export-result-list-message-dialog:visible"
 
 
 def test_xlsx_validation_accepts_expected_report_and_rejects_invalid_inputs(tmp_path):
@@ -62,3 +65,12 @@ def test_schema_accepts_extension_task_and_rejects_unknown_key():
     assert request.task_key == "extra_income_reports"
     with pytest.raises(ValidationError):
         RpaTaskStartRequest(task_key="unknown", month="2026-06")
+
+
+def test_export_record_match_requires_org_report_month_success_and_download():
+    spec = REPORT_SPECS[0]
+    valid = "机构A_分类所得申报_202606.xlsx 2026-07-06 处理成功 下载"
+    assert export_record_matches(valid, "机构A", "2026-06", spec)
+    assert not export_record_matches(valid, "机构B", "2026-06", spec)
+    assert not export_record_matches(valid, "机构A", "2026-05", spec)
+    assert not export_record_matches(valid.replace("处理成功", "处理中"), "机构A", "2026-06", spec)

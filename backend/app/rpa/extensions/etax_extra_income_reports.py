@@ -25,26 +25,42 @@ CONFIG_ENV = "ETAX_EXTRA_INCOME_REPORTS_CONFIG"
 class ReportSpec:
     key: str
     title: str
-    menu_key: str
+    route: str
+    export_label: str
     keyword: str
 
 
 REPORT_SPECS = (
-    ReportSpec("classified_income", "分类所得申报表", "classified_income_menu", "分类所得"),
-    ReportSpec("restricted_stock", "限售股所得申报表", "restricted_stock_menu", "限售股"),
+    ReportSpec(
+        "classified_income",
+        "分类所得申报表",
+        "#/withholding/classified_income_declaration",
+        "个人所得税扣缴申报表",
+        "分类所得",
+    ),
+    ReportSpec(
+        "restricted_stock",
+        "限售股所得申报表",
+        "#/withholding/restricted_shares",
+        "限售股转让所得个人所得税扣缴报告表",
+        "限售股",
+    ),
 )
 
-# The tax site values must be captured from an authorized, logged-in session.
-# Empty defaults deliberately prevent this extension from guessing page controls.
+# Captured read-only from the authorized tax site on 2026-07-22. A runtime JSON
+# or environment value can override these values if the site DOM changes.
 SITE_CONFIG_DEFAULTS = {
-    "classified_income_menu": "",
-    "restricted_stock_menu": "",
-    "current_org_scope": "",
-    "month_input": "",
-    "records_scope": "",
-    "success_record": "",
-    "no_data": "",
-    "export_control": "",
+    "current_org_scope": ".company-name",
+    "month_input": ".tax-period-date-picker input",
+    "page_scope": ".main-page",
+    "status_value": ".declare-status .dstatus",
+    "success_record": ".declare-success",
+    "export_button": ".dropdown-export button",
+    "export_menu_item": ".el-dropdown-menu:visible .el-dropdown-menu__item",
+    "export_dialog": ".export-result-list-message-dialog:visible",
+    "export_rows": ".el-table__body .el-table__row",
+    "export_refresh": ".modal-header-refresh",
+    "export_download": "a",
 }
 
 
@@ -167,19 +183,82 @@ def _verify_current_org(page: Any, org: Any, selector: str) -> None:
     log(f"当前机构校验通过：{org.name}（{org.code}）")
 
 
-def _set_and_verify_month(page: Any, selector: str, month: str) -> None:
-    month_input = page.locator(selector).filter(visible=True).first
-    month_input.wait_for(state="visible", timeout=15000)
-    month_input.fill(month)
-    month_input.press("Enter")
-    page.wait_for_timeout(1000)
-    actual = month_input.input_value(timeout=5000)
-    accepted = {month, f"{month[:4]}年{int(month[5:])}月", f"{month[:4]}年{month[5:]}月"}
-    if actual not in accepted:
-        raise RuntimeError(f"税款所属月份校验失败：当前值 {actual}，目标值 {month}")
+def _open_export(page: Any, scope: Any, spec: ReportSpec, config: dict[str, str]) -> None:
+    button = scope.locator(config["export_button"]).filter(visible=True).first
+    button.wait_for(state="visible", timeout=15000)
+    button.click()
+    item = page.locator(config["export_menu_item"]).filter(has_text=spec.export_label).filter(visible=True).first
+    item.wait_for(state="visible", timeout=10000)
+    item.click()
+    log(f"已选择导出报表：{spec.export_label}")
 
 
-def _download_one(page: Any, org: Any, month: str, spec: ReportSpec, config: dict[str, str]) -> bool:
+def _solve_export_security(page: Any, reopen: Any, helpers: dict[str, Any]) -> None:
+    try:
+        helpers["security_dialog"](page).wait_for(state="visible", timeout=12000)
+    except Exception:
+        log("未出现安全验证滑块，继续后续确认")
+        return
+    strategies = helpers["slider_strategies"]
+    for attempt, strategy in enumerate(strategies, start=1):
+        if not helpers["has_security_dialog"](page):
+            return
+        log(f"安全验证第 {attempt} 次尝试：{strategy['name']}")
+        try:
+            if helpers["drag_slider"](page, strategy):
+                log("安全验证已通过")
+                return
+        except Exception as exc:
+            log(f"安全验证策略失败：{exc}")
+        if helpers["has_security_dialog"](page):
+            helpers["close_security_dialog"](page)
+            reopen()
+            helpers["security_dialog"](page).wait_for(state="visible", timeout=12000)
+    raise RuntimeError("多次尝试安全验证滑块仍未通过，请手动处理当前验证弹框后重试")
+
+
+def export_record_matches(text: str, org_name: str, month: str, spec: ReportSpec) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    return all(value in compact for value in (org_name, month.replace("-", ""), spec.keyword, "处理成功", "下载"))
+
+
+def _download_matching_record(page: Any, org: Any, month: str, spec: ReportSpec, target: Path, config: dict[str, str]) -> None:
+    dialog = page.locator(config["export_dialog"]).filter(visible=True).first
+    dialog.wait_for(state="visible", timeout=30000)
+    month_compact = month.replace("-", "")
+    last_status = ""
+    for attempt in range(1, 21):
+        rows = dialog.locator(config["export_rows"]).filter(has_text=org.name).filter(has_text=month_compact).filter(has_text=spec.keyword)
+        for index in range(rows.count()):
+            row = rows.nth(index)
+            text = row.inner_text(timeout=3000)
+            last_status = text[:240].replace("\n", " | ")
+            if not export_record_matches(text, org.name, month, spec):
+                continue
+            download_link = row.locator(config["export_download"]).filter(has_text="下载").filter(visible=True)
+            if download_link.count() == 0:
+                continue
+            with page.expect_download(timeout=30000) as download_info:
+                download_link.first.click()
+            download_info.value.save_as(str(target))
+            log(f"已下载{spec.title}：{target}")
+            return
+        if attempt < 20:
+            log(f"导出记录尚未处理成功，第 {attempt} 次刷新")
+            refresh = dialog.locator(config["export_refresh"]).filter(visible=True).first
+            refresh.click()
+            page.wait_for_timeout(3000)
+    raise TimeoutError(f"未找到匹配的成功导出记录：{org.name} / {spec.keyword} / {month_compact}；最后状态：{last_status}")
+
+
+def _download_one(
+    page: Any,
+    org: Any,
+    month: str,
+    spec: ReportSpec,
+    config: dict[str, str],
+    helpers: dict[str, Any],
+) -> bool:
     target = report_path(spec, month, org)
     if target.exists():
         valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
@@ -188,25 +267,27 @@ def _download_one(page: Any, org: Any, month: str, spec: ReportSpec, config: dic
             return True
         quarantine_invalid(target, reason)
 
-    page.locator(config[spec.menu_key]).filter(visible=True).first.click()
-    page.wait_for_load_state("domcontentloaded", timeout=20000)
-    _set_and_verify_month(page, config["month_input"], month)
-    scope = page.locator(config["records_scope"]).filter(visible=True).first
+    page.evaluate(f"location.hash = '{spec.route}'")
+    page.wait_for_timeout(1200)
+    helpers["close_popups"](page)
+    helpers["set_tax_month"](page, month)
+    scope = page.locator(config["page_scope"]).filter(visible=True).first
     scope.wait_for(state="visible", timeout=15000)
-    successful = scope.locator(config["success_record"]).filter(visible=True)
-    if successful.count() == 0:
-        no_data = scope.locator(config["no_data"]).filter(visible=True)
-        if no_data.count() or scope.is_visible():
-            log(f"{org.name}（{org.code}）{spec.title}没有申报成功记录，正常跳过")
-            return False
-        raise RuntimeError(f"无法确认 {spec.title} 的申报成功记录或无数据状态")
+    status = scope.locator(config["status_value"]).filter(visible=True).first
+    status.wait_for(state="visible", timeout=15000)
+    status_text = status.inner_text(timeout=5000).strip()
+    if status_text != "申报成功":
+        log(f"{org.name}（{org.code}）{spec.title}状态为“{status_text}”，没有申报成功记录，正常跳过")
+        return False
 
-    row = successful.first
-    with page.expect_download(timeout=60000) as download_info:
-        row.locator(config["export_control"]).filter(visible=True).first.click()
-    download = download_info.value
+    successful = scope.locator(config["success_record"]).filter(visible=True).first
+    successful.wait_for(state="visible", timeout=10000)
+    reopen = lambda: _open_export(page, successful, spec, config)
+    reopen()
+    _solve_export_security(page, reopen, helpers)
+    helpers["confirm_export"](page)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    download.save_as(str(target))
+    _download_matching_record(page, org, month, spec, target, config)
     valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
     if not valid:
         quarantine_invalid(target, reason)
@@ -253,15 +334,35 @@ def main() -> int:
 
     from etax_batch_export import (  # type: ignore[import-not-found]
         close_duplicate_etax_tabs,
+        close_common_popups,
         ensure_withholding_page,
         make_context,
         read_orgs_from_excel,
+        set_tax_month,
         switch_org,
+    )
+    from etax_tax_certificate_download import (  # type: ignore[import-not-found]
+        SLIDER_STRATEGIES,
+        close_security_dialog,
+        confirm_report_export,
+        drag_visible_slider_to_end,
+        has_visible_security_dialog,
+        security_dialog,
     )
     from playwright.sync_api import sync_playwright
 
     orgs = resolve_orgs(read_orgs_from_excel(Path(args.org_excel).resolve()), args.org_code, args.org_name, args.start_org_code)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    helpers = {
+        "close_popups": close_common_popups,
+        "set_tax_month": set_tax_month,
+        "slider_strategies": SLIDER_STRATEGIES,
+        "security_dialog": security_dialog,
+        "has_security_dialog": has_visible_security_dialog,
+        "drag_slider": drag_visible_slider_to_end,
+        "close_security_dialog": close_security_dialog,
+        "confirm_export": confirm_report_export,
+    }
     log(f"目标税款所属月份：{args.month}；待处理机构数：{len(orgs)}")
     with sync_playwright() as playwright:
         browser, context, page = make_context(playwright, args)
@@ -277,7 +378,7 @@ def main() -> int:
                     switch_org(page, org)
                     page = ensure_withholding_page(page)
                     _verify_current_org(page, org, config["current_org_scope"])
-                    count = sum(1 for spec in REPORT_SPECS if _download_one(page, org, args.month, spec, config))
+                    count = sum(1 for spec in REPORT_SPECS if _download_one(page, org, args.month, spec, config, helpers))
                     log(f"机构扩展申报表下载完成：{org.name}（{org.code}），共 {count} 个文件")
                 except Exception as exc:
                     capture_failure_evidence(page, org, exc)
