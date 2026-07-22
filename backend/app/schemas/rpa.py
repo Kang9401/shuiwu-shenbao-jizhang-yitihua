@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-RpaTaskKey = Literal["special_deduction", "import", "tax_certificate", "income_report"]
+RpaTaskKey = Literal["special_deduction", "import", "tax_certificate", "income_report", "extra_income_reports"]
 
 
 class RpaConfigUpdate(BaseModel):

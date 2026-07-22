@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.rpa import runtime
 from app.rpa.protected_files import PROTECTED_SHA256
 
@@ -30,3 +32,35 @@ def test_runtime_copy_repairs_protected_file_and_preserves_data(tmp_path, monkey
     assert runtime.sha256_file(app / "etax_gui.py") == PROTECTED_SHA256["etax_gui.py"]
     assert (app / "output" / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert (app / "input").is_dir()
+    assert (app / "etax_extra_income_reports.py").read_bytes() == (
+        Path(runtime.__file__).with_name("extensions") / "etax_extra_income_reports.py"
+    ).read_bytes()
+
+
+def test_runtime_rejects_missing_extension(tmp_path, monkeypatch):
+    vendor = Path(__file__).parents[1] / "vendor" / "etax_rpa"
+    monkeypatch.setattr(runtime, "vendor_dir", lambda: vendor)
+    monkeypatch.setattr(runtime, "runtime_app_dir", lambda: tmp_path / "app")
+    monkeypatch.setattr(runtime, "state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(runtime, "uploads_dir", lambda: tmp_path / "uploads")
+    monkeypatch.setattr(runtime, "helper_resource_dir", lambda: tmp_path / "helpers")
+    monkeypatch.setattr(runtime, "EXTENSION_FILES", ("missing_extension.py",))
+    try:
+        runtime.ensure_runtime_app()
+    except RuntimeError as exc:
+        assert "RPA 扩展源文件不存在" in str(exc)
+    else:
+        raise AssertionError("missing extension was accepted")
+
+
+def test_runtime_rejects_extension_hash_mismatch(tmp_path, monkeypatch):
+    vendor = Path(__file__).parents[1] / "vendor" / "etax_rpa"
+    monkeypatch.setattr(runtime, "vendor_dir", lambda: vendor)
+    monkeypatch.setattr(runtime, "runtime_app_dir", lambda: tmp_path / "app")
+    monkeypatch.setattr(runtime, "state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(runtime, "uploads_dir", lambda: tmp_path / "uploads")
+    monkeypatch.setattr(runtime, "helper_resource_dir", lambda: tmp_path / "helpers")
+    monkeypatch.setattr(runtime, "EXTENSION_SHA256", {"etax_extra_income_reports.py": "0" * 64})
+
+    with pytest.raises(RuntimeError, match="RPA 扩展源文件校验失败"):
+        runtime.ensure_runtime_app()

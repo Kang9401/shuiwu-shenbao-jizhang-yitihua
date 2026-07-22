@@ -40,6 +40,16 @@ def test_tax_certificate_adds_month_and_income_report_does_not(app_dir):
     assert income[-2:] == ["--task", "income_report"]
 
 
+def test_extra_income_reports_uses_extension_and_keeps_selected_month(app_dir):
+    single, month = build_task_command(app_dir, "extra_income_reports", "2026-12", False, "11818", frozen=False)
+    resumed, _ = build_task_command(app_dir, "extra_income_reports", "2026-01", True, None, None, "11831", frozen=False)
+    assert single[1].endswith("etax_extra_income_reports.py")
+    assert month == "2026-12" and single[single.index("--month") + 1] == "2026-12"
+    assert single[-2:] == ["--org-code", "11818"]
+    assert resumed[-2:] == ["--start-org-code", "11831"]
+    assert "--task" not in single
+
+
 def test_frozen_command_uses_helper_and_chrome_is_argument_list(app_dir):
     command, _ = build_task_command(app_dir, "import", "2026-06", frozen=True)
     chrome = build_chrome_command(Path("D:/中文 路径"), "C:/Program Files/Google/Chrome/Application/chrome.exe")

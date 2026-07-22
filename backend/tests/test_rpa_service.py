@@ -62,3 +62,17 @@ def test_prepare_from_period_rejects_conflicting_existing_file_without_partial_c
         service.prepare_from_period(FakeDb([job], [artifact]), 1, False)
 
     assert (app / "input" / source.name).read_bytes() == b"old"
+
+
+def test_status_adds_new_task_column_to_existing_results(tmp_path, monkeypatch):
+    service, _ = make_service(tmp_path, monkeypatch)
+    state = service.store.read()
+    state["results"] = {"2026-06": {"11818": {"name": "机构A", "special_deduction": "成功 1笔"}}}
+    service.store.write(state)
+    monkeypatch.setattr(service, "chrome_status", lambda: {"status": "stopped"})
+
+    result = service.get_status(refresh_chrome=False)
+
+    row = result["results"][0]
+    assert row["extra_income_reports"] == "待处理"
+    assert row["special_deduction"] == "成功 1笔"

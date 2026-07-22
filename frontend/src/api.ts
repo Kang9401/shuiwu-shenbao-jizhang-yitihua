@@ -72,7 +72,7 @@ export interface BackupInfo {
   created_at: string
 }
 
-export type RpaTaskKey = 'special_deduction' | 'import' | 'tax_certificate' | 'income_report'
+export type RpaTaskKey = 'special_deduction' | 'import' | 'tax_certificate' | 'income_report' | 'extra_income_reports'
 
 export interface RpaFile {
   name: string
@@ -92,6 +92,7 @@ export interface RpaResult extends RpaOrg {
   import: string
   tax_certificate: string
   income_report: string
+  extra_income_reports: string
 }
 
 export interface RpaStatus {

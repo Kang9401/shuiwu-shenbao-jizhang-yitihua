@@ -9,6 +9,7 @@ TASK_SCRIPTS = {
     "import": "etax_batch_import.py",
     "tax_certificate": "etax_tax_certificate_download.py",
     "income_report": "etax_tax_certificate_download.py",
+    "extra_income_reports": "etax_extra_income_reports.py",
 }
 CDP_URL = "http://127.0.0.1:9222"
 

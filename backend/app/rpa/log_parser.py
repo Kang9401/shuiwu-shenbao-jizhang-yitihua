@@ -17,6 +17,7 @@ START_PATTERNS = [
     r"开始处理申报导入：(.+?)（(\d+)）",
     r"开始下载完税证明：(.+?)（(\d+)）",
     r"开始下载综合所得申报表：(.+?)（(\d+)）",
+    r"开始下载扩展申报表：(.+?)（(\d+)）",
 ]
 
 
@@ -40,6 +41,9 @@ def parse_log_line(line: str, task_key: str | None, current_org_code: str | None
     income = re.search(r"机构综合所得申报表下载完成：.+?（(\d+)），共 (\d+) 个文件", line)
     if task_key == "income_report" and income:
         events.append(LogEvent("done", income.group(1), count=int(income.group(2))))
+    extra = re.search(r"机构扩展申报表下载完成：.+?（(\d+)），共 (\d+) 个文件", line)
+    if task_key == "extra_income_reports" and extra:
+        events.append(LogEvent("done", extra.group(1), count=int(extra.group(2))))
     if task_key == "tax_certificate" and current_org_code and (
         "未查询到缴款记录，跳过机构：" in line or "未查询到缴款记录，跳过完税证明下载：" in line
     ):

@@ -134,6 +134,7 @@ const currentRunText = computed(() => running.value ? `${status.value?.current_r
 const resultColumns = [
   { key: 'special_deduction', label: '专项申报' }, { key: 'import', label: '个税申报导入' },
   { key: 'tax_certificate', label: '完税证明' }, { key: 'income_report', label: '综合所得申报表' },
+  { key: 'extra_income_reports', label: '分类/限售股申报表' },
 ]
 const steps = [
   { step: '步骤 1', key: 'chrome', title: '浏览器初始化', description: '启动可接管的 Chrome。启动后请在该窗口手工登录自然人电子税务局。' },
@@ -141,6 +142,7 @@ const steps = [
   { step: '步骤 3', key: 'import', title: '导入数据', description: '从 input 目录按机构代码前缀匹配文件，批量导入人员信息、工资薪金、劳务报酬、奖金等文件。' },
   { step: '步骤 4', key: 'tax_certificate', title: '完税证明下载', description: '按机构查询缴款记录并下载完税证明 PDF。默认查询申报月份的次月缴款记录。' },
   { step: '步骤 5', key: 'income_report', title: '综合所得申报表下载', description: '按机构导出综合所得申报表到 output 文件夹。' },
+  { step: '步骤 6', key: 'extra_income_reports', title: '分类/限售股申报表下载', description: '仅下载已申报成功的分类所得和限售股所得申报表；没有成功记录的机构会自动跳过。' },
 ]
 
 watch(() => props.initialMonth, (value) => { if (value && !running.value) month.value = value })
@@ -164,7 +166,7 @@ async function uploadImports(event: Event) { const input = event.target as HTMLI
 async function preparePeriodFiles(overwrite: boolean) { if (!props.periodId) return; try { await rpaApi.prepareFromPeriod(props.periodId, overwrite); ElMessage.success('本期申报文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) await preparePeriodFiles(true); else if (error?.response?.status !== 409) ElMessage.error(detail(error, '准备本期文件失败')) } }
 async function removeImport(name: string) { try { await ElMessageBox.confirm(`确认从 input 删除“${name}”？`, '删除导入文件', { type: 'warning' }); await rpaApi.clearImportFiles([name]); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '删除失败')) } }
 async function confirmTask(task: RpaTaskKey) { try { validate(); const { data } = await rpaApi.previewOrgs({ all_orgs: allOrgs.value, org_code: allOrgs.value ? null : orgCode.value }); previewOrgs.value = data.items; pendingTask.value = task; pendingResume.value = false; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '无法开始任务')) } }
-async function startConfirmed() { if (!pendingTask.value && !pendingResume.value) return; try { if (pendingResume.value) { await rpaApi.resumeTask() } else { const task = pendingTask.value!; const prior = monthResults.value.some((row: any) => row[task] !== '待处理'); if (prior) await ElMessageBox.confirm('本月该任务已有处理结果，确认重新执行选中的机构？', '重新执行确认', { type: 'warning' }); await rpaApi.startTask({ task_key: task, month: month.value, all_orgs: allOrgs.value, org_code: allOrgs.value ? null : orgCode.value }) } previewVisible.value = false; logText.value = ''; logOffset.value = 0; await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, pendingResume.value ? '续跑失败' : '任务启动失败')) } }
+async function startConfirmed() { if (!pendingTask.value && !pendingResume.value) return; try { if (pendingResume.value) { await rpaApi.resumeTask() } else { const task = pendingTask.value!; if (task === 'extra_income_reports') await ElMessageBox.confirm('本任务仅下载已经申报成功的分类所得和限售股所得申报表。没有成功申报记录的单位会自动跳过，不会产生或提交新的申报。', '下载范围确认', { type: 'warning' }); const prior = monthResults.value.some((row: any) => row[task] !== '待处理'); if (prior) await ElMessageBox.confirm('本月该任务已有处理结果，确认重新执行选中的机构？', '重新执行确认', { type: 'warning' }); await rpaApi.startTask({ task_key: task, month: month.value, all_orgs: allOrgs.value, org_code: allOrgs.value ? null : orgCode.value }) } previewVisible.value = false; logText.value = ''; logOffset.value = 0; await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, pendingResume.value ? '续跑失败' : '任务启动失败')) } }
 async function confirmResume() { try { const failure = status.value?.last_failure; if (!failure?.org_code) throw new Error('当前没有可续跑的失败机构'); const { data } = await rpaApi.previewOrgs({ all_orgs: true, org_code: null, start_org_code: failure.org_code }); previewOrgs.value = data.items; pendingTask.value = null; pendingResume.value = true; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '续跑预览失败')) } }
 async function stopTask() { try { const { data } = await rpaApi.stopTask(); ElMessage.info(data.message); await refreshAll() } catch (error: any) { ElMessage.error(detail(error, '停止任务失败')) } }
 async function copyLog() { await navigator.clipboard.writeText(logText.value); ElMessage.success('日志内容已复制到剪贴板') }

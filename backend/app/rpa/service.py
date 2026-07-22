@@ -28,6 +28,7 @@ TASK_NAMES = {
     "import": "导入数据",
     "tax_certificate": "完税证明下载",
     "income_report": "综合所得申报表下载",
+    "extra_income_reports": "分类/限售股申报表下载",
 }
 NAME_HEADERS = {"机构名称", "机构简称", "单位名称", "名称"}
 CODE_HEADERS = {"机构代码", "机构编号", "代码", "编号"}
@@ -129,6 +130,8 @@ class RpaService:
         results = []
         for month, orgs in data.get("results", {}).items():
             for code, values in orgs.items():
+                for task_key in TASK_NAMES:
+                    values.setdefault(task_key, "待处理")
                 results.append({"month": month, "code": code, **values})
         app_dir = ensure_runtime_app()
         import_files = self._file_items(app_dir / "input", include_url=False)
@@ -255,6 +258,8 @@ class RpaService:
             for item in orgs:
                 row = month_results.setdefault(item["code"], {"name": item["name"], **{key: "待处理" for key in TASK_NAMES}})
                 row["name"] = item["name"]
+                for key in TASK_NAMES:
+                    row.setdefault(key, "待处理")
                 row[task_key] = "待处理"
             data["current_run"].update(run_id=run_id, task_key=task_key, display_name=TASK_NAMES[task_key], month=month, backend_month=backend_month, all_orgs=all_orgs, org_code=org_code, current_org_code=None, current_org_name=None, status="starting", pid=None, started_at=started, finished_at=None, exit_code=None, error_message=None, log_path=str(log_path))
         self.store.update(starting)
