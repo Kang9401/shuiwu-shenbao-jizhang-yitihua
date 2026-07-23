@@ -10,6 +10,9 @@ class LogEvent:
     org_code: str | None = None
     org_name: str | None = None
     count: int | None = None
+    category: str | None = None
+    status: str | None = None
+    reason: str | None = None
 
 
 START_PATTERNS = [
@@ -23,6 +26,9 @@ START_PATTERNS = [
 
 def parse_log_line(line: str, task_key: str | None, current_org_code: str | None = None) -> list[LogEvent]:
     events: list[LogEvent] = []
+    marker = re.search(r"\[RPA_RESULT\]\s+org_code=(\S+)\s+category=(\S+)\s+status=(\S+)\s+count=(\d+)(?:\s+reason=(\S+))?", line)
+    if marker:
+        events.append(LogEvent("result", marker.group(1), count=int(marker.group(4)), category=marker.group(2), status=marker.group(3), reason=marker.group(5)))
     for pattern in START_PATTERNS:
         match = re.search(pattern, line)
         if match:

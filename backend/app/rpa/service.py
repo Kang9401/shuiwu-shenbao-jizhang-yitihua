@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session
 
 from app.models.core import Artifact, Job
@@ -21,7 +21,8 @@ from app.rpa.log_parser import parse_log_line
 from app.rpa.paths import state_dir, uploads_dir
 from app.rpa.process_manager import ProcessManager
 from app.rpa.runtime import ensure_runtime_app, sha256_file
-from app.rpa.state_store import StateStore
+from app.rpa.state_store import StateStore, result_cell
+from app.services.personnel_master import list_rpa_organizations
 
 TASK_NAMES = {
     "special_deduction": "专项附加导出",
@@ -29,6 +30,7 @@ TASK_NAMES = {
     "tax_certificate": "完税证明下载",
     "income_report": "综合所得申报表下载",
     "extra_income_reports": "分类/限售股申报表下载",
+    "declaration_reports": "申报结果下载",
 }
 NAME_HEADERS = {"机构名称", "机构简称", "单位名称", "名称"}
 CODE_HEADERS = {"机构代码", "机构编号", "代码", "编号"}
@@ -59,6 +61,7 @@ class RpaService:
         self._log_lock = threading.RLock()
         self._cancel_requested = False
         self._stderr_lines: list[str] = []
+        self._composite: dict | None = None
 
     def initialize(self) -> None:
         ensure_runtime_app()
@@ -107,6 +110,34 @@ class RpaService:
         if not match:
             raise ValueError(f"机构信息表中找不到机构代码：{org_code or ''}")
         return [match]
+
+    def organizations_for_period(self, db: Session, period_id: int) -> list[dict]:
+        return list_rpa_organizations(db, period_id=period_id)
+
+    def prepare_runtime_org_excel(self, db: Session, *, period_id: int, selected_org_codes=None):
+        organizations = self.organizations_for_period(db, period_id)
+        requested = [str(code).strip() for code in (selected_org_codes or []) if str(code).strip()]
+        by_code = {item["code"]: item for item in organizations}
+        missing = [code for code in requested if code not in by_code]
+        if missing:
+            raise ValueError(f"所选机构不在当前期间人员主数据中：{'、'.join(missing)}")
+        selected = [item for item in organizations if not requested or item["code"] in set(requested)]
+        target = ensure_runtime_app() / "机构信息表.xlsx"
+        temp = target.with_name(f".{target.stem}-{uuid.uuid4().hex}.xlsx")
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "机构信息"
+        sheet.append(["机构名称", "机构代码"])
+        for item in selected:
+            sheet.append([item["name"], item["code"]])
+            sheet.cell(sheet.max_row, 2).number_format = "@"
+        workbook.save(temp)
+        temp.replace(target)
+        reread = self._read_orgs()
+        if [(item["code"], item["name"]) for item in reread] != [(item["code"], item["name"]) for item in selected]:
+            raise RuntimeError("运行时机构信息表回读校验失败")
+        self.store.update(lambda data: data["config"].update(org_excel_path=None, org_excel_name="人员主数据自动生成"))
+        return target, selected
 
     def chrome_status(self) -> dict:
         status, message = "stopped", "未检测到可接管的 Chrome"
@@ -248,7 +279,8 @@ class RpaService:
         orgs = self.preview_orgs(all_orgs, org_code, start_org_code)
         if task_key == "import" and not any((app_dir / "input").iterdir()):
             raise ValueError("input 中没有可导入文件")
-        command, backend_month = build_task_command(app_dir, task_key, month, all_orgs, org_code, resume_mode, start_org_code)
+        actual_task = "income_report" if task_key == "declaration_reports" else task_key
+        command, backend_month = build_task_command(app_dir, actual_task, month, all_orgs, org_code, resume_mode, start_org_code)
         log_path = state_dir() / "current.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("", encoding="utf-8")
@@ -256,15 +288,21 @@ class RpaService:
         def starting(data: dict) -> None:
             month_results = data["results"].setdefault(month, {})
             for item in orgs:
-                row = month_results.setdefault(item["code"], {"name": item["name"], **{key: "待处理" for key in TASK_NAMES}})
+                row = month_results.setdefault(item["code"], {"name": item["name"], **{key: "待处理" for key in TASK_NAMES if key != "declaration_reports"}})
                 row["name"] = item["name"]
                 for key in TASK_NAMES:
                     row.setdefault(key, "待处理")
-                row[task_key] = "待处理"
-            data["current_run"].update(run_id=run_id, task_key=task_key, display_name=TASK_NAMES[task_key], month=month, backend_month=backend_month, all_orgs=all_orgs, org_code=org_code, current_org_code=None, current_org_name=None, status="starting", pid=None, started_at=started, finished_at=None, exit_code=None, error_message=None, log_path=str(log_path))
+                if task_key == "declaration_reports":
+                    row["comprehensive_income_report"] = result_cell()
+                    row["classified_income_report"] = result_cell()
+                    row["restricted_stock_report"] = result_cell()
+                else:
+                    row[task_key] = "待处理"
+            data["current_run"].update(run_id=run_id, task_key=task_key, subtask_key=actual_task if task_key == "declaration_reports" else None, subtask_index=1 if task_key == "declaration_reports" else None, subtask_count=2 if task_key == "declaration_reports" else None, display_name=TASK_NAMES[task_key], month=month, declaration_month=month, backend_month=backend_month, all_orgs=all_orgs, org_code=org_code, current_org_code=None, current_org_name=None, status="starting", pid=None, started_at=started, finished_at=None, exit_code=None, error_message=None, log_path=str(log_path))
         self.store.update(starting)
         self._cancel_requested = False
         self._stderr_lines = []
+        self._composite = {"app_dir": app_dir, "month": month, "all_orgs": all_orgs, "org_code": org_code, "start_org_code": start_org_code} if task_key == "declaration_reports" else None
         try:
             pid = self.manager.start(command, app_dir, self._handle_line, self._handle_exit)
         except Exception as exc:
@@ -286,7 +324,7 @@ class RpaService:
             handle.write(line + "\n")
         if is_stderr:
             self._stderr_lines = [*self._stderr_lines[-49:], line]
-        task_key = data["current_run"].get("task_key")
+        task_key = data["current_run"].get("subtask_key") or data["current_run"].get("task_key")
         current = data["current_run"].get("current_org_code")
         events = parse_log_line(line, task_key, current)
         if not events:
@@ -297,31 +335,62 @@ class RpaService:
             for event in events:
                 if event.kind == "start":
                     run.update(current_org_code=event.org_code, current_org_name=event.org_name)
-                    rows.setdefault(event.org_code, {"name": event.org_name, **{key: "待处理" for key in TASK_NAMES}})[task_key] = "处理中"
+                    row = rows.setdefault(event.org_code, {"name": event.org_name, **{key: "待处理" for key in TASK_NAMES if key != "declaration_reports"}})
+                    result_key = "comprehensive_income_report" if task_key == "income_report" and run.get("task_key") == "declaration_reports" else task_key
+                    row[result_key] = result_cell("running") if run.get("task_key") == "declaration_reports" else "处理中"
                 elif event.kind == "increment":
                     row = rows.get(event.org_code, {})
                     found = re.search(r"成功 (\d+)笔", row.get(task_key, ""))
                     row[task_key] = f"成功 {(int(found.group(1)) if found else 0) + 1}笔"
                 elif event.kind == "done":
                     row = rows.get(event.org_code, {})
-                    if event.count is not None:
-                        row[task_key] = f"成功 {event.count}笔"
+                    result_key = "comprehensive_income_report" if task_key == "income_report" and run.get("task_key") == "declaration_reports" else task_key
+                    if run.get("task_key") == "declaration_reports" and event.count is not None:
+                        row[result_key] = result_cell("skipped" if event.count == 0 else "success", count=event.count, reason="查询成功但无符合条件的记录" if event.count == 0 else None)
+                    elif event.count is not None:
+                        row[result_key] = f"成功 {event.count}笔"
                     elif not str(row.get(task_key, "")).startswith("成功"):
                         row[task_key] = "成功 0笔"
+                elif event.kind == "result":
+                    row = rows.get(event.org_code, {})
+                    key = {"classified_income": "classified_income_report", "restricted_stock": "restricted_stock_report"}.get(event.category)
+                    if key:
+                        row[key] = result_cell(event.status or "failed", count=event.count, reason="查询成功但无符合条件的记录" if event.status == "skipped" else event.reason)
         self.store.update(change)
 
     def _handle_exit(self, exit_code: int, cancelled: bool) -> None:
         finished = now_text()
+        data = self.store.read()
+        run = data["current_run"]
+        if self._composite and run.get("task_key") == "declaration_reports" and run.get("subtask_key") == "income_report" and exit_code == 0 and not cancelled:
+            app_dir = self._composite["app_dir"]
+            command, backend_month = build_task_command(app_dir, "extra_income_reports", self._composite["month"], self._composite["all_orgs"], self._composite["org_code"], None, self._composite["start_org_code"])
+            self._handle_line("========== 开始子任务：分类所得与限售股申报表下载 ==========", False)
+            self.store.update(lambda state: state["current_run"].update(subtask_key="extra_income_reports", subtask_index=2, backend_month=backend_month, current_org_code=None, current_org_name=None, pid=None))
+            self._stderr_lines = []
+            try:
+                pid = self.manager.start(command, app_dir, self._handle_line, self._handle_exit)
+                self.store.update(lambda state: state["current_run"].update(pid=pid, status="running"))
+                return
+            except Exception as exc:
+                exit_code = 1
+                self._stderr_lines = [str(exc)]
         def change(data: dict) -> None:
             run = data["current_run"]
             status = "cancelled" if cancelled else ("succeeded" if exit_code == 0 else "failed")
             if status == "failed" and run.get("current_org_code"):
-                data["results"][run["month"]][run["current_org_code"]][run["task_key"]] = "失败"
+                failure_key = run.get("subtask_key") or run["task_key"]
+                result_key = {"income_report": "comprehensive_income_report", "extra_income_reports": "classified_income_report"}.get(failure_key, failure_key)
+                current_value = data["results"][run["month"]][run["current_org_code"]].get(result_key)
+                data["results"][run["month"]][run["current_org_code"]][result_key] = result_cell("failed", error_message="RPA 子进程异常退出") if isinstance(current_value, dict) else "失败"
+                if failure_key == "extra_income_reports":
+                    data["results"][run["month"]][run["current_org_code"]]["restricted_stock_report"] = result_cell("failed", error_message="RPA 子进程异常退出，无法判断结果")
                 data["last_failure"] = {"task_key": run["task_key"], "org_code": run["current_org_code"], "month": run["month"]}
             error_message = None if exit_code == 0 else ("\n".join(self._stderr_lines).strip() or f"RPA 进程退出码：{exit_code}")
             run.update(status=status, finished_at=finished, exit_code=exit_code, pid=None, error_message=error_message)
             data["history"].insert(0, {"task_key": run["task_key"], "task": run["display_name"], "month": run["month"], "started_at": run["started_at"], "finished_at": finished, "status": "已取消" if cancelled else ("成功" if exit_code == 0 else "失败")})
         self.store.update(change)
+        self._composite = None
 
     def stop_task(self) -> dict:
         stopped = self.manager.stop()

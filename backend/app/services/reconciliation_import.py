@@ -71,7 +71,7 @@ def _column_map(import_type: str, df: pd.DataFrame) -> dict[str, Optional[str]]:
     if import_type == "bank_statement":
         return {
             **common,
-            "transaction_date": _first_existing(columns, ["交易日期", "记账日期", "发生日期", "日期"]),
+            "transaction_date": _first_existing(columns, ["交易日期", "交易时间", "记账日期", "发生日期", "日期"]),
             "summary": _first_existing(columns, ["摘要", "用途", "交易摘要", "备注"]),
             "counterparty": _first_existing(columns, ["对方户名", "对方账户名称", "对方名称", "付款方", "收款方"]),
             "amount": _first_existing(columns, ["金额", "交易金额", "发生额", "收入", "支出"]),

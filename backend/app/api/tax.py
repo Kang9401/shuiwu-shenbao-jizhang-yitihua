@@ -28,6 +28,7 @@ from app.services.personnel_master import (
     resolve_employee_history_path,
     save_generated_employee_master,
 )
+from app.services.salary_classifier import normalize_payroll_files
 from app.services.personnel_review import (
     build_personnel_change_review_table,
     write_personnel_change_review_table,
@@ -379,6 +380,12 @@ async def run_verify(
             path, _ = save_upload(upload, session.period_id, role)
             uploaded.append({"file_role": role, "original_name": upload.filename, "stored_path": str(path)})
             payroll_files.append((role, str(path)))
+    try:
+        payroll_files = normalize_payroll_files(payroll_files)
+    except ValueError as exc:
+        session.status = "needs_review"
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     period = db.query(Period).filter(Period.id == session.period_id).first()
     year, month = period.year if period else 2025, period.month if period else 1

@@ -95,21 +95,6 @@
           </div>
         </div>
 
-        <div class="upload-section deduction-section">
-          <h4>专项附加扣除</h4>
-          <div class="upload-item full-width" :class="{ 'has-file': deductionFiles.length }">
-            <label>扣除表文件</label>
-            <input :key="`deductions-${inputVersion}`" type="file" accept=".xlsx,.xls" multiple @change="pickDeductions" />
-            <span class="upload-status" :class="deductionFiles.length ? 'ready' : 'empty'">
-              {{ deductionFiles.length ? `已选择 ${deductionFiles.length} 个文件` : '未选择' }}
-            </span>
-            <button class="btn btn-xs btn-ghost" :disabled="!deductionFiles.length" @click="clearDeductions">清除</button>
-          </div>
-          <div v-if="deductionFiles.length" class="selected-file-list">
-            <span v-for="file in deductionFiles" :key="fileIdentity(file)" class="selected-file-chip">{{ file.name }}</span>
-          </div>
-        </div>
-
         <div class="action-bar">
           <div v-if="missingRequiredLabels.length" class="action-hint">
             请先补齐：
@@ -435,7 +420,6 @@ const report = ref<VerifyReport | null>(null)
 const latestRound = ref(0)
 const generatedFiles = ref<GeneratedFile[]>([])
 const reviewArtifacts = ref<GeneratedFile[]>([])
-const deductionFiles = ref<File[]>([])
 const folderInput = ref<HTMLInputElement | null>(null)
 const staffReimportInput = ref<HTMLInputElement | null>(null)
 const inputVersion = ref(0)
@@ -450,33 +434,27 @@ const requiredFiles = [
 ]
 
 const optionalFiles = [
-  { role: 'branch_salary', label: '机构工资单' },
   { role: 'headquarters_salary', label: '总部工资单' },
-  { role: 'digital_ops_salary', label: '数字化运营工资单' },
-  { role: 'advisor_salary', label: '投顾工资单' },
 ]
 
 const requiredFileLabels: Record<string, string> = {
   rank_salary: '职级工资单',
   marketing_salary: '营销工资单',
-  deduction_files: '专项附加扣除',
 }
 
 const missingRequiredLabels = computed(() => {
   const missing: string[] = []
   if (!files.rank_salary) missing.push(requiredFileLabels.rank_salary)
   if (!files.marketing_salary) missing.push(requiredFileLabels.marketing_salary)
-  if (!deductionFiles.value.length) missing.push(requiredFileLabels.deduction_files)
   return missing
 })
 
 const canStartVerify = computed(() => Boolean(props.sessionId && !verifying.value && !missingRequiredLabels.value.length))
 
 // 已缓存的文件数（跨步骤切换时保留在内存中，避免重复上传）
-const cachedFileCount = computed(() => Object.keys(fileData).length + deductionFiles.value.length)
+const cachedFileCount = computed(() => Object.keys(fileData).length)
 const cachedFileList = computed(() => {
   const names = Object.values(files).filter(Boolean)
-  if (deductionFiles.value.length) names.push(`专项附加扣除×${deductionFiles.value.length}`)
   return names.join('、')
 })
 
@@ -554,18 +532,9 @@ function pickFile(role: string, event: Event) {
   fileData[role] = file
 }
 
-function pickDeductions(event: Event) {
-  deductionFiles.value = Array.from((event.target as HTMLInputElement).files || [])
-}
-
 function clearFile(role: string) {
   delete files[role]
   delete fileData[role]
-  inputVersion.value += 1
-}
-
-function clearDeductions() {
-  deductionFiles.value = []
   inputVersion.value += 1
 }
 
@@ -576,17 +545,20 @@ function openFolderPicker() {
 function pickFolder(event: Event) {
   const picked = Array.from((event.target as HTMLInputElement).files || [])
     .filter((file) => /\.(xlsx|xls)$/i.test(file.name) && !file.name.startsWith('~$'))
-  const classified = classifyFolderFiles(picked)
+  let classified
+  try {
+    classified = classifyFolderFiles(picked)
+  } catch (error: any) {
+    ;(event.target as HTMLInputElement).value = ''
+    ElMessage.error(error.message)
+    return
+  }
   let count = 0
 
   for (const [role, file] of Object.entries(classified.roles)) {
     files[role] = file.name
     fileData[role] = file
     count += 1
-  }
-  if (classified.deductions.length) {
-    deductionFiles.value = classified.deductions
-    count += classified.deductions.length
   }
   const artifactCount = classified.knownArtifacts.length
 
@@ -604,16 +576,19 @@ function pickFolder(event: Event) {
 
 function classifyFolderFiles(fileList: File[]) {
   const roles: Record<string, File> = {}
-  const deductions: File[] = []
   const knownArtifacts: File[] = []
   for (const file of fileList) {
     const text = normalizeFileText(file)
     const role = detectFileRole(text)
-    if (role === 'deduction_files') deductions.push(file)
+    if (role === 'deduction_files') knownArtifacts.push(file)
     else if (role === 'personnel_collection' || role === 'updated_staff' || role === 'working_sheet' || role === 'reconciliation_report') knownArtifacts.push(file)
-    else if (role && !roles[role]) roles[role] = file
+    else if (role) {
+      const normalizedRole = ['branch_salary', 'digital_ops_salary', 'advisor_salary'].includes(role) ? 'marketing_salary' : role
+      if (roles[normalizedRole]) throw new Error(`检测到多份${normalizedRole === 'marketing_salary' ? '营销' : ''}工资文件，请确认已合并后再上传`)
+      roles[normalizedRole] = file
+    }
   }
-  return { roles, deductions, knownArtifacts }
+  return { roles, knownArtifacts }
 }
 
 function normalizeFileText(file: File) {
@@ -664,7 +639,6 @@ async function runVerify() {
       if (role === 'staff_change' && step.value !== 2) continue
       form.append(role, file)
     }
-    for (const file of deductionFiles.value) form.append('deduction_files', file)
 
     const { data } = await taxApi.verify(props.sessionId, form)
     report.value = data.report
@@ -797,7 +771,6 @@ async function batchDownload() {
 
 function resetAll() {
   clearDisplayedResult()
-  deductionFiles.value = []
   importedStaffChangeName.value = ''
   Object.keys(files).forEach((key) => delete files[key])
   Object.keys(fileData).forEach((key) => delete fileData[key])

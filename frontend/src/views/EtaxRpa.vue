@@ -14,17 +14,12 @@
           <h3>操作参数</h3>
           <div class="rpa-form">
             <label>申报月份</label>
-            <el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY-MM" :clearable="false" :disabled="running" />
+            <div class="rpa-file-row"><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY-MM" :clearable="false" :disabled="running" @change="monthManuallyOverridden = true" /><el-button :disabled="running || !monthManuallyOverridden" @click="restoreMonth">恢复同步</el-button></div>
             <label>申报机构</label>
-            <div class="rpa-file-row">
-              <el-input :model-value="status?.config.org_excel_name || ''" readonly placeholder="请选择机构信息表" />
-              <el-button :icon="FolderOpened" :disabled="running" @click="orgInput?.click()">选择</el-button>
-              <input ref="orgInput" class="hidden-file-input" type="file" accept=".xlsx" @change="uploadOrg" />
-            </div>
+            <el-select v-model="selectedOrgCodes" multiple filterable collapse-tags collapse-tags-tooltip clearable :disabled="running || allOrgs" placeholder="不选择表示全部机构"><el-option v-for="org in organizations" :key="org.code" :label="`${org.code}｜${org.name}`" :value="org.code" /></el-select>
             <label>处理全部</label>
             <el-radio-group v-model="allOrgs" :disabled="running"><el-radio :value="true">是</el-radio><el-radio :value="false">否</el-radio></el-radio-group>
-            <label>指定机构</label>
-            <el-input v-model="orgCode" :disabled="running || allOrgs" placeholder="请输入机构代码" />
+            <label>已选机构</label><span>{{ allOrgs ? `全部 ${organizations.length} 个` : `${selectedOrgCodes.length} 个` }}</span>
             <label>Chrome地址</label>
             <el-input v-model="chromePath" :disabled="running" @change="saveChromePath" />
           </div>
@@ -67,7 +62,7 @@
             <el-table-column prop="code" label="机构代码" width="110" />
             <el-table-column prop="name" label="机构名称" min-width="150" />
             <el-table-column v-for="column in resultColumns" :key="column.key" :prop="column.key" :label="column.label" min-width="115">
-              <template #default="scope"><span :class="statusClass(scope.row[column.key])">{{ scope.row[column.key] }}</span></template>
+              <template #default="scope"><span :class="statusClass(scope.row[column.key])" :title="resultTitle(scope.row[column.key])">{{ resultLabel(scope.row[column.key]) }}</span></template>
             </el-table-column>
           </el-table>
         </section>
@@ -75,6 +70,7 @@
         <section class="rpa-panel rpa-log-panel">
           <div class="rpa-panel-title"><h3>日志展示</h3><span>{{ currentRunText }}</span></div>
           <div class="rpa-toolbar">
+            <el-button :icon="Monitor" @click="openRpaMonitor">打开监控窗口</el-button>
             <el-button :icon="RefreshRight" :disabled="running || !status?.can_resume" @click="confirmResume">从失败继续</el-button>
             <el-button :icon="VideoPause" type="danger" :disabled="!running" @click="stopTask">停止任务</el-button>
             <el-button :icon="CopyDocument" @click="copyLog">复制</el-button>
@@ -104,7 +100,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Delete, DocumentAdd, Download, FolderOpened, Refresh, RefreshRight, Upload, VideoPause } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, DocumentAdd, Download, Monitor, Refresh, RefreshRight, Upload, VideoPause } from '@element-plus/icons-vue'
 import { rpaApi, type RpaFile, type RpaOrg, type RpaStatus, type RpaTaskKey } from '../api'
 
 const props = defineProps<{ periodId: number | null; initialMonth: string }>()
@@ -112,14 +108,15 @@ const status = ref<RpaStatus | null>(null)
 const outputFiles = ref<RpaFile[]>([])
 const month = ref(props.initialMonth)
 const allOrgs = ref(true)
-const orgCode = ref('')
+const selectedOrgCodes = ref<string[]>([])
+const organizations = ref<RpaOrg[]>([])
+const monthManuallyOverridden = ref(false)
 const chromePath = ref('')
 const loading = ref(false)
 const logText = ref('')
 const logOffset = ref(0)
 const logBox = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
-const orgInput = ref<HTMLInputElement | null>(null)
 const importInput = ref<HTMLInputElement | null>(null)
 const previewVisible = ref(false)
 const previewOrgs = ref<RpaOrg[]>([])
@@ -133,20 +130,20 @@ const chromeLabel = computed(() => ({ ready: 'CDP 已连接', starting: '正在�
 const currentRunText = computed(() => running.value ? `${status.value?.current_run.current_org_code || ''} ${status.value?.current_run.current_org_name || '任务启动中'}` : '')
 const resultColumns = [
   { key: 'special_deduction', label: '专项申报' }, { key: 'import', label: '个税申报导入' },
-  { key: 'tax_certificate', label: '完税证明' }, { key: 'income_report', label: '综合所得申报表' },
-  { key: 'extra_income_reports', label: '分类/限售股申报表' },
+  { key: 'tax_certificate', label: '完税证明' }, { key: 'comprehensive_income_report', label: '综合所得申报' },
+  { key: 'classified_income_report', label: '分类所得申报' }, { key: 'restricted_stock_report', label: '限售股申报' },
 ]
 const steps = [
   { step: '步骤 1', key: 'chrome', title: '浏览器初始化', description: '启动可接管的 Chrome。启动后请在该窗口手工登录自然人电子税务局。' },
-  { step: '步骤 2', key: 'special_deduction', title: '专项附加导出', description: '批量导出专项附加扣除文件。执行前会校验月份和机构 Excel。' },
+  { step: '步骤 2', key: 'special_deduction', title: '专项附加导出', description: '批量导出专项附加扣除文件。机构范围由所属期间人员主数据自动生成。' },
   { step: '步骤 3', key: 'import', title: '导入数据', description: '从 input 目录按机构代码前缀匹配文件，批量导入人员信息、工资薪金、劳务报酬、奖金等文件。' },
   { step: '步骤 4', key: 'tax_certificate', title: '完税证明下载', description: '按机构查询缴款记录并下载完税证明 PDF。默认查询申报月份的次月缴款记录。' },
-  { step: '步骤 5', key: 'income_report', title: '综合所得申报表下载', description: '按机构导出综合所得申报表到 output 文件夹。' },
-  { step: '步骤 6', key: 'extra_income_reports', title: '分类/限售股申报表下载', description: '仅下载已申报成功的分类所得和限售股所得申报表；没有成功记录的机构会自动跳过。' },
+  { step: '步骤 5', key: 'declaration_reports', title: '下载申报结果', description: '依次下载综合所得、分类所得和限售股申报结果。' },
 ]
 
-watch(() => props.initialMonth, (value) => { if (value && !running.value) month.value = value })
-onMounted(async () => { await refreshAll(); timer = window.setInterval(poll, 1500) })
+watch(() => props.initialMonth, (value) => { if (value && !running.value) { month.value = value; monthManuallyOverridden.value = false } })
+watch(() => props.periodId, async () => { selectedOrgCodes.value = []; await loadOrganizations() })
+onMounted(async () => { await Promise.all([refreshAll(), loadOrganizations()]); timer = window.setInterval(poll, 1500) })
 onBeforeUnmount(() => window.clearInterval(timer))
 
 async function refreshAll() {
@@ -161,20 +158,24 @@ async function poll() { try { const { data } = await rpaApi.getStatus(); status.
 async function pollLog() { const { data } = await rpaApi.getLogs(logOffset.value); if (data.text) { logText.value += data.text; logOffset.value = data.next_offset; if (autoScroll.value) await nextTick(() => { if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight }) } }
 async function saveChromePath() { try { await rpaApi.saveConfig(chromePath.value) } catch (error: any) { ElMessage.error(detail(error, 'Chrome 地址保存失败')) } }
 async function initializeChrome() { try { await saveChromePath(); const { data } = await rpaApi.startChrome(chromePath.value); ElMessage.success(data.message); window.setTimeout(refreshAll, 1800) } catch (error: any) { ElMessage.error(detail(error, '浏览器初始化失败')) } }
-async function uploadOrg(event: Event) { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return; try { await rpaApi.uploadOrgExcel(file); ElMessage.success('机构信息表已上传'); await refreshAll() } catch (error: any) { ElMessage.error(detail(error, '机构信息表上传失败')) } finally { input.value = '' } }
+async function loadOrganizations() { if (!props.periodId) { organizations.value = []; return } try { organizations.value = (await rpaApi.organizations(props.periodId)).data.items } catch (error: any) { organizations.value = []; ElMessage.error(detail(error, '机构列表加载失败')) } }
 async function uploadImports(event: Event) { const input = event.target as HTMLInputElement; const files = Array.from(input.files || []); if (!files.length) return; try { await rpaApi.uploadImportFiles(files); ElMessage.success('导入文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) { await rpaApi.uploadImportFiles(files, true); ElMessage.success('同名文件已覆盖'); await refreshAll() } else if (error?.response?.status !== 409) ElMessage.error(detail(error, '导入文件上传失败')) } finally { input.value = '' } }
 async function preparePeriodFiles(overwrite: boolean) { if (!props.periodId) return; try { await rpaApi.prepareFromPeriod(props.periodId, overwrite); ElMessage.success('本期申报文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) await preparePeriodFiles(true); else if (error?.response?.status !== 409) ElMessage.error(detail(error, '准备本期文件失败')) } }
 async function removeImport(name: string) { try { await ElMessageBox.confirm(`确认从 input 删除“${name}”？`, '删除导入文件', { type: 'warning' }); await rpaApi.clearImportFiles([name]); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '删除失败')) } }
-async function confirmTask(task: RpaTaskKey) { try { validate(); const { data } = await rpaApi.previewOrgs({ all_orgs: allOrgs.value, org_code: allOrgs.value ? null : orgCode.value }); previewOrgs.value = data.items; pendingTask.value = task; pendingResume.value = false; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '无法开始任务')) } }
-async function startConfirmed() { if (!pendingTask.value && !pendingResume.value) return; try { if (pendingResume.value) { await rpaApi.resumeTask() } else { const task = pendingTask.value!; if (task === 'extra_income_reports') await ElMessageBox.confirm('本任务仅下载已经申报成功的分类所得和限售股所得申报表。没有成功申报记录的单位会自动跳过，不会产生或提交新的申报。', '下载范围确认', { type: 'warning' }); const prior = monthResults.value.some((row: any) => row[task] !== '待处理'); if (prior) await ElMessageBox.confirm('本月该任务已有处理结果，确认重新执行选中的机构？', '重新执行确认', { type: 'warning' }); await rpaApi.startTask({ task_key: task, month: month.value, all_orgs: allOrgs.value, org_code: allOrgs.value ? null : orgCode.value }) } previewVisible.value = false; logText.value = ''; logOffset.value = 0; await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, pendingResume.value ? '续跑失败' : '任务启动失败')) } }
+async function confirmTask(task: RpaTaskKey) { try { validate(); const { data } = await rpaApi.previewOrganizations({ period_id: props.periodId!, all_orgs: allOrgs.value, org_codes: allOrgs.value ? [] : selectedOrgCodes.value }); previewOrgs.value = data.items; pendingTask.value = task; pendingResume.value = false; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '无法开始任务')) } }
+async function startConfirmed() { if (!pendingTask.value && !pendingResume.value) return; try { if (pendingResume.value) { await rpaApi.resumeTask() } else { await rpaApi.startPeriodTask({ task_key: pendingTask.value!, period_id: props.periodId!, declaration_month: month.value, all_orgs: allOrgs.value, org_codes: allOrgs.value ? [] : selectedOrgCodes.value }) } previewVisible.value = false; logText.value = ''; logOffset.value = 0; await openRpaMonitor(); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, pendingResume.value ? '续跑失败' : '任务启动失败')) } }
 async function confirmResume() { try { const failure = status.value?.last_failure; if (!failure?.org_code) throw new Error('当前没有可续跑的失败机构'); const { data } = await rpaApi.previewOrgs({ all_orgs: true, org_code: null, start_org_code: failure.org_code }); previewOrgs.value = data.items; pendingTask.value = null; pendingResume.value = true; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '续跑预览失败')) } }
 async function stopTask() { try { const { data } = await rpaApi.stopTask(); ElMessage.info(data.message); await refreshAll() } catch (error: any) { ElMessage.error(detail(error, '停止任务失败')) } }
 async function copyLog() { await navigator.clipboard.writeText(logText.value); ElMessage.success('日志内容已复制到剪贴板') }
 function clearLog() { logText.value = ''; logOffset.value = status.value?.current_run.run_id ? logOffset.value : 0 }
 function trackLogScroll() { if (logBox.value) autoScroll.value = logBox.value.scrollHeight - logBox.value.scrollTop - logBox.value.clientHeight < 24 }
 async function downloadOutput(file: RpaFile) { try { const response = await rpaApi.downloadFile(file.name); const url = URL.createObjectURL(response.data); const link = document.createElement('a'); link.href = url; link.download = file.name; link.click(); URL.revokeObjectURL(url) } catch (error: any) { ElMessage.error(detail(error, '下载失败')) } }
-function validate() { if (!month.value) throw new Error('请选择申报月份'); if (!status.value?.config.org_excel_name) throw new Error('请选择机构 Excel'); if (!allOrgs.value && !orgCode.value.trim()) throw new Error('请输入指定机构代码'); if (status.value?.chrome.status !== 'ready') throw new Error('请先初始化 Chrome 并完成手工登录') }
-function statusClass(value: string) { return ['rpa-result', value?.startsWith('成功') ? 'success' : value === '失败' ? 'failed' : value === '处理中' ? 'running' : 'pending'] }
+function validate() { if (!props.periodId) throw new Error('请选择所属期间'); if (!month.value) throw new Error('请选择申报月份'); if (!organizations.value.length) throw new Error('当前期间没有可用机构'); if (!allOrgs.value && !selectedOrgCodes.value.length) throw new Error('请选择至少一个机构'); if (status.value?.chrome.status !== 'ready') throw new Error('请先初始化 Chrome 并完成手工登录') }
+function restoreMonth() { month.value = props.initialMonth; monthManuallyOverridden.value = false }
+function resultLabel(value: any) { return value?.label || value || '待处理' }
+function resultTitle(value: any) { return value?.error_message || value?.reason || '' }
+function statusClass(value: any) { const state = value?.status || (String(value || '').startsWith('成功') ? 'success' : value === '失败' ? 'failed' : value === '处理中' ? 'running' : 'pending'); return ['rpa-result', state] }
+async function openRpaMonitor() { const desktopApi = (window as any).pywebview?.api; if (desktopApi?.open_rpa_monitor) { await desktopApi.open_rpa_monitor(); return } const popup = window.open('/?window=rpa-monitor', 'rpa-monitor', 'popup=yes,width=460,height=640,resizable=yes,scrollbars=no'); if (!popup) ElMessage.warning('浏览器阻止了监控窗口，请允许本站弹出窗口后重试') }
 function duration(row: any) { const seconds = Math.max(0, Math.round((new Date(row.finished_at).getTime() - new Date(row.started_at).getTime()) / 1000)); return `${Math.floor(seconds / 60)}分${seconds % 60}秒` }
 function formatSize(value: number) { return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MB` : `${Math.ceil(value / 1024)} KB` }
 function detail(error: any, fallback: string) { return error?.response?.data?.detail || error?.message || fallback }

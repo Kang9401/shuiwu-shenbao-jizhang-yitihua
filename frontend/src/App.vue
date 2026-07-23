@@ -1,5 +1,6 @@
 <template>
-  <div class="shell">
+  <RpaMonitor v-if="isRpaMonitor" />
+  <div v-else class="shell">
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">
@@ -171,6 +172,7 @@ import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
 import TaskCenter from './views/TaskCenter.vue'
+import RpaMonitor from './views/RpaMonitor.vue'
 import { api, taxApi, workflowApi, type Period, type TaxSession, type Workflow } from './api'
 
 type ViewKey =
@@ -248,6 +250,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
 ]
 
 const periods = ref<Period[]>([])
+const isRpaMonitor = new URLSearchParams(window.location.search).get('window') === 'rpa-monitor'
 const workflows = ref<Workflow[]>([])
 const selectedPeriodId = ref<number | null>(null)
 const session = ref<TaxSession | null>(null)

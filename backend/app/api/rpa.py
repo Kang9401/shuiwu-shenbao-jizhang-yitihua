@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.rpa.service import rpa_service
+from app.services.personnel_master import PersonnelMasterValidationError
 from app.schemas.rpa import RpaChromeStart, RpaConfigUpdate, RpaDeleteFilesRequest, RpaOrgPreviewRequest, RpaPreparePeriodRequest, RpaTaskStartRequest
 
 router = APIRouter(prefix="/rpa", tags=["rpa"])
@@ -92,18 +93,48 @@ def chrome_status():
 
 
 @router.post("/orgs/preview")
-def preview_orgs(request: RpaOrgPreviewRequest):
+def preview_orgs(request: RpaOrgPreviewRequest, db: Session = Depends(get_db)):
     try:
-        items = rpa_service.preview_orgs(request.all_orgs, request.org_code, request.start_org_code)
+        if request.period_id:
+            items = rpa_service.organizations_for_period(db, request.period_id)
+            selected = set(request.org_codes or ([request.org_code] if request.org_code else []))
+            if not request.all_orgs:
+                items = [item for item in items if item["code"] in selected]
+            if request.start_org_code:
+                index = next((i for i, item in enumerate(items) if item["code"] == request.start_org_code), None)
+                if index is None:
+                    raise ValueError("续跑机构不在本次机构范围内")
+                items = items[index:]
+        else:
+            items = rpa_service.preview_orgs(request.all_orgs, request.org_code, request.start_org_code)
         return {"count": len(items), "items": items}
+    except PersonnelMasterValidationError as exc:
+        raise HTTPException(status_code=400, detail={"message": "人员主数据中的机构信息不完整", "issues": exc.issues}) from exc
     except Exception as exc:
         return bad_request(exc)
 
 
-@router.post("/tasks/start")
-def start_task(request: RpaTaskStartRequest):
+@router.get("/organizations")
+def organizations(period_id: int = Query(..., gt=0), db: Session = Depends(get_db)):
     try:
-        return rpa_service.start_task(request.task_key, request.month, request.all_orgs, request.org_code, request.resume_mode)
+        return {"items": rpa_service.organizations_for_period(db, period_id), "warnings": []}
+    except PersonnelMasterValidationError as exc:
+        raise HTTPException(status_code=400, detail={"message": "人员主数据中的机构信息不完整", "issues": exc.issues}) from exc
+
+
+@router.post("/tasks/start")
+def start_task(request: RpaTaskStartRequest, db: Session = Depends(get_db)):
+    try:
+        month = request.resolved_month()
+        org_codes = request.org_codes or ([request.org_code] if request.org_code else [])
+        if request.period_id:
+            _, selected = rpa_service.prepare_runtime_org_excel(db, period_id=request.period_id, selected_org_codes=None if request.all_orgs else org_codes)
+            result = rpa_service.start_task(request.task_key, month, True, None, request.resume_mode, request.start_org_code)
+            def record(data):
+                data["current_run"].update(period_id=request.period_id, declaration_month=month, org_codes=[item["code"] for item in selected], all_orgs=request.all_orgs)
+            rpa_service.store.update(record)
+            return result
+        return rpa_service.start_task(request.task_key, month, request.all_orgs, request.org_code, request.resume_mode, request.start_org_code)
     except Exception as exc:
         return bad_request(exc)
 

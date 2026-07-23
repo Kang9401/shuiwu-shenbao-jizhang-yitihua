@@ -44,6 +44,17 @@ DEDUCTION_COLUMNS = [
     "累计个人养老金",
 ]
 
+PAYROLL_RECONCILIATION_FIELDS = {
+    "工资单_累计子女教育扣除": ("累计当月子女教育附加扣除", "累计子女教育附加扣除"),
+    "工资单_累计继续教育扣除": ("累计当月继续教育附加扣除", "累计继续教育附加扣除"),
+    "工资单_累计住房贷款利息扣除": ("累计当月住房贷款利息附加扣除", "累计住房贷款利息附加扣除"),
+    "工资单_累计住房租金扣除": ("累计当月住房租金附加扣除", "累计住房租金附加扣除"),
+    "工资单_累计赡养老人扣除": ("累计当月赡养老人附加扣除", "累计赡养老人附加扣除"),
+    "工资单_累计婴幼儿照护扣除": ("累计当月婴幼儿照护费用附加扣除", "累计婴幼儿照护费用附加扣除"),
+    "工资单_累计商业保险扣除": ("累计商业保险扣除",),
+    "工资单_累计个人养老金": ("累计个人养老金",),
+}
+
 PAYROLL_ROLE_LABELS = {
     "rank_salary": "职级工资单",
     "marketing_salary": "营销工资单",
@@ -122,6 +133,13 @@ def _first_col(columns: list[str], *candidates: str) -> str | None:
         if c in columns:
             return c
     return None
+
+
+def _copy_payroll_reconciliation_fields(result: pd.DataFrame, source: pd.DataFrame) -> None:
+    columns = source.columns.tolist()
+    for normalized, aliases in PAYROLL_RECONCILIATION_FIELDS.items():
+        column = _first_col(columns, *aliases)
+        result[normalized] = _to_numeric(source[column]) if column else 0
 
 
 def _clean_text(value: Any) -> str:
@@ -213,6 +231,8 @@ def load_marketing_style_payroll(file_path: str) -> pd.DataFrame:
     result["本期免税收入"] = 0
     result["商业健康保险"] = 0
 
+    _copy_payroll_reconciliation_fields(result, df)
+
     return result
 
 
@@ -282,6 +302,8 @@ def load_rank_payroll(file_path: str) -> pd.DataFrame:
     result["本期免税收入"] = _to_numeric(df[exempt_col]) if exempt_col else 0
     result["年累计专项附加扣除"] = 0
 
+    _copy_payroll_reconciliation_fields(result, df)
+
     return result
 
 
@@ -331,6 +353,8 @@ def load_headquarters_payroll(file_path: str) -> pd.DataFrame:
     result["本期应预扣预缴税额 SUM"] = 0
     result["调增应纳税所得额"] = 0
     result["年累计专项附加扣除"] = 0
+
+    _copy_payroll_reconciliation_fields(result, df)
 
     return result
 

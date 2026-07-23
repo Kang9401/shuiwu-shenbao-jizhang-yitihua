@@ -25,6 +25,23 @@ from app.main import app
 _mutex_handle = None
 
 
+class DesktopWindowManager:
+    def __init__(self):
+        self.monitor_window = None
+
+    def open_rpa_monitor(self) -> dict:
+        if self.monitor_window is None:
+            return {"opened": False, "message": "监控窗口尚未初始化"}
+        self.monitor_window.show()
+        self.monitor_window.restore()
+        return {"opened": True}
+
+    def hide_rpa_monitor(self) -> dict:
+        if self.monitor_window is not None:
+            self.monitor_window.hide()
+        return {"hidden": True}
+
+
 def _message(title: str, content: str) -> None:
     if sys.platform == "win32":
         ctypes.windll.user32.MessageBoxW(None, content, title, 0x10)
@@ -176,6 +193,7 @@ def main() -> int:
         try:
             import webview
 
+            manager = DesktopWindowManager()
             webview.create_window(
                 PRODUCT_NAME,
                 url,
@@ -183,7 +201,22 @@ def main() -> int:
                 height=900,
                 min_size=(1080, 680),
                 text_select=True,
+                js_api=manager,
             )
+            manager.monitor_window = webview.create_window(
+                "RPA 任务监控",
+                f"{url}/?window=rpa-monitor",
+                width=460,
+                height=640,
+                min_size=(380, 420),
+                hidden=True,
+                text_select=True,
+                js_api=manager,
+            )
+            def hide_monitor_on_close():
+                manager.hide_rpa_monitor()
+                return False
+            manager.monitor_window.events.closing += hide_monitor_on_close
             webview.start(
                 debug=False,
                 private_mode=False,

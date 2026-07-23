@@ -386,7 +386,13 @@ def main() -> int:
                     switch_org(page, org)
                     page = ensure_withholding_page(page)
                     _verify_current_org(page, org, config["current_org_scope"])
-                    count = sum(1 for spec in REPORT_SPECS if _download_one(page, org, args.month, spec, config, helpers))
+                    count = 0
+                    for spec in REPORT_SPECS:
+                        downloaded = _download_one(page, org, args.month, spec, config, helpers)
+                        count += int(downloaded)
+                        status = "success" if downloaded else "skipped"
+                        reason = "downloaded" if downloaded else "no_records"
+                        log(f"[RPA_RESULT] org_code={org.code} category={spec.key} status={status} count={int(downloaded)} reason={reason}")
                     log(f"机构扩展申报表下载完成：{org.name}（{org.code}），共 {count} 个文件")
                 except Exception as exc:
                     capture_failure_evidence(page, org, exc)

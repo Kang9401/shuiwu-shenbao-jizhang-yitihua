@@ -1,5 +1,14 @@
 <template>
   <div class="workflow-page">
+    <section v-if="importType === 'bank_statement'" class="card workflow-card">
+      <div class="card-header"><div><strong>自动获取银行流水</strong><p>使用独立浏览器登录态查询，获取成功后自动进入银行流水导入批次。</p></div><span class="tag tag-info">{{ fetchStatus.message || '未启动' }}</span></div>
+      <div class="card-body bank-fetch-grid">
+        <label><span>银行账号</span><textarea v-model="accounts" rows="4" placeholder="每行一个账号" /></label>
+        <label><span>开始日期</span><input v-model="startDate" type="date" /></label>
+        <label><span>结束日期</span><input v-model="endDate" type="date" /></label>
+        <div class="action-bar"><el-button @click="openBankLogin">打开登录页</el-button><el-button type="primary" :disabled="!periodId || !accounts.trim() || fetchRunning" @click="startBankFetch">自动获取</el-button><el-button type="danger" :disabled="!fetchRunning" @click="stopBankFetch">停止</el-button></div>
+      </div>
+    </section>
     <section class="card workflow-card">
       <div class="card-header">
         <div>
@@ -70,10 +79,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Upload } from '@element-plus/icons-vue'
 import {
+  bankFetchApi,
   reconciliationImportApi,
   type ReconciliationImportBatch,
   type ReconciliationImportType,
@@ -86,11 +96,19 @@ const selectedFile = ref<File | null>(null)
 const batches = ref<ReconciliationImportBatch[]>([])
 const loading = ref(false)
 const errorText = ref('')
+const accounts = ref('')
+const today = new Date().toISOString().slice(0, 10)
+const startDate = ref(`${today.slice(0, 7)}-01`)
+const endDate = ref(today)
+const fetchStatus = ref({ status: 'idle', message: '', batch_id: null as number | null })
+let fetchTimer: number | undefined
+const fetchRunning = computed(() => ['starting', 'running', 'waiting-login', 'importing'].includes(fetchStatus.value.status))
 
 const importTypeLabel = computed(() => typeLabel(importType.value))
 const canImport = computed(() => !!props.periodId && !!selectedFile.value)
 
-onMounted(loadBatches)
+onMounted(() => { loadBatches(); pollBankFetch(); fetchTimer = window.setInterval(pollBankFetch, 1500) })
+onBeforeUnmount(() => window.clearInterval(fetchTimer))
 watch(() => props.periodId, loadBatches)
 watch(importType, loadBatches)
 
@@ -136,4 +154,13 @@ async function importFile() {
     loading.value = false
   }
 }
+
+async function pollBankFetch() { try { const { data } = await bankFetchApi.status(); const previous = fetchStatus.value.status; fetchStatus.value = data; if (previous !== 'succeeded' && data.status === 'succeeded') { ElMessage.success('银行流水已自动获取并导入'); await loadBatches() } } catch {} }
+async function openBankLogin() { try { await bankFetchApi.openLogin(); ElMessage.info('请在打开的银行页面完成登录') } catch (error: any) { ElMessage.error(formatError(error)) } }
+async function startBankFetch() { if (!props.periodId) return; try { fetchStatus.value = (await bankFetchApi.start({ period_id: props.periodId, accounts: accounts.value, start_date: startDate.value, end_date: endDate.value })).data } catch (error: any) { ElMessage.error(formatError(error)) } }
+async function stopBankFetch() { fetchStatus.value = (await bankFetchApi.stop()).data }
 </script>
+
+<style scoped>
+.bank-fetch-grid{display:grid;grid-template-columns:minmax(260px,1fr) 180px 180px;gap:12px;align-items:end}.bank-fetch-grid label{display:flex;flex-direction:column;gap:6px}.bank-fetch-grid textarea,.bank-fetch-grid input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #d0d5dd;border-radius:4px;font:inherit}.bank-fetch-grid .action-bar{grid-column:1/-1}@media(max-width:800px){.bank-fetch-grid{grid-template-columns:1fr}}
+</style>

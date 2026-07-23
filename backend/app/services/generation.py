@@ -13,6 +13,21 @@ import pandas as pd
 from app.services.verification import DECLARATION_COLUMNS, _normalize_emp_id, _clean_text
 
 
+SALARY_RECONCILIATION_ONLY_FIELDS = {
+    "工资单_累计子女教育扣除",
+    "工资单_累计继续教育扣除",
+    "工资单_累计住房贷款利息扣除",
+    "工资单_累计住房租金扣除",
+    "工资单_累计赡养老人扣除",
+    "工资单_累计婴幼儿照护扣除",
+    "工资单_累计商业保险扣除",
+    "工资单_累计个人养老金",
+}
+DECLARATION_OUTPUT_FIELDS = frozenset(DECLARATION_COLUMNS)
+if DECLARATION_OUTPUT_FIELDS & SALARY_RECONCILIATION_ONLY_FIELDS:
+    raise RuntimeError("申报字段白名单不得包含工资核对专用累计扣除字段")
+
+
 def generate_declarations(
     sheet: pd.DataFrame,
     output_dir: str,
@@ -53,7 +68,7 @@ def generate_declarations(
             continue
 
         # 选择申报列
-        output_cols = [c for c in DECLARATION_COLUMNS if c in grp.columns]
+        output_cols = [c for c in DECLARATION_COLUMNS if c in grp.columns and c not in SALARY_RECONCILIATION_ONLY_FIELDS]
         org_sheet = grp[output_cols].copy()
 
         # 文本列：工号/姓名/证件类型/证件号码/备注 必须保留为字符串，禁止数值化

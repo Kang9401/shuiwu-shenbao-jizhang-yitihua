@@ -72,7 +72,7 @@ export interface BackupInfo {
   created_at: string
 }
 
-export type RpaTaskKey = 'special_deduction' | 'import' | 'tax_certificate' | 'income_report' | 'extra_income_reports'
+export type RpaTaskKey = 'special_deduction' | 'import' | 'tax_certificate' | 'income_report' | 'extra_income_reports' | 'declaration_reports'
 
 export interface RpaFile {
   name: string
@@ -84,7 +84,10 @@ export interface RpaFile {
 export interface RpaOrg {
   code: string
   name: string
+  employee_count?: number
 }
+
+export interface RpaResultCell { status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'; count: number | null; label: string; reason?: string | null; error_message?: string | null }
 
 export interface RpaResult extends RpaOrg {
   month: string
@@ -93,6 +96,9 @@ export interface RpaResult extends RpaOrg {
   tax_certificate: string
   income_report: string
   extra_income_reports: string
+  comprehensive_income_report?: RpaResultCell
+  classified_income_report?: RpaResultCell
+  restricted_stock_report?: RpaResultCell
 }
 
 export interface RpaStatus {
@@ -102,6 +108,10 @@ export interface RpaStatus {
     run_id: string | null
     task_key: RpaTaskKey | null
     month: string | null
+    declaration_month?: string | null
+    period_id?: number | null
+    display_name?: string | null
+    org_codes?: string[]
     status: 'idle' | 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
     current_org_code: string | null
     current_org_name: string | null
@@ -409,6 +419,13 @@ export const reconciliationImportApi = {
     }),
 }
 
+export const bankFetchApi = {
+  start: (payload: { period_id: number; accounts: string; start_date: string; end_date: string }) => api.post('/bank-fetch/start', payload),
+  status: () => api.get<{ status: string; message: string; batch_id: number | null; events: Array<{ id: number; at: string; message: string }> }>('/bank-fetch/status'),
+  openLogin: () => api.post('/bank-fetch/open-login'),
+  stop: () => api.post('/bank-fetch/stop'),
+}
+
 export const rpaApi = {
   getStatus: () => api.get<RpaStatus>('/rpa/status'),
   saveConfig: (chromePath: string) => api.put('/rpa/config', { chrome_path: chromePath }),
@@ -431,6 +448,11 @@ export const rpaApi = {
   previewOrgs: (payload: { all_orgs: boolean; org_code: string | null; start_org_code?: string | null }) =>
     api.post<{ count: number; items: RpaOrg[] }>('/rpa/orgs/preview', payload),
   startTask: (payload: { task_key: RpaTaskKey; month: string; all_orgs: boolean; org_code: string | null; resume_mode?: 'resume' | 'reset' | null }) =>
+    api.post('/rpa/tasks/start', payload),
+  organizations: (periodId: number) => api.get<{ items: RpaOrg[]; warnings: string[] }>('/rpa/organizations', { params: { period_id: periodId } }),
+  previewOrganizations: (payload: { period_id: number; all_orgs: boolean; org_codes: string[]; start_org_code?: string | null }) =>
+    api.post<{ count: number; items: RpaOrg[] }>('/rpa/orgs/preview', payload),
+  startPeriodTask: (payload: { task_key: RpaTaskKey; period_id: number; declaration_month: string; all_orgs: boolean; org_codes: string[]; resume_mode?: 'resume' | 'reset' | null }) =>
     api.post('/rpa/tasks/start', payload),
   stopTask: () => api.post('/rpa/tasks/stop'),
   resumeTask: () => api.post('/rpa/tasks/resume'),

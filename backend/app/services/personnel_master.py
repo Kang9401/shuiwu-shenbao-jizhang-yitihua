@@ -18,12 +18,63 @@ from app.services.storage import save_upload
 
 PERSON_TYPES = {"employee", "intern", "broker", "customer"}
 SCOPE_TYPES = {"month", "org", "branch"}
+ORG_NAME_ALIASES = ["营业部全称", "机构名称", "单位名称", "部门名称"]
+ORG_CODE_ALIASES = ["机构代码", "分支机构代码", "单位编号"]
 
 
 class PersonnelMasterValidationError(ValueError):
     def __init__(self, issues: list[dict[str, Any]]):
         self.issues = issues
         super().__init__("；".join(issue["message"] for issue in issues))
+
+
+def _clean_org_code(value: Any) -> str:
+    text = _clean(value).replace(" ", "")
+    return text[:-2] if text.endswith(".0") and text[:-2].isdigit() else text
+
+
+def list_rpa_organizations(db: Session, *, period_id: int, person_type: str = "employee") -> list[dict]:
+    path = PersonnelMasterResolver(db, period_id).resolve_path(person_type)
+    if not path:
+        raise PersonnelMasterValidationError([{"issue_type": "missing_personnel_master", "message": "所属期间没有雇员人员主数据"}])
+    frame = read_excel(path).fillna("")
+    name_col = _first_existing(frame.columns, ORG_NAME_ALIASES)
+    code_col = _first_existing(frame.columns, ORG_CODE_ALIASES)
+    issues: list[dict[str, Any]] = []
+    if not name_col:
+        issues.append({"issue_type": "missing_column", "column": "营业部全称", "message": "人员主数据缺少营业部全称列"})
+    if not code_col:
+        issues.append({"issue_type": "missing_column", "column": "机构代码", "message": "人员主数据缺少机构代码列"})
+    if issues:
+        raise PersonnelMasterValidationError(issues)
+    status_col = _first_existing(frame.columns, ["人员状态", "*人员状态", "状态"])
+    active = frame[frame[status_col].map(_is_active_status)] if status_col else frame
+    code_names: dict[str, set[str]] = {}
+    name_codes: dict[str, set[str]] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for index, row in active.iterrows():
+        name, code = _clean(row.get(name_col)), _clean_org_code(row.get(code_col))
+        if not name:
+            issues.append({"issue_type": "missing_org_name", "row_number": int(index + 2), "message": f"第 {index + 2} 行营业部全称为空"})
+            continue
+        if not code:
+            issues.append({"issue_type": "missing_org_code", "row_number": int(index + 2), "message": f"第 {index + 2} 行机构代码为空"})
+            continue
+        code_names.setdefault(code, set()).add(name)
+        name_codes.setdefault(name, set()).add(code)
+        counts[(code, name)] = counts.get((code, name), 0) + 1
+    for code, names in code_names.items():
+        if len(names) > 1:
+            issues.append({"issue_type": "org_code_name_conflict", "org_code": code, "names": sorted(names), "message": f"机构代码 {code} 对应多个营业部全称"})
+    for name, codes in name_codes.items():
+        if len(codes) > 1:
+            issues.append({"issue_type": "org_name_code_conflict", "org_name": name, "codes": sorted(codes), "message": f"营业部全称 {name} 对应多个机构代码"})
+    if issues:
+        raise PersonnelMasterValidationError(issues)
+    return [
+        {"code": code, "name": next(iter(code_names[code])), "employee_count": counts[(code, next(iter(code_names[code])))]}
+        for code in sorted(code_names)
+    ]
 
 
 def _clean(value: Any) -> str:

@@ -12,12 +12,59 @@ from app.rpa.paths import state_dir
 
 def default_state() -> dict:
     return {
+        "state_version": 2,
         "config": {"chrome_path": r"C:\Program Files\Google\Chrome\Application\chrome.exe", "org_excel_path": None, "org_excel_name": None},
         "chrome": {"status": "stopped", "last_checked_at": None, "message": ""},
-        "current_run": {"run_id": None, "task_key": None, "display_name": None, "month": None, "backend_month": None, "all_orgs": True, "org_code": None, "current_org_code": None, "current_org_name": None, "status": "idle", "pid": None, "started_at": None, "finished_at": None, "exit_code": None, "error_message": None, "log_path": None},
+        "current_run": {"run_id": None, "task_key": None, "subtask_key": None, "subtask_index": None, "subtask_count": None, "display_name": None, "period_id": None, "declaration_month": None, "month": None, "backend_month": None, "month_manually_overridden": False, "all_orgs": True, "org_codes": [], "org_code": None, "current_org_code": None, "current_org_name": None, "status": "idle", "pid": None, "started_at": None, "finished_at": None, "exit_code": None, "error_message": None, "log_path": None},
         "results": {}, "history": [],
         "last_failure": {"task_key": None, "org_code": None, "month": None},
     }
+
+
+def result_cell(status: str = "pending", count=None, reason=None, error_message=None) -> dict:
+    labels = {"pending": "待处理", "running": "处理中", "success": "成功", "failed": "失败", "skipped": "无需处理", "cancelled": "已取消"}
+    label = labels[status]
+    if status == "success" and count is not None:
+        label = f"成功 {count}笔"
+    return {"status": status, "count": count, "label": label, "reason": reason, "started_at": None, "finished_at": None, "error_message": error_message}
+
+
+def _legacy_cell(value) -> dict:
+    if isinstance(value, dict) and value.get("status"):
+        return value
+    text = str(value or "待处理")
+    if text.startswith("成功"):
+        import re
+        match = re.search(r"(\d+)", text)
+        count = int(match.group(1)) if match else None
+        return result_cell("skipped" if count == 0 else "success", count=0 if count == 0 else count, reason="历史结果迁移" if count == 0 else None)
+    mapping = {"处理中": "running", "失败": "failed", "已取消": "cancelled", "无需处理": "skipped"}
+    return result_cell(mapping.get(text, "pending"), error_message=text if text not in mapping and text != "待处理" else None)
+
+
+def migrate_state(data: dict) -> dict:
+    migrated = copy.deepcopy(data or {})
+    if migrated.get("state_version") == 2:
+        base = default_state()
+        for key, value in migrated.items():
+            if key in base:
+                base[key] = value
+        for key, value in default_state()["current_run"].items():
+            base["current_run"].setdefault(key, value)
+        return base
+    for orgs in migrated.get("results", {}).values():
+        for row in orgs.values():
+            row["special_deduction"] = _legacy_cell(row.get("special_deduction"))
+            row["import"] = _legacy_cell(row.get("import"))
+            row["tax_certificate"] = _legacy_cell(row.get("tax_certificate"))
+            row["comprehensive_income_report"] = _legacy_cell(row.pop("income_report", None))
+            if "extra_income_reports" in row:
+                row["legacy_extra_income_reports"] = row.pop("extra_income_reports")
+            reason = "历史数据未拆分"
+            row["classified_income_report"] = result_cell("pending", reason=reason)
+            row["restricted_stock_report"] = result_cell("pending", reason=reason)
+    migrated["state_version"] = 2
+    return migrate_state(migrated)
 
 
 class StateStore:
@@ -33,11 +80,7 @@ class StateStore:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 return default_state()
-            base = default_state()
-            for key, value in data.items():
-                if key in base:
-                    base[key] = value
-            return copy.deepcopy(base)
+            return copy.deepcopy(migrate_state(data))
 
     def write(self, data: dict) -> dict:
         with self._lock:
