@@ -22,9 +22,9 @@
             :class="{ 'has-file': selectedFiles[role] }"
           >
             <label>{{ roleLabel(role) }}</label>
-            <input type="file" accept=".xls,.xlsx,.csv" :multiple="isBroker && role === 'broker_income'" @change="onFilePicked(role, $event)" />
+            <input type="file" accept=".xls,.xlsx,.csv" :multiple="(isBroker && role === 'broker_income') || (isAnnualBonus && role === 'bonus_sheet')" @change="onFilePicked(role, $event)" />
             <span class="upload-status" :class="selectedFiles[role] ? 'ready' : 'empty'">
-              {{ isBroker && role === 'broker_income' && brokerIncomeFiles.length ? `已选择 ${brokerIncomeFiles.length} 个文件` : (selectedFiles[role]?.name || (isRequired(role) ? '必传' : '可选')) }}
+              {{ roleFileSummary(role) }}
             </span>
             <button class="btn btn-xs btn-ghost" :disabled="!selectedFiles[role]" @click="clearFile(role)">清除</button>
           </div>
@@ -276,6 +276,7 @@ const generationJob = ref<Job | null>(null)
 const reconciliationJob = ref<Job | null>(null)
 const restrictedUploadIds = reactive<Record<string, number>>({})
 const brokerIncomeFiles = ref<File[]>([])
+const annualBonusFiles = ref<File[]>([])
 
 const sharedStaffWorkflows = new Set([
   'staff_info_update',
@@ -320,6 +321,7 @@ const usesSharedStaffInfo = computed(() => sharedStaffWorkflows.has(props.workfl
 const isRestrictedStockInterest = computed(() => props.workflow.code === 'restricted_stock_interest_tax')
 const isIntern = computed(() => props.workflow.code === 'intern_tax')
 const isBroker = computed(() => props.workflow.code === 'broker_tax')
+const isAnnualBonus = computed(() => props.workflow.code === 'annual_bonus_tax')
 const isAutoGenerateWorkflow = computed(() => isIntern.value || isBroker.value)
 const hasRestrictedSource = computed(() => Boolean(selectedFiles.tax_sheet || selectedFiles.interest_tax))
 const restrictedActionHint = computed(() => {
@@ -381,6 +383,7 @@ watch(
     reconciliationJob.value = null
     Object.keys(restrictedUploadIds).forEach((key) => delete restrictedUploadIds[key])
     brokerIncomeFiles.value = []
+    annualBonusFiles.value = []
     void restoreLatestJobs()
   },
   { immediate: true }
@@ -420,6 +423,7 @@ function onFilePicked(role: string, event: Event) {
   const files = Array.from((event.target as HTMLInputElement).files || [])
   const file = files[0] || null
   if (isBroker.value && role === 'broker_income') brokerIncomeFiles.value = files
+  if (isAnnualBonus.value && role === 'bonus_sheet') annualBonusFiles.value = files
   selectedFiles[role] = file
   delete restrictedUploadIds[role]
   if (file && isAutoGenerateWorkflow.value) window.setTimeout(() => runWorkflow(), 0)
@@ -428,7 +432,14 @@ function onFilePicked(role: string, event: Event) {
 function clearFile(role: string) {
   selectedFiles[role] = null
   if (role === 'broker_income') brokerIncomeFiles.value = []
+  if (role === 'bonus_sheet') annualBonusFiles.value = []
   delete restrictedUploadIds[role]
+}
+
+function roleFileSummary(role: string) {
+  if (isBroker.value && role === 'broker_income' && brokerIncomeFiles.value.length) return `已选择 ${brokerIncomeFiles.value.length} 个文件`
+  if (isAnnualBonus.value && role === 'bonus_sheet' && annualBonusFiles.value.length) return `已选择 ${annualBonusFiles.value.length} 个文件`
+  return selectedFiles[role]?.name || (isRequired(role) ? '必传' : '可选')
 }
 
 function openFolderPicker() {
@@ -593,7 +604,11 @@ async function runWorkflow(operation = 'generate') {
     const uploadedIds: number[] = []
     for (const role of roleEntries.value) {
       if (role === 'balance_sheet' && operation !== 'reconcile') continue
-      const files = isBroker.value && role === 'broker_income' ? brokerIncomeFiles.value : [selectedFiles[role]].filter((file): file is File => Boolean(file))
+      const files = isBroker.value && role === 'broker_income'
+        ? brokerIncomeFiles.value
+        : isAnnualBonus.value && role === 'bonus_sheet'
+          ? annualBonusFiles.value
+          : [selectedFiles[role]].filter((file): file is File => Boolean(file))
       for (const file of files) {
         const { data } = await workflowApi.uploadFile(file, role, props.periodId)
         uploadedIds.push(data.id)

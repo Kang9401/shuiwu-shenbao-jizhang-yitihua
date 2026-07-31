@@ -10,7 +10,7 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.accounting import PersonnelMasterArtifact, PersonnelMasterImportBatch
+from app.models.accounting import OrganizationMapping, PersonnelMasterArtifact, PersonnelMasterImportBatch
 from app.models.core import Period, UploadedFile
 from app.services.excel import read_excel, write_workbook
 from app.services.storage import save_upload
@@ -18,7 +18,6 @@ from app.services.storage import save_upload
 
 PERSON_TYPES = {"employee", "intern", "broker", "customer"}
 SCOPE_TYPES = {"month", "org", "branch"}
-ORG_NAME_ALIASES = ["营业部全称", "机构名称", "单位名称", "部门名称"]
 ORG_CODE_ALIASES = ["机构代码", "分支机构代码", "单位编号"]
 
 
@@ -34,46 +33,45 @@ def _clean_org_code(value: Any) -> str:
 
 
 def list_rpa_organizations(db: Session, *, period_id: int, person_type: str = "employee") -> list[dict]:
+    mappings = db.query(OrganizationMapping).filter(
+        OrganizationMapping.active == 1,
+        OrganizationMapping.rpa_enabled == 1,
+    ).order_by(OrganizationMapping.org_code, OrganizationMapping.rpa_org_name).all()
+    mappings_by_code: dict[str, list[OrganizationMapping]] = {}
+    for mapping in mappings:
+        mappings_by_code.setdefault(mapping.org_code.strip(), []).append(mapping)
+    duplicate_codes = [code for code, items in mappings_by_code.items() if len(items) > 1]
+    if duplicate_codes:
+        raise PersonnelMasterValidationError([
+            {
+                "issue_type": "duplicate_rpa_organization_mapping",
+                "org_code": code,
+                "message": f"机构代码 {code} 存在多个启用的 RPA 映射",
+            }
+            for code in duplicate_codes
+        ])
+
+    counts: dict[str, int] = {}
     path = PersonnelMasterResolver(db, period_id).resolve_path(person_type)
-    if not path:
-        raise PersonnelMasterValidationError([{"issue_type": "missing_personnel_master", "message": "所属期间没有雇员人员主数据"}])
-    frame = read_excel(path).fillna("")
-    name_col = _first_existing(frame.columns, ORG_NAME_ALIASES)
-    code_col = _first_existing(frame.columns, ORG_CODE_ALIASES)
-    issues: list[dict[str, Any]] = []
-    if not name_col:
-        issues.append({"issue_type": "missing_column", "column": "营业部全称", "message": "人员主数据缺少营业部全称列"})
-    if not code_col:
-        issues.append({"issue_type": "missing_column", "column": "机构代码", "message": "人员主数据缺少机构代码列"})
-    if issues:
-        raise PersonnelMasterValidationError(issues)
-    status_col = _first_existing(frame.columns, ["人员状态", "*人员状态", "状态"])
-    active = frame[frame[status_col].map(_is_active_status)] if status_col else frame
-    code_names: dict[str, set[str]] = {}
-    name_codes: dict[str, set[str]] = {}
-    counts: dict[tuple[str, str], int] = {}
-    for index, row in active.iterrows():
-        name, code = _clean(row.get(name_col)), _clean_org_code(row.get(code_col))
-        if not name:
-            issues.append({"issue_type": "missing_org_name", "row_number": int(index + 2), "message": f"第 {index + 2} 行营业部全称为空"})
-            continue
-        if not code:
-            issues.append({"issue_type": "missing_org_code", "row_number": int(index + 2), "message": f"第 {index + 2} 行机构代码为空"})
-            continue
-        code_names.setdefault(code, set()).add(name)
-        name_codes.setdefault(name, set()).add(code)
-        counts[(code, name)] = counts.get((code, name), 0) + 1
-    for code, names in code_names.items():
-        if len(names) > 1:
-            issues.append({"issue_type": "org_code_name_conflict", "org_code": code, "names": sorted(names), "message": f"机构代码 {code} 对应多个营业部全称"})
-    for name, codes in name_codes.items():
-        if len(codes) > 1:
-            issues.append({"issue_type": "org_name_code_conflict", "org_name": name, "codes": sorted(codes), "message": f"营业部全称 {name} 对应多个机构代码"})
-    if issues:
-        raise PersonnelMasterValidationError(issues)
+    if path:
+        frame = read_excel(path).fillna("")
+        code_col = _first_existing(frame.columns, ORG_CODE_ALIASES)
+        if code_col:
+            status_col = _first_existing(frame.columns, ["人员状态", "*人员状态", "状态"])
+            active = frame[frame[status_col].map(_is_active_status)] if status_col else frame
+            for _, row in active.iterrows():
+                code = _clean_org_code(row.get(code_col))
+                if code:
+                    counts[code] = counts.get(code, 0) + 1
+
     return [
-        {"code": code, "name": next(iter(code_names[code])), "employee_count": counts[(code, next(iter(code_names[code])))]}
-        for code in sorted(code_names)
+        {
+            "code": code,
+            "name": items[0].rpa_org_name,
+            "parent_branch": items[0].parent_branch,
+            "employee_count": counts.get(code, 0),
+        }
+        for code, items in mappings_by_code.items()
     ]
 
 

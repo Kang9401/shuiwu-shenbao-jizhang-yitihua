@@ -8,6 +8,9 @@ BACKEND = ROOT / "backend"
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 ICON = ROOT / "packaging" / "assets" / "app.ico"
 VERSION_INFO = ROOT / "packaging" / "generated-version-info.txt"
+RPA_VENDOR = BACKEND / "vendor" / "etax_rpa"
+RPA_EXTENSIONS = BACKEND / "app" / "rpa" / "extensions"
+RPA_HELPERS = ROOT / "build" / "rpa_helpers"
 
 hiddenimports = sorted(set(
     collect_submodules("uvicorn")
@@ -27,7 +30,13 @@ a = Analysis(
     [str(BACKEND / "desktop.py")],
     pathex=[str(BACKEND)],
     binaries=[],
-    datas=[(str(FRONTEND_DIST), "frontend_dist"), *copy_metadata("pywebview")],
+    datas=[
+        (str(FRONTEND_DIST), "frontend_dist"),
+        (str(RPA_VENDOR), "backend/vendor/etax_rpa"),
+        (str(RPA_EXTENSIONS), "app/rpa/extensions"),
+        (str(RPA_HELPERS), "rpa_helpers"),
+        *copy_metadata("pywebview"),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

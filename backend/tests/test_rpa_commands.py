@@ -7,8 +7,7 @@ from app.rpa.commands import add_month, build_chrome_command, build_task_command
 
 @pytest.fixture
 def app_dir(tmp_path: Path) -> Path:
-    for name in ("etax_batch_export.exe", "etax_batch_import.exe", "etax_tax_certificate_download.exe"):
-        (tmp_path / name).touch()
+    (tmp_path / "etax_rpa_runner.exe").touch()
     return tmp_path
 
 
@@ -53,6 +52,7 @@ def test_extra_income_reports_uses_extension_and_keeps_selected_month(app_dir):
 def test_frozen_command_uses_helper_and_chrome_is_argument_list(app_dir):
     command, _ = build_task_command(app_dir, "import", "2026-06", frozen=True)
     chrome = build_chrome_command(Path("D:/中文 路径"), "C:/Program Files/Google/Chrome/Application/chrome.exe")
-    assert command[0].endswith("etax_batch_import.exe")
+    assert command[0].endswith("etax_rpa_runner.exe")
+    assert command[1] == "import"
     assert chrome[-2] == "-ChromePath"
     assert isinstance(chrome, list)

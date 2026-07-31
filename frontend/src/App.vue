@@ -99,6 +99,11 @@
 
         <SystemMaintenance v-else-if="activeView === 'system_maintenance'" />
 
+        <FinanceSkill
+          v-else-if="activeView === 'finance_skill'"
+          :period-label="selectedPeriodLabel"
+        />
+
         <GenericWorkflow
           v-else-if="activeWorkflow"
           :workflow="activeWorkflow"
@@ -151,6 +156,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  ChatDotRound,
   CircleCheck,
   Clock,
   Coin,
@@ -171,6 +177,7 @@ import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
+import FinanceSkill from './views/FinanceSkill.vue'
 import TaskCenter from './views/TaskCenter.vue'
 import RpaMonitor from './views/RpaMonitor.vue'
 import { api, taxApi, workflowApi, type Period, type TaxSession, type Workflow } from './api'
@@ -179,7 +186,7 @@ type ViewKey =
   | 'work_guide'
   | 'task_center'
   | 'system_maintenance'
-  | 'deduction_download'
+  | 'finance_skill'
   | 'personnel_masters'
   | 'tax_declaration'
   | 'etax_rpa'
@@ -227,9 +234,9 @@ const navSections: { label: string; items: NavItem[] }[] = [
     ],
   },
   {
-    label: '专项附加扣除',
+    label: '智能能力',
     items: [
-      { key: 'deduction_download', label: '专项附加扣除', icon: CircleCheck, kicker: 'Special deductions', description: '专项附加扣除下载、合并和重复员工提示。', planned: true },
+      { key: 'finance_skill', label: '财务 SKILL', icon: ChatDotRound, kicker: 'Finance AI', description: '面向财务分析、会计处理、税务判断与风险复核的大模型助手。' },
     ],
   },
   {

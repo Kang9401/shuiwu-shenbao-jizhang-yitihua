@@ -74,7 +74,10 @@
             <h4>必填资料</h4>
             <div v-for="item in requiredFiles" :key="item.role" class="upload-item" :class="{ 'has-file': files[item.role] }">
               <label>{{ item.label }}</label>
-              <input :key="`${item.role}-${inputVersion}`" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              <label class="btn btn-sm btn-outline file-picker-button">
+                选择文件
+                <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              </label>
               <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
                 {{ files[item.role] || '未选择' }}
               </span>
@@ -86,11 +89,35 @@
             <h4>可选工资资料</h4>
             <div v-for="item in optionalFiles" :key="item.role" class="upload-item" :class="{ 'has-file': files[item.role] }">
               <label>{{ item.label }}</label>
-              <input :key="`${item.role}-${inputVersion}`" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              <label class="btn btn-sm btn-outline file-picker-button">
+                选择文件
+                <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              </label>
               <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
                 {{ files[item.role] || '未选择' }}
               </span>
               <button class="btn btn-xs btn-ghost" :disabled="!files[item.role]" @click="clearFile(item.role)">清除</button>
+            </div>
+          </div>
+
+          <div class="upload-section">
+            <h4>专项附加扣除</h4>
+            <div class="upload-item" :class="{ 'has-file': deductionFiles.length }">
+              <label>专项附加扣除文件</label>
+              <label class="btn btn-sm btn-outline file-picker-button">
+                选择文件
+                <input :key="`deductions-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" multiple @change="pickDeductionFiles" />
+              </label>
+              <span class="upload-status" :class="deductionFiles.length ? 'ready' : 'empty'">
+                {{ deductionFiles.length ? `已选择 ${deductionFiles.length} 个文件` : '未选择' }}
+              </span>
+              <button class="btn btn-xs btn-ghost" :disabled="!deductionFiles.length" @click="clearDeductionFiles">清除</button>
+            </div>
+            <div v-if="deductionFiles.length" class="deduction-file-list">
+              <span v-for="file in deductionFiles" :key="fileIdentity(file)">
+                {{ file.name }}
+                <button type="button" title="移除" @click="removeDeductionFile(file)">×</button>
+              </span>
             </div>
           </div>
         </div>
@@ -194,6 +221,22 @@
             <el-table-column prop="employee_id" label="员工编号" width="120" />
             <el-table-column prop="org_code" label="机构代码" width="120" />
             <el-table-column prop="message" label="提示" min-width="220" />
+          </el-table>
+        </div>
+      </section>
+
+      <section v-if="report.taxpayer_org_mapping?.has_issues" class="card">
+        <div class="card-header">
+          <strong>工资机构识别号映射异常</strong>
+          <span class="tag tag-danger">{{ report.taxpayer_org_mapping.items.length }} 项阻断</span>
+        </div>
+        <div class="card-body">
+          <el-table :data="report.taxpayer_org_mapping.items" size="small" max-height="260">
+            <el-table-column prop="payroll_type" label="工资单类型" min-width="150" />
+            <el-table-column prop="name" label="姓名" width="100" />
+            <el-table-column prop="employee_id" label="员工编号" width="120" />
+            <el-table-column prop="taxpayer_id" label="扣缴义务人纳税人识别号" min-width="220" />
+            <el-table-column prop="message" label="提示" min-width="260" />
           </el-table>
         </div>
       </section>
@@ -427,6 +470,7 @@ const importedStaffChangeName = ref('')
 
 const files = reactive<Record<string, string>>({})
 const fileData = reactive<Record<string, File>>({})
+const deductionFiles = ref<File[]>([])
 
 const requiredFiles = [
   { role: 'rank_salary', label: '职级工资单' },
@@ -452,9 +496,9 @@ const missingRequiredLabels = computed(() => {
 const canStartVerify = computed(() => Boolean(props.sessionId && !verifying.value && !missingRequiredLabels.value.length))
 
 // 已缓存的文件数（跨步骤切换时保留在内存中，避免重复上传）
-const cachedFileCount = computed(() => Object.keys(fileData).length)
+const cachedFileCount = computed(() => Object.keys(fileData).length + deductionFiles.value.length)
 const cachedFileList = computed(() => {
-  const names = Object.values(files).filter(Boolean)
+  const names = [...Object.values(files).filter(Boolean), ...deductionFiles.value.map((file) => file.name)]
   return names.join('、')
 })
 
@@ -538,6 +582,27 @@ function clearFile(role: string) {
   inputVersion.value += 1
 }
 
+function pickDeductionFiles(event: Event) {
+  const picked = Array.from((event.target as HTMLInputElement).files || [])
+  deductionFiles.value = mergeUniqueFiles(deductionFiles.value, picked)
+}
+
+function clearDeductionFiles() {
+  deductionFiles.value = []
+  inputVersion.value += 1
+}
+
+function removeDeductionFile(file: File) {
+  const identity = fileIdentity(file)
+  deductionFiles.value = deductionFiles.value.filter((item) => fileIdentity(item) !== identity)
+}
+
+function mergeUniqueFiles(current: File[], incoming: File[]) {
+  const merged = new Map(current.map((file) => [fileIdentity(file), file]))
+  incoming.forEach((file) => merged.set(fileIdentity(file), file))
+  return Array.from(merged.values())
+}
+
 function openFolderPicker() {
   folderInput.value?.click()
 }
@@ -560,6 +625,8 @@ function pickFolder(event: Event) {
     fileData[role] = file
     count += 1
   }
+  deductionFiles.value = mergeUniqueFiles(deductionFiles.value, classified.deductionFiles)
+  count += classified.deductionFiles.length
   const artifactCount = classified.knownArtifacts.length
 
   inputVersion.value += 1
@@ -577,10 +644,11 @@ function pickFolder(event: Event) {
 function classifyFolderFiles(fileList: File[]) {
   const roles: Record<string, File> = {}
   const knownArtifacts: File[] = []
+  const deductionFiles: File[] = []
   for (const file of fileList) {
     const text = normalizeFileText(file)
     const role = detectFileRole(text)
-    if (role === 'deduction_files') knownArtifacts.push(file)
+    if (role === 'deduction_files') deductionFiles.push(file)
     else if (role === 'personnel_collection' || role === 'updated_staff' || role === 'working_sheet' || role === 'reconciliation_report') knownArtifacts.push(file)
     else if (role) {
       const normalizedRole = ['branch_salary', 'digital_ops_salary', 'advisor_salary'].includes(role) ? 'marketing_salary' : role
@@ -588,7 +656,7 @@ function classifyFolderFiles(fileList: File[]) {
       roles[normalizedRole] = file
     }
   }
-  return { roles, knownArtifacts }
+  return { roles, knownArtifacts, deductionFiles }
 }
 
 function normalizeFileText(file: File) {
@@ -639,6 +707,7 @@ async function runVerify() {
       if (role === 'staff_change' && step.value !== 2) continue
       form.append(role, file)
     }
+    deductionFiles.value.forEach((file) => form.append('deduction_files', file))
 
     const { data } = await taxApi.verify(props.sessionId, form)
     report.value = data.report
@@ -774,6 +843,7 @@ function resetAll() {
   importedStaffChangeName.value = ''
   Object.keys(files).forEach((key) => delete files[key])
   Object.keys(fileData).forEach((key) => delete fileData[key])
+  deductionFiles.value = []
   inputVersion.value += 1
 }
 </script>

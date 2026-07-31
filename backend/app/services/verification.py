@@ -71,6 +71,7 @@ VERIFICATION_RULE_CONFIG = {
         "deduction_missing_orgs",
         "personnel_update_match_failed",
         "headcount_reconciliation_failed",
+        "taxpayer_org_mapping",
         "invalid_resident_id",
         "duplicate_id_in_staff",
         "duplicate_id_in_change",
@@ -167,7 +168,47 @@ def _missing_fields(row: pd.Series, fields: list[str]) -> list[str]:
     return [field for field in fields if _clean_text(row.get(field, "")) == ""]
 
 
-def load_marketing_style_payroll(file_path: str) -> pd.DataFrame:
+def _normalize_taxpayer_id(value: Any) -> str:
+    return "".join(_clean_text(value).split()).upper()
+
+
+def _apply_payroll_org_mapping(
+    result: pd.DataFrame,
+    source: pd.DataFrame,
+    columns: list[str],
+    taxpayer_org_map: dict[str, str] | None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> None:
+    taxpayer_col = _first_col(columns, "个税扣缴义务人纳税人识别号")
+    taxpayer_ids = (
+        source[taxpayer_col].map(_normalize_taxpayer_id)
+        if taxpayer_col
+        else pd.Series("", index=source.index, dtype=object)
+    )
+    result["个税扣缴义务人纳税人识别号"] = taxpayer_ids
+    if "机构代码" not in result.columns:
+        result["机构代码"] = ""
+    result["机构代码"] = result["机构代码"].map(normalize_org_code)
+    result["机构映射异常"] = ""
+    if taxpayer_org_map is None:
+        return
+
+    valid_org = result["机构代码"].astype(str).str.fullmatch(r"\d{5}", na=False)
+    needs_mapping = ~valid_org
+    duplicate_ids = duplicate_taxpayer_ids or set()
+    mapped = taxpayer_ids.map(taxpayer_org_map).fillna("")
+    result.loc[needs_mapping & mapped.ne(""), "机构代码"] = mapped
+    result.loc[needs_mapping & taxpayer_ids.eq(""), "机构映射异常"] = "工资单缺少个税扣缴义务人纳税人识别号"
+    result.loc[needs_mapping & taxpayer_ids.isin(duplicate_ids), "机构映射异常"] = "机构名称维护表中该纳税人识别号存在重复"
+    unknown = needs_mapping & taxpayer_ids.ne("") & mapped.eq("") & ~taxpayer_ids.isin(duplicate_ids)
+    result.loc[unknown, "机构映射异常"] = "机构名称维护表中找不到该纳税人识别号"
+
+
+def load_marketing_style_payroll(
+    file_path: str,
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> pd.DataFrame:
     """加载营销/机构/数字化/投顾类工资单。
 
     统一列名为标准名称。处理不同工资单的列名差异。
@@ -191,6 +232,7 @@ def load_marketing_style_payroll(file_path: str) -> pd.DataFrame:
         result["机构代码"] = df[org_col].astype(str).apply(normalize_org_code)
     if org_name_col:
         result["单位名称"] = df[org_name_col].astype(str)
+    _apply_payroll_org_mapping(result, df, cols, taxpayer_org_map, duplicate_taxpayer_ids)
 
     # 应发工资（优先取调整后的）
     salary_col = _first_col(
@@ -236,7 +278,11 @@ def load_marketing_style_payroll(file_path: str) -> pd.DataFrame:
     return result
 
 
-def load_rank_payroll(file_path: str) -> pd.DataFrame:
+def load_rank_payroll(
+    file_path: str,
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> pd.DataFrame:
     """加载职级工资单。
 
     复现原脚本 L176-185：先查找 '所在部门' 位置判断是否有表头元数据行。
@@ -276,6 +322,7 @@ def load_rank_payroll(file_path: str) -> pd.DataFrame:
         result["所在部门"] = df[dept_col].astype(str)
     if org_col:
         result["机构代码"] = df[org_col].astype(str).apply(normalize_org_code)
+    _apply_payroll_org_mapping(result, df, cols, taxpayer_org_map, duplicate_taxpayer_ids)
 
     salary_col = _first_col(cols, "应发合计 SUM", "应发合计")
     housing_col = _first_col(cols, "住房公积金的员工部分 SUM", "住房公积金的员工部分")
@@ -307,7 +354,11 @@ def load_rank_payroll(file_path: str) -> pd.DataFrame:
     return result
 
 
-def load_headquarters_payroll(file_path: str) -> pd.DataFrame:
+def load_headquarters_payroll(
+    file_path: str,
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> pd.DataFrame:
     """加载总部工资单，映射列名为标准名称。
 
     复现原脚本 L188-200。
@@ -330,6 +381,7 @@ def load_headquarters_payroll(file_path: str) -> pd.DataFrame:
         result["所在部门"] = df[dept_col].astype(str)
     if org_col:
         result["机构代码"] = df[org_col].astype(str).apply(normalize_org_code)
+    _apply_payroll_org_mapping(result, df, cols, taxpayer_org_map, duplicate_taxpayer_ids)
 
     salary_col = _first_col(cols, "本期收入", "应发合计 SUM")
     housing_col = _first_col(cols, "住房公积金的员工部分", "住房公积金的员工部分 SUM")
@@ -518,6 +570,8 @@ def build_working_sheet(
     payroll_files: list[tuple[str, str]],
     staff_info_path: str,
     deduction_folder: str,
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """构建完整底稿（大表）。返回 (sheet, staff_df)。"""
     # ---- 1. 加载人员信息表 ----
@@ -555,11 +609,11 @@ def build_working_sheet(
         if not path:
             continue
         if role == "rank_salary":
-            df = load_rank_payroll(path)
+            df = load_rank_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
         elif role == "headquarters_salary":
-            df = load_headquarters_payroll(path)
+            df = load_headquarters_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
         else:
-            df = load_marketing_style_payroll(path)
+            df = load_marketing_style_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
         if not df.empty:
             df["工资单类型"] = PAYROLL_ROLE_LABELS.get(role, role)
             all_frames.append(df)
@@ -1027,6 +1081,21 @@ def check_payroll_org_format(sheet: pd.DataFrame) -> dict:
     return {"has_issues": bool(items), "items": items}
 
 
+def check_taxpayer_org_mapping(sheet: pd.DataFrame) -> dict:
+    if "机构映射异常" not in sheet.columns:
+        return {"has_issues": False, "items": []}
+    items = []
+    for _, row in sheet[sheet["机构映射异常"].fillna("").astype(str).str.strip().ne("")].iterrows():
+        items.append({
+            "payroll_type": _clean_text(row.get("工资单类型", "")),
+            "name": _clean_text(row.get("*姓名", "")),
+            "employee_id": _clean_text(row.get("员工编号", "")),
+            "taxpayer_id": _clean_text(row.get("个税扣缴义务人纳税人识别号", "")),
+            "message": _clean_text(row.get("机构映射异常", "")),
+        })
+    return {"has_issues": bool(items), "items": items}
+
+
 def check_deduction_coverage(sheet: pd.DataFrame) -> list[str]:
     """检查哪些机构的专项附加扣除全为0。"""
     org_col = "机构代码_工资单" if "机构代码_工资单" in sheet.columns else "机构代码"
@@ -1159,6 +1228,7 @@ def build_reconciliation_report(report: dict) -> dict[str, pd.DataFrame]:
         {"项目": "机构变动候选", "数量": len(transfer_items), "分级": "提醒项", "是否阻断": False},
         {"项目": "关键字段缺失", "数量": len(report.get("key_field_missing", {}).get("items", [])), "分级": "阻断项", "是否阻断": bool(report.get("key_field_missing", {}).get("items", []))},
         {"项目": "工资机构代码格式", "数量": len(report.get("payroll_org_format", {}).get("items", [])), "分级": "阻断项", "是否阻断": bool(report.get("payroll_org_format", {}).get("items", []))},
+        {"项目": "工资机构纳税人识别号映射", "数量": len(report.get("taxpayer_org_mapping", {}).get("items", [])), "分级": "阻断项", "是否阻断": bool(report.get("taxpayer_org_mapping", {}).get("items", []))},
         {"项目": "个税差异", "数量": len(tax_items), "分级": "阻断项", "是否阻断": bool(tax_items)},
         {"项目": "专项附加扣除重复", "数量": len(report["deduction_warnings"]["duplicates"]), "分级": "阻断项", "是否阻断": bool(report["deduction_warnings"]["duplicates"])},
         {"项目": "专项附加扣除机构遗漏", "数量": len(report["deduction_warnings"]["missing_orgs"]), "分级": "阻断项", "是否阻断": bool(report["deduction_warnings"]["missing_orgs"])},
@@ -1187,6 +1257,7 @@ def build_reconciliation_report(report: dict) -> dict[str, pd.DataFrame]:
         "03_机构变动候选": pd.DataFrame(transfer_items),
         "04_关键字段缺失": pd.DataFrame(report.get("key_field_missing", {}).get("items", [])),
         "04A_工资机构代码格式": pd.DataFrame(report.get("payroll_org_format", {}).get("items", [])),
+        "04B_工资机构识别号映射": pd.DataFrame(report.get("taxpayer_org_mapping", {}).get("items", [])),
         "05_个税差异": pd.DataFrame(tax_rows),
         "06_专项附加扣除重复": pd.DataFrame(report["deduction_warnings"]["duplicates"]),
         "07_专项附加扣除机构遗漏": pd.DataFrame(missing_org_rows),
@@ -1227,6 +1298,7 @@ def build_verification_checks(report: dict) -> list[dict]:
         len(report["deduction_warnings"]["duplicates"])
         + len(report["deduction_warnings"]["missing_orgs"])
     )
+    taxpayer_mapping_count = len(report.get("taxpayer_org_mapping", {}).get("items", []))
 
     missing_personnel_fields = sum(1 for item in personnel_items if item.get("missing_fields"))
     confirmable_personnel = sum(1 for item in personnel_items if item.get("can_confirm"))
@@ -1257,6 +1329,14 @@ def build_verification_checks(report: dict) -> list[dict]:
             "issue_count": missing_cert_count,
             "message": f"发现 {missing_cert_count} 条人员证件信息缺失，请补齐后再生成申报文件。"
             if missing_cert_count else "证件信息完整。",
+        },
+        {
+            "code": "taxpayer_org_mapping",
+            "title": "工资机构识别号映射",
+            "status": "fail" if taxpayer_mapping_count else "pass",
+            "issue_count": taxpayer_mapping_count,
+            "message": f"发现 {taxpayer_mapping_count} 条工资记录无法通过扣缴义务人识别号映射机构代码。"
+            if taxpayer_mapping_count else "工资机构识别号映射通过。",
         },
         {
             "code": "deduction_warnings",
@@ -1299,6 +1379,7 @@ def verify(
         ),
         "missing_cert": check_missing_cert(sheet),
         "payroll_org_format": check_payroll_org_format(sheet),
+        "taxpayer_org_mapping": check_taxpayer_org_mapping(sheet),
         "deduction_warnings": check_deduction_issues(deduction_folder) if deduction_folder
         else {"has_issues": False, "duplicates": [], "missing_orgs": []},
         "deduction_match_quality": sheet.attrs.get(
@@ -1325,6 +1406,8 @@ def verify(
         total += len(report["missing_cert"]["items"])
     if report["payroll_org_format"]["has_issues"]:
         total += len(report["payroll_org_format"]["items"])
+    if report["taxpayer_org_mapping"]["has_issues"]:
+        total += len(report["taxpayer_org_mapping"]["items"])
     if report["deduction_warnings"]["has_issues"]:
         total += len(report["deduction_warnings"]["duplicates"])
         total += len(report["deduction_warnings"]["missing_orgs"])
@@ -1339,6 +1422,7 @@ def verify(
         + len(report["personnel_changes"]["items"])
         + len(report["missing_cert"]["items"])
         + len(report["payroll_org_format"]["items"])
+        + len(report["taxpayer_org_mapping"]["items"])
         + len(report["deduction_warnings"]["duplicates"])
         + len(report["deduction_warnings"]["missing_orgs"])
         + sum(1 for item in report["data_quality"]["items"] if item.get("severity") == "blocking")

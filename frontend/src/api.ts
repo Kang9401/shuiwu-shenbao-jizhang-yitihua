@@ -84,7 +84,21 @@ export interface RpaFile {
 export interface RpaOrg {
   code: string
   name: string
+  parent_branch?: string
   employee_count?: number
+}
+
+export type FinanceSkillKey = 'general' | 'accounting' | 'tax' | 'review'
+
+export interface FinanceAIStatus {
+  configured: boolean
+  model: string | null
+  skills: Array<{ key: FinanceSkillKey; name: string }>
+}
+
+export interface FinanceChatMessage {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 export interface RpaResultCell { status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'; count: number | null; label: string; reason?: string | null; error_message?: string | null }
@@ -102,7 +116,7 @@ export interface RpaResult extends RpaOrg {
 }
 
 export interface RpaStatus {
-  config: { chrome_path: string; org_excel_name: string | null }
+  config: { chrome_path: string; input_path: string; output_path: string; org_excel_name: string | null }
   chrome: { status: 'stopped' | 'starting' | 'ready' | 'unavailable'; message: string }
   current_run: {
     run_id: string | null
@@ -169,7 +183,11 @@ export interface OrganizationMapping {
   id: number
   branch_name: string
   org_code: string
+  taxpayer_id: string
   active: boolean
+  rpa_enabled: boolean
+  rpa_org_name: string
+  parent_branch: string
   updated_at: string
 }
 
@@ -234,6 +252,7 @@ export interface VerifyReport {
   deduction_match_quality?: { low_confidence: any[]; name_mismatches: any[] }
   personnel_change_review?: any[]
   payroll_org_format?: { has_issues: boolean; items: { payroll_type: string; name: string; employee_id: string; org_code: string; message: string }[] }
+  taxpayer_org_mapping?: { has_issues: boolean; items: { payroll_type: string; name: string; employee_id: string; taxpayer_id: string; message: string }[] }
   data_quality?: { has_issues: boolean; items: any[] }
   key_field_missing?: { has_issues: boolean; items: any[] }
   personnel_update_issues?: { match_failures: any[]; duplicate_additions: any[]; multiple_matches: any[] }
@@ -350,9 +369,9 @@ export const systemApi = {
 
 export const organizationMappingApi = {
   list: () => api.get<OrganizationMapping[]>('/organization-mappings'),
-  create: (payload: { branch_name: string; org_code: string; active: boolean }) =>
+  create: (payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; parent_branch: string }) =>
     api.post<OrganizationMapping>('/organization-mappings', payload),
-  update: (id: number, payload: { branch_name: string; org_code: string; active: boolean }) =>
+  update: (id: number, payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; parent_branch: string }) =>
     api.put<OrganizationMapping>(`/organization-mappings/${id}`, payload),
   importFile: (file: File) => {
     const form = new FormData()
@@ -419,6 +438,16 @@ export const reconciliationImportApi = {
     }),
 }
 
+export const financeAIApi = {
+  status: () => api.get<FinanceAIStatus>('/finance-ai/status'),
+  chat: (payload: { skill: FinanceSkillKey; messages: FinanceChatMessage[]; period_context?: string }) =>
+    api.post<{ content: string; model: string; usage?: Record<string, number> }>(
+      '/finance-ai/chat',
+      payload,
+      { timeout: 90000 },
+    ),
+}
+
 export const bankFetchApi = {
   start: (payload: { period_id: number; accounts: string; start_date: string; end_date: string }) => api.post('/bank-fetch/start', payload),
   status: () => api.get<{ status: string; message: string; batch_id: number | null; events: Array<{ id: number; at: string; message: string }> }>('/bank-fetch/status'),
@@ -428,7 +457,7 @@ export const bankFetchApi = {
 
 export const rpaApi = {
   getStatus: () => api.get<RpaStatus>('/rpa/status'),
-  saveConfig: (chromePath: string) => api.put('/rpa/config', { chrome_path: chromePath }),
+  saveConfig: (chromePath: string, inputPath: string, outputPath: string) => api.put('/rpa/config', { chrome_path: chromePath, input_path: inputPath, output_path: outputPath }),
   uploadOrgExcel: (file: File) => {
     const form = new FormData()
     form.append('file', file)
@@ -455,8 +484,11 @@ export const rpaApi = {
   startPeriodTask: (payload: { task_key: RpaTaskKey; period_id: number; declaration_month: string; all_orgs: boolean; org_codes: string[]; resume_mode?: 'resume' | 'reset' | null }) =>
     api.post('/rpa/tasks/start', payload),
   stopTask: () => api.post('/rpa/tasks/stop'),
+  resetResults: (month: string) => api.delete<RpaStatus>('/rpa/results', { params: { month } }),
   resumeTask: () => api.post('/rpa/tasks/resume'),
   getLogs: (offset: number) => api.get<{ text: string; next_offset: number; finished: boolean }>('/rpa/logs', { params: { offset } }),
   listFiles: () => api.get<RpaFile[]>('/rpa/files'),
   downloadFile: (name: string) => api.get<Blob>('/rpa/files/download', { params: { name }, responseType: 'blob' }),
+  downloadArchive: () => api.get<Blob>('/rpa/files/archive', { responseType: 'blob' }),
+  clearOutputFiles: () => api.delete<RpaFile[]>('/rpa/files'),
 }

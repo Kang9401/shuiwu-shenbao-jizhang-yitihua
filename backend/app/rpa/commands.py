@@ -26,13 +26,13 @@ def add_month(month: str) -> str:
     return f"{year + (value == 12)}-{1 if value == 12 else value + 1:02d}"
 
 
-def _launcher(app_dir: Path, script_name: str, frozen: bool | None) -> list[str]:
+def _launcher(app_dir: Path, task_key: str, script_name: str, frozen: bool | None) -> list[str]:
     use_exe = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
-    executable = app_dir / Path(script_name).with_suffix(".exe")
     if use_exe:
+        executable = app_dir / "etax_rpa_runner.exe"
         if not executable.is_file():
             raise RuntimeError(f"RPA 后台程序不存在：{executable.name}")
-        return [str(executable)]
+        return [str(executable), task_key]
     return [sys.executable, str(app_dir / script_name)]
 
 
@@ -45,6 +45,7 @@ def build_task_command(
     resume_mode: str | None = None,
     start_org_code: str | None = None,
     frozen: bool | None = None,
+    input_root: Path | None = None,
 ) -> tuple[list[str], str]:
     if task_key not in TASK_SCRIPTS:
         raise ValueError("未知 RPA 任务")
@@ -52,10 +53,10 @@ def build_task_command(
     if not all_orgs and not org_code:
         raise ValueError("指定机构不能为空")
     backend_month = add_month(month) if task_key == "tax_certificate" else month
-    args = _launcher(app_dir, TASK_SCRIPTS[task_key], frozen)
+    args = _launcher(app_dir, task_key, TASK_SCRIPTS[task_key], frozen)
     args += ["--cdp", CDP_URL, "--month", backend_month, "--org-excel", str(app_dir / "机构信息表.xlsx")]
     if task_key == "import":
-        args += ["--input-root", str(app_dir / "input")]
+        args += ["--input-root", str(input_root or app_dir / "input")]
     args.append("--yes")
     if not all_orgs:
         args += ["--org-code", str(org_code)]

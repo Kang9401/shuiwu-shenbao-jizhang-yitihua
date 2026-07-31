@@ -271,7 +271,9 @@ def test_verify_returns_four_frontend_checks():
     report = verify(sheet)
 
     checks = {item["code"]: item for item in report["checks"]}
-    assert set(checks) == {"tax_diff", "personnel_changes", "missing_cert", "deduction_warnings"}
+    assert set(checks) == {
+        "tax_diff", "personnel_changes", "missing_cert", "taxpayer_org_mapping", "deduction_warnings",
+    }
     assert checks["tax_diff"]["status"] == "fail"
     assert checks["personnel_changes"]["status"] == "fail"
     assert checks["missing_cert"]["status"] == "pass"

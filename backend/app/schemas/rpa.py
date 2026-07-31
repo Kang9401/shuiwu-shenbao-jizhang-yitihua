@@ -9,6 +9,8 @@ RpaTaskKey = Literal["special_deduction", "import", "tax_certificate", "income_r
 
 class RpaConfigUpdate(BaseModel):
     chrome_path: str = Field(default="", max_length=500)
+    input_path: str = Field(default="", max_length=1000)
+    output_path: str = Field(default="", max_length=1000)
 
 
 class RpaChromeStart(RpaConfigUpdate):

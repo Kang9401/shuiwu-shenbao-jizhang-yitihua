@@ -72,7 +72,63 @@ def _migration_2(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS ix_jobs_operation ON jobs (operation)")
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2}
+def _migration_3(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'"
+    ).fetchone()
+    if table is None:
+        return
+    columns = _table_columns(connection, "organization_mappings")
+    additions = {
+        "rpa_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "rpa_org_name": "VARCHAR(255) NOT NULL DEFAULT ''",
+        "parent_branch": "VARCHAR(255) NOT NULL DEFAULT ''",
+    }
+    for column, declaration in additions.items():
+        if column not in columns:
+            connection.execute(f'ALTER TABLE organization_mappings ADD COLUMN "{column}" {declaration}')
+
+
+def _migration_4(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'"
+    ).fetchone()
+    if table is None:
+        return
+    columns = _table_columns(connection, "organization_mappings")
+    if "taxpayer_id" not in columns:
+        connection.execute(
+            'ALTER TABLE organization_mappings ADD COLUMN "taxpayer_id" VARCHAR(64) NOT NULL DEFAULT \'\''
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_organization_mappings_taxpayer_id "
+        "ON organization_mappings (taxpayer_id)"
+    )
+
+
+def _migration_5(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'"
+    ).fetchone()
+    if table is None:
+        return
+    connection.execute(
+        """
+        DELETE FROM organization_mappings
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM organization_mappings
+            GROUP BY org_code
+        )
+        """
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_mapping_org_code "
+        "ON organization_mappings (org_code)"
+    )
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5}
 
 
 def run_migrations(engine: Engine, *, backup_existing: bool = False) -> int:

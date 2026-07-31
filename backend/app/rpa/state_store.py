@@ -13,7 +13,7 @@ from app.rpa.paths import state_dir
 def default_state() -> dict:
     return {
         "state_version": 2,
-        "config": {"chrome_path": r"C:\Program Files\Google\Chrome\Application\chrome.exe", "org_excel_path": None, "org_excel_name": None},
+        "config": {"chrome_path": r"C:\Program Files\Google\Chrome\Application\chrome.exe", "input_path": "", "output_path": "", "org_excel_path": None, "org_excel_name": None},
         "chrome": {"status": "stopped", "last_checked_at": None, "message": ""},
         "current_run": {"run_id": None, "task_key": None, "subtask_key": None, "subtask_index": None, "subtask_count": None, "display_name": None, "period_id": None, "declaration_month": None, "month": None, "backend_month": None, "month_manually_overridden": False, "all_orgs": True, "org_codes": [], "org_code": None, "current_org_code": None, "current_org_name": None, "status": "idle", "pid": None, "started_at": None, "finished_at": None, "exit_code": None, "error_message": None, "log_path": None},
         "results": {}, "history": [],
@@ -51,6 +51,8 @@ def migrate_state(data: dict) -> dict:
                 base[key] = value
         for key, value in default_state()["current_run"].items():
             base["current_run"].setdefault(key, value)
+        for key, value in default_state()["config"].items():
+            base["config"].setdefault(key, value)
         return base
     for orgs in migrated.get("results", {}).values():
         for row in orgs.values():

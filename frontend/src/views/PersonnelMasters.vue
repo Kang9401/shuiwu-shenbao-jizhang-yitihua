@@ -72,7 +72,7 @@
           <a v-for="item in artifacts" :key="item.id" class="download-item" :href="item.download_url" target="_blank">
             <el-icon><Download /></el-icon>
             <span class="download-text">
-              <strong>{{ item.file_name }}</strong>
+              <strong>{{ displayFileName(item) }}</strong>
               <small>{{ scopeLabel(item.scope_type, item.scope_code) }} · {{ item.row_count }} 行</small>
             </span>
           </a>
@@ -144,6 +144,12 @@ function scopeLabel(type: PersonnelScopeType, code: string) {
   if (type === 'month') return '月度全量'
   if (type === 'org') return `机构 ${code}`
   return `分公司 ${code}`
+}
+
+function displayFileName(item: PersonnelMasterArtifact) {
+  if (item.person_type !== 'employee' || item.scope_type !== 'month') return item.file_name
+  const match = item.file_name.match(/^(\d{4})(\d{2})_employee_month_all\.xlsx$/i)
+  return match ? `人员信息表(${match[1]}年${match[2]}月).xlsx` : item.file_name
 }
 
 function formatError(error: any) {

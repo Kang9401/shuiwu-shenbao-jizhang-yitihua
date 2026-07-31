@@ -117,6 +117,20 @@ def test_annual_bonus_transform_merges_active_staff_only():
     assert result["detail"].iloc[0]["*全年一次性奖金收入"] == 20000
 
 
+def test_annual_bonus_transform_combines_old_and_new_templates():
+    bonus = pd.DataFrame([
+        {"员工编号": "1001", "员工姓名": "张三", "年终奖发放": 10000, "本次扣税": 1000},
+        {"员工编号": "1002", "员工姓名": "李四", "年终奖汇总": 20000, "年终奖计税": 2000},
+    ])
+    staff = pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "证件类型": "居民身份证", "证件号码": "1", "机构代码": "10301", "人员状态": "正常"},
+        {"员工编号": "1002", "*姓名": "李四", "证件类型": "居民身份证", "证件号码": "2", "机构代码": "10301", "人员状态": "正常"},
+    ])
+    result = annual_bonus_transform({"annual_bonus_sheet": bonus, "staff_info": staff})
+    assert result["detail"]["*全年一次性奖金收入"].tolist() == [10000, 20000]
+    assert result["summary"].iloc[0]["收入合计"] == 30000
+
+
 def test_broker_tax_subtracts_vat_and_checks_staff():
     broker = pd.DataFrame(
         [{"员工编号": "2001", "应发工资(补足前)": 1200, "增值税": 200, "个人所得税(经纪人)": 100}]

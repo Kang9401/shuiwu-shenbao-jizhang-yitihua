@@ -145,11 +145,18 @@ class ReconciliationImportRow(Base):
 
 class OrganizationMapping(Base):
     __tablename__ = "organization_mappings"
-    __table_args__ = (UniqueConstraint("branch_name", name="uq_organization_mapping_branch_name"),)
+    __table_args__ = (
+        UniqueConstraint("branch_name", name="uq_organization_mapping_branch_name"),
+        UniqueConstraint("org_code", name="uq_organization_mapping_org_code"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     branch_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     org_code: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    taxpayer_id: Mapped[str] = mapped_column(String(64), default="", nullable=False, index=True)
     active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    rpa_enabled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rpa_org_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    parent_branch: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

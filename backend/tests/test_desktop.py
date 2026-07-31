@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import desktop
 import httpx
 from fastapi import FastAPI
 
-import desktop
+
+class FakeWindow:
+    def __init__(self):
+        self.calls = []
+
+    def show(self):
+        self.calls.append("show")
+
+    def restore(self):
+        self.calls.append("restore")
+
+    def hide(self):
+        self.calls.append("hide")
+
+    def destroy(self):
+        self.calls.append("destroy")
 
 
 def test_desktop_server_starts_without_uvicorn_console_logging():
@@ -27,3 +43,25 @@ def test_desktop_server_starts_without_uvicorn_console_logging():
         desktop._stop_server(server, thread)
 
     assert not thread.is_alive()
+
+
+def test_desktop_api_does_not_expose_native_window(monkeypatch):
+    window = FakeWindow()
+    monkeypatch.setattr(desktop, "_monitor_window", window)
+    manager = desktop.DesktopWindowManager()
+
+    assert vars(manager) == {}
+    assert manager.open_rpa_monitor() == {"opened": True}
+    assert manager.hide_rpa_monitor() == {"hidden": True}
+    assert window.calls == ["show", "restore", "hide"]
+
+
+def test_main_window_close_destroys_hidden_monitor(monkeypatch):
+    window = FakeWindow()
+    monkeypatch.setattr(desktop, "_monitor_window", window)
+    monkeypatch.setattr(desktop, "_desktop_exiting", False)
+
+    assert desktop._close_monitor_on_main_close() is True
+    assert desktop._desktop_exiting is True
+    assert window.calls == ["destroy"]
+    assert desktop._hide_monitor_on_close(desktop.DesktopWindowManager()) is True

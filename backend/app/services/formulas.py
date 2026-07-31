@@ -336,12 +336,18 @@ def annual_bonus_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str,
         if role not in frames_by_role:
             continue
         frame = frames_by_role[role].copy()
-        rename = {
+        for source, target in {
             "员工姓名": "*姓名",
             "年终奖汇总": "年终奖发放",
             "年终奖计税": "本次扣税",
-        }
-        frame = frame.rename(columns=rename)
+        }.items():
+            if source not in frame.columns:
+                continue
+            if target in frame.columns:
+                frame[target] = frame[target].combine_first(frame[source])
+                frame = frame.drop(columns=[source])
+            else:
+                frame = frame.rename(columns={source: target})
         if "员工编号" in frame.columns:
             frame["员工编号"] = frame["员工编号"].map(normalize_emp_id)
         bonus_frames.append(frame)

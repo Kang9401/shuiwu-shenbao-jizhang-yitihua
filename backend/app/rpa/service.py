@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 import threading
 import urllib.request
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +71,27 @@ class RpaService:
 
     def shutdown(self) -> None:
         self.stop_task()
+
+    def _configured_root(self, key: str, fallback: str) -> Path:
+        state = self.store.read() if hasattr(self.store, "read") else {}
+        value = str(state.get("config", {}).get(key) or "").strip()
+        root = Path(value).expanduser() if value else ensure_runtime_app() / fallback
+        root.mkdir(parents=True, exist_ok=True)
+        return root.resolve()
+
+    def _input_root(self) -> Path:
+        return self._configured_root("input_path", "input")
+
+    def _output_root(self) -> Path:
+        return self._configured_root("output_path", "output")
+
+    def _sync_output_files(self) -> None:
+        source = (ensure_runtime_app() / "output").resolve()
+        target = self._output_root()
+        if source != target:
+            for path in source.iterdir():
+                if path.is_file():
+                    shutil.copy2(path, target / path.name)
 
     def _read_orgs(self) -> list[dict[str, str]]:
         path = ensure_runtime_app() / "机构信息表.xlsx"
@@ -164,8 +187,9 @@ class RpaService:
                 for task_key in TASK_NAMES:
                     values.setdefault(task_key, "待处理")
                 results.append({"month": month, "code": code, **values})
-        app_dir = ensure_runtime_app()
-        import_files = self._file_items(app_dir / "input", include_url=False)
+        data["config"]["input_path"] = str(self._input_root())
+        data["config"]["output_path"] = str(self._output_root())
+        import_files = self._file_items(self._input_root(), include_url=False)
         run_status = data["current_run"].get("status")
         data["results"] = results
         data["import_files"] = import_files
@@ -175,12 +199,24 @@ class RpaService:
         data["can_resume"] = not self.manager.running and bool(failure.get("task_key") and failure.get("org_code"))
         return data
 
-    def save_config(self, chrome_path: str) -> dict:
+    def save_config(self, chrome_path: str, input_path: str = "", output_path: str = "") -> dict:
+        if self.manager.running:
+            raise RuntimeError("RPA 任务运行中，不能修改路径配置")
         value = chrome_path.strip()
-        self.store.update(lambda data: data["config"].__setitem__("chrome_path", value))
+        app_dir = ensure_runtime_app()
+        input_root = Path(input_path.strip()).expanduser() if input_path.strip() else app_dir / "input"
+        output_root = Path(output_path.strip()).expanduser() if output_path.strip() else app_dir / "output"
+        if not input_root.is_absolute() or not output_root.is_absolute():
+            raise ValueError("INPUT 和 OUTPUT 必须使用完整路径")
+        input_root.mkdir(parents=True, exist_ok=True)
+        output_root.mkdir(parents=True, exist_ok=True)
+        if input_root.resolve() == output_root.resolve():
+            raise ValueError("INPUT 和 OUTPUT 不能使用同一个目录")
+        config = {"chrome_path": value, "input_path": str(input_root.resolve()), "output_path": str(output_root.resolve())}
+        self.store.update(lambda data: data["config"].update(config))
         path = ensure_runtime_app() / "etax_config.json"
         temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps({"chrome_path": value}, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
         return self.store.read()["config"]
 
@@ -205,7 +241,7 @@ class RpaService:
         return {"name": name, "count": count}
 
     def upload_import_files(self, files: list[tuple[str, bytes]], overwrite: bool) -> list[dict]:
-        root = ensure_runtime_app() / "input"
+        root = self._input_root()
         prepared = []
         for filename, content in files:
             name = safe_name(filename)
@@ -237,7 +273,7 @@ class RpaService:
             candidates[name] = source
         if not candidates:
             raise ValueError("本期没有可用于 RPA 导入的已生成文件")
-        root = ensure_runtime_app() / "input"
+        root = self._input_root()
         for name, source in candidates.items():
             target = inside(root, root / name)
             if target.exists() and sha256_file(target) == sha256_file(source):
@@ -251,7 +287,7 @@ class RpaService:
         return self._file_items(root, include_url=False)
 
     def delete_import_files(self, names: list[str]) -> list[dict]:
-        root = ensure_runtime_app() / "input"
+        root = self._input_root()
         for raw in names:
             name = safe_name(raw)
             target = inside(root, root / name)
@@ -277,10 +313,11 @@ class RpaService:
             raise RuntimeError("可接管的 Chrome 未就绪，请先初始化并手工登录")
         app_dir = ensure_runtime_app()
         orgs = self.preview_orgs(all_orgs, org_code, start_org_code)
-        if task_key == "import" and not any((app_dir / "input").iterdir()):
+        input_root = self._input_root()
+        if task_key == "import" and not any(input_root.iterdir()):
             raise ValueError("input 中没有可导入文件")
         actual_task = "income_report" if task_key == "declaration_reports" else task_key
-        command, backend_month = build_task_command(app_dir, actual_task, month, all_orgs, org_code, resume_mode, start_org_code)
+        command, backend_month = build_task_command(app_dir, actual_task, month, all_orgs, org_code, resume_mode, start_org_code, input_root=input_root)
         log_path = state_dir() / "current.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("", encoding="utf-8")
@@ -390,11 +427,28 @@ class RpaService:
             run.update(status=status, finished_at=finished, exit_code=exit_code, pid=None, error_message=error_message)
             data["history"].insert(0, {"task_key": run["task_key"], "task": run["display_name"], "month": run["month"], "started_at": run["started_at"], "finished_at": finished, "status": "已取消" if cancelled else ("成功" if exit_code == 0 else "失败")})
         self.store.update(change)
+        self._sync_output_files()
         self._composite = None
 
     def stop_task(self) -> dict:
         stopped = self.manager.stop()
         return {"message": "已请求停止任务" if stopped else "当前没有正在运行的任务"}
+
+    def reset_results(self, month: str | None = None) -> dict:
+        if self.manager.running:
+            raise RuntimeError("RPA 任务运行中，不能重置处理结果")
+
+        def change(data: dict) -> None:
+            if month:
+                data.get("results", {}).pop(month, None)
+                if data.get("last_failure", {}).get("month") == month:
+                    data["last_failure"] = {"task_key": None, "org_code": None, "month": None}
+            else:
+                data["results"] = {}
+                data["last_failure"] = {"task_key": None, "org_code": None, "month": None}
+
+        self.store.update(change)
+        return self.get_status(refresh_chrome=False)
 
     def resume_task(self) -> dict:
         failure = self.store.read().get("last_failure", {})
@@ -426,14 +480,41 @@ class RpaService:
         return items
 
     def list_output_files(self) -> list[dict]:
-        return self._file_items(ensure_runtime_app() / "output", include_url=True)
+        return self._file_items(self._output_root(), include_url=True)
 
     def resolve_output(self, name: str) -> Path:
-        root = ensure_runtime_app() / "output"
+        root = self._output_root()
         target = inside(root, root / safe_name(name))
         if not target.is_file():
             raise ValueError("输出文件不存在")
         return target
+
+    def build_output_archive(self) -> tuple[str, bytes]:
+        if self.manager.running:
+            raise RuntimeError("RPA 任务运行中，不能打包输出文件")
+        root = self._output_root()
+        files = [path for path in root.iterdir() if path.is_file()]
+        if not files:
+            raise ValueError("当前没有可下载的输出文件")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(files, key=lambda item: item.name):
+                archive.write(path, arcname=path.name)
+        return f"RPA输出文件_{datetime.now():%Y%m%d_%H%M%S}.zip", buffer.getvalue()
+
+    def clear_output_files(self) -> list[dict]:
+        if self.manager.running:
+            raise RuntimeError("RPA 任务运行中，不能清空输出文件")
+        root = self._output_root()
+        for path in root.iterdir():
+            if path.is_file():
+                inside(root, path).unlink()
+        runtime_root = (ensure_runtime_app() / "output").resolve()
+        if runtime_root != root.resolve():
+            for path in runtime_root.iterdir():
+                if path.is_file():
+                    inside(runtime_root, path).unlink()
+        return self.list_output_files()
 
 
 rpa_service = RpaService()

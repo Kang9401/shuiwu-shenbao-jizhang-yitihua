@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.accounting import OrganizationMapping
 from app.models.core import Period
 from app.models.tax import TaxMonthlyArtifact, VerificationRound, VerificationSession
 from app.schemas.tax import (
@@ -54,6 +55,21 @@ router = APIRouter(prefix="/tax", tags=["tax"])
 ARTIFACT_DIR = settings.artifact_dir
 
 ARTIFACT_TYPE_WORKING_SHEET = "working_sheet"
+
+
+def _taxpayer_org_mapping(db: Session) -> tuple[dict[str, str], set[str]]:
+    grouped: dict[str, list[str]] = {}
+    mappings = db.query(OrganizationMapping).filter(OrganizationMapping.active == 1).all()
+    for item in mappings:
+        taxpayer_id = "".join((item.taxpayer_id or "").split()).upper()
+        if taxpayer_id:
+            grouped.setdefault(taxpayer_id, []).append((item.org_code or "").strip())
+    duplicates = {taxpayer_id for taxpayer_id, codes in grouped.items() if len(codes) != 1}
+    return {
+        taxpayer_id: codes[0]
+        for taxpayer_id, codes in grouped.items()
+        if taxpayer_id not in duplicates
+    }, duplicates
 
 
 def _period_working_sheet_name(period: Period | None) -> str:
@@ -403,6 +419,9 @@ async def run_verify(
     if deduction_files:
         dedup_dir = settings.upload_dir / str(session.period_id) / "deductions"
         dedup_dir.mkdir(parents=True, exist_ok=True)
+        for existing in dedup_dir.iterdir():
+            if existing.is_file() and existing.suffix.lower() in {".xls", ".xlsx"}:
+                existing.unlink()
         for df in deduction_files:
             safe_name = Path(df.filename or "deduction.xlsx").name
             dest = dedup_dir / safe_name
@@ -465,9 +484,15 @@ async def run_verify(
 
     try:
         # 构建底稿 + 核对
-        review_sheet, review_staff_df = build_working_sheet(payroll_files, source_staff_path, deduction_dir)
+        taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(db)
+        review_sheet, review_staff_df = build_working_sheet(
+            payroll_files, source_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids
+        )
         sheet, staff_df = (
-            build_working_sheet(payroll_files, personnel_update_result["updated_staff_path"], deduction_dir)
+            build_working_sheet(
+                payroll_files, personnel_update_result["updated_staff_path"], deduction_dir,
+                taxpayer_org_map, duplicate_taxpayer_ids,
+            )
             if personnel_update_result
             else (review_sheet, review_staff_df)
         )

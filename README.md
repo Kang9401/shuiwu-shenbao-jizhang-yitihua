@@ -50,7 +50,19 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 源码开发模式已接入独立的“个税 RPA”页面，通过 Chrome CDP 调用受保护的原始 RPA 脚本。使用前需要上传机构信息表，并在系统启动的 Chrome 窗口中手工登录自然人电子税务局。
 
-当前 RPA 桌面打包方案暂不发布；Windows 免安装包仍按原有工作台功能构建。RPA 功能请使用 Python 3.12 源码开发环境运行。
+Windows 免安装包已包含 RPA 后台程序。目标电脑无需安装 Python 或 Node.js，但使用 RPA 时仍需安装 Google Chrome，并在程序启动的可接管 Chrome 窗口中手工登录自然人电子税务局。
+
+## 财务 SKILL 大模型配置
+
+“财务 SKILL”通过后端调用 OpenAI 兼容的 `chat/completions` 接口，API Key 不会发送到前端。启动服务前配置以下环境变量：
+
+```powershell
+$env:FINANCE_AI_BASE_URL="https://your-model-service.example/v1"
+$env:FINANCE_AI_API_KEY="your-api-key"
+$env:FINANCE_AI_MODEL="your-model-name"
+```
+
+开发环境也可以将相同配置写入后端启动目录的 `.env` 文件。可选的 `FINANCE_AI_TIMEOUT_SECONDS` 用于调整请求超时，默认值为 60 秒。输入模型前应先对身份证号、银行卡号等敏感信息脱敏；模型结果仅作为工作建议，正式入账和申报仍需有权限的业务人员复核。
 
 ## Windows 免安装版
 
@@ -82,6 +94,6 @@ npm run build
 
 ## 数据与模型文件
 
-本项目是税务业务工作台，不依赖机器学习模型或模型权重，也不提供训练流程。`个税测试/`、`storage/` 和 `outputs/` 中可能包含业务样例、人员信息、申报底稿和运行结果，因此不会随源码仓库分发。仓库还会全局排除 `.xls/.xlsx` 和数据库文件。
+本项目不随安装包提供模型权重，也不提供训练流程；财务 SKILL 仅在配置外部大模型服务后启用。`个税测试/`、`storage/` 和 `outputs/` 中可能包含业务样例、人员信息、申报底稿和运行结果，因此不会随源码仓库分发。仓库还会全局排除 `.xls/.xlsx` 和数据库文件。
 
 如需本地开发或回归测试，请从具备授权的数据管理员处取得经过脱敏的测试文件，并放入本地受控目录；应用运行产生的数据会保存在本机 `storage/` 或桌面版的 `%LOCALAPPDATA%\\TaxWorkbench`。

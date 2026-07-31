@@ -16,12 +16,16 @@
             <label>申报月份</label>
             <div class="rpa-file-row"><el-date-picker v-model="month" type="month" value-format="YYYY-MM" format="YYYY-MM" :clearable="false" :disabled="running" @change="monthManuallyOverridden = true" /><el-button :disabled="running || !monthManuallyOverridden" @click="restoreMonth">恢复同步</el-button></div>
             <label>申报机构</label>
-            <el-select v-model="selectedOrgCodes" multiple filterable collapse-tags collapse-tags-tooltip clearable :disabled="running || allOrgs" placeholder="不选择表示全部机构"><el-option v-for="org in organizations" :key="org.code" :label="`${org.code}｜${org.name}`" :value="org.code" /></el-select>
+            <el-select v-model="selectedOrgCodes" multiple filterable collapse-tags collapse-tags-tooltip clearable :disabled="running || allOrgs" placeholder="不选择表示全部机构"><el-option v-for="org in organizations" :key="org.code" :label="[org.code, org.name, org.parent_branch].filter(Boolean).join('｜')" :value="org.code" /></el-select>
             <label>处理全部</label>
             <el-radio-group v-model="allOrgs" :disabled="running"><el-radio :value="true">是</el-radio><el-radio :value="false">否</el-radio></el-radio-group>
             <label>已选机构</label><span>{{ allOrgs ? `全部 ${organizations.length} 个` : `${selectedOrgCodes.length} 个` }}</span>
             <label>Chrome地址</label>
             <el-input v-model="chromePath" :disabled="running" @change="saveChromePath" />
+            <label>INPUT路径</label>
+            <div class="rpa-file-row"><el-input v-model="inputPath" :disabled="running" @change="savePaths" /><el-button :disabled="running" @click="chooseDirectory('input')">选择</el-button></div>
+            <label>OUTPUT路径</label>
+            <div class="rpa-file-row"><el-input v-model="outputPath" :disabled="running" @change="savePaths" /><el-button :disabled="running" @click="chooseDirectory('output')">选择</el-button></div>
           </div>
           <p class="rpa-hint">如果浏览器初始化失败，请粘贴本机 chrome.exe 的完整路径，重新初始化。</p>
         </section>
@@ -37,6 +41,7 @@
           <div class="rpa-input-actions">
             <el-button :icon="DocumentAdd" :disabled="running || !periodId" @click="preparePeriodFiles(false)">从本期已生成文件准备 input</el-button>
             <el-button :icon="Upload" :disabled="running" @click="importInput?.click()">选择导入文件</el-button>
+            <el-button :icon="Delete" type="danger" plain :disabled="running || !status?.import_files.length" @click="clearImports">一键清空</el-button>
             <input ref="importInput" class="hidden-file-input" type="file" accept=".xls,.xlsx" multiple @change="uploadImports" />
           </div>
           <div v-if="status?.import_files.length" class="rpa-file-list">
@@ -57,7 +62,10 @@
 
       <div class="rpa-right">
         <section class="rpa-panel">
-          <h3>任务处理结果表</h3>
+          <div class="rpa-panel-title rpa-result-title"><h3>任务处理结果表</h3><el-button size="small" :icon="RefreshRight" :disabled="running || !monthResults.length" @click="resetResults">重置</el-button></div>
+          <div class="rpa-summary">
+            <span>任务 <strong>{{ resultSummary.total }}</strong></span><span>已处理 <strong>{{ resultSummary.processed }}</strong></span><span>待处理 <strong>{{ resultSummary.pending }}</strong></span><span class="success">成功 <strong>{{ resultSummary.success }}</strong></span><span class="failed">失败 <strong>{{ resultSummary.failed }}</strong></span>
+          </div>
           <el-table :data="monthResults" max-height="310">
             <el-table-column prop="code" label="机构代码" width="110" />
             <el-table-column prop="name" label="机构名称" min-width="150" />
@@ -80,7 +88,13 @@
         </section>
 
         <section class="rpa-panel">
-          <h3>输出文件</h3>
+          <div class="rpa-panel-title rpa-output-title">
+            <h3>输出文件</h3>
+            <div>
+              <el-button size="small" :icon="Download" :disabled="running || !outputFiles.length" @click="downloadOutputArchive">下载 ZIP</el-button>
+              <el-button size="small" :icon="Delete" type="danger" plain :disabled="running || !outputFiles.length" @click="clearOutputFiles">一键清空</el-button>
+            </div>
+          </div>
           <div v-if="outputFiles.length" class="rpa-output-list">
             <button v-for="file in outputFiles" :key="file.name" @click="downloadOutput(file)"><span>{{ file.name }}</span><small>{{ formatSize(file.size) }} · {{ file.modified_at }}</small><el-icon><Download /></el-icon></button>
           </div>
@@ -112,6 +126,8 @@ const selectedOrgCodes = ref<string[]>([])
 const organizations = ref<RpaOrg[]>([])
 const monthManuallyOverridden = ref(false)
 const chromePath = ref('')
+const inputPath = ref('')
+const outputPath = ref('')
 const loading = ref(false)
 const logText = ref('')
 const logOffset = ref(0)
@@ -126,6 +142,17 @@ let timer: number | undefined
 
 const running = computed(() => ['starting', 'running'].includes(status.value?.current_run.status || ''))
 const monthResults = computed(() => (status.value?.results || []).filter((item) => item.month === month.value))
+const resultSummary = computed(() => {
+  const values = monthResults.value.flatMap((row) => resultColumns.map((column) => (row as any)[column.key]))
+  const states = values.map(resultState)
+  return {
+    total: values.length,
+    processed: states.filter((state) => state !== 'pending').length,
+    pending: states.filter((state) => state === 'pending').length,
+    success: states.filter((state) => state === 'success' || state === 'skipped').length,
+    failed: states.filter((state) => state === 'failed' || state === 'cancelled').length,
+  }
+})
 const chromeLabel = computed(() => ({ ready: 'CDP 已连接', starting: '正在启动', unavailable: '不可用', stopped: '未启动' }[status.value?.chrome.status || 'stopped']))
 const currentRunText = computed(() => running.value ? `${status.value?.current_run.current_org_code || ''} ${status.value?.current_run.current_org_name || '任务启动中'}` : '')
 const resultColumns = [
@@ -150,18 +177,22 @@ async function refreshAll() {
   loading.value = true
   try {
     const [state, files] = await Promise.all([rpaApi.getStatus(), rpaApi.listFiles()])
-    status.value = state.data; outputFiles.value = files.data; chromePath.value = state.data.config.chrome_path
+    status.value = state.data; outputFiles.value = files.data; chromePath.value = state.data.config.chrome_path; inputPath.value = state.data.config.input_path; outputPath.value = state.data.config.output_path
     await pollLog()
   } catch (error: any) { ElMessage.error(detail(error, 'RPA 状态加载失败')) } finally { loading.value = false }
 }
 async function poll() { try { const { data } = await rpaApi.getStatus(); status.value = data; await pollLog(); if (!running.value) outputFiles.value = (await rpaApi.listFiles()).data } catch {} }
 async function pollLog() { const { data } = await rpaApi.getLogs(logOffset.value); if (data.text) { logText.value += data.text; logOffset.value = data.next_offset; if (autoScroll.value) await nextTick(() => { if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight }) } }
-async function saveChromePath() { try { await rpaApi.saveConfig(chromePath.value) } catch (error: any) { ElMessage.error(detail(error, 'Chrome 地址保存失败')) } }
+async function saveChromePath() { try { await rpaApi.saveConfig(chromePath.value, inputPath.value, outputPath.value) } catch (error: any) { ElMessage.error(detail(error, 'Chrome 地址保存失败')) } }
+async function savePaths() { try { const { data } = await rpaApi.saveConfig(chromePath.value, inputPath.value, outputPath.value); inputPath.value = data.input_path; outputPath.value = data.output_path; await refreshAll() } catch (error: any) { ElMessage.error(detail(error, '路径保存失败')) } }
+async function chooseDirectory(kind: 'input' | 'output') { const api = (window as any).pywebview?.api; if (!api?.choose_directory) { ElMessage.info('浏览器模式下请直接输入完整路径'); return } const current = kind === 'input' ? inputPath.value : outputPath.value; const result = await api.choose_directory(current); if (!result?.path) return; if (kind === 'input') inputPath.value = result.path; else outputPath.value = result.path; await savePaths() }
 async function initializeChrome() { try { await saveChromePath(); const { data } = await rpaApi.startChrome(chromePath.value); ElMessage.success(data.message); window.setTimeout(refreshAll, 1800) } catch (error: any) { ElMessage.error(detail(error, '浏览器初始化失败')) } }
 async function loadOrganizations() { if (!props.periodId) { organizations.value = []; return } try { organizations.value = (await rpaApi.organizations(props.periodId)).data.items } catch (error: any) { organizations.value = []; ElMessage.error(detail(error, '机构列表加载失败')) } }
 async function uploadImports(event: Event) { const input = event.target as HTMLInputElement; const files = Array.from(input.files || []); if (!files.length) return; try { await rpaApi.uploadImportFiles(files); ElMessage.success('导入文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) { await rpaApi.uploadImportFiles(files, true); ElMessage.success('同名文件已覆盖'); await refreshAll() } else if (error?.response?.status !== 409) ElMessage.error(detail(error, '导入文件上传失败')) } finally { input.value = '' } }
 async function preparePeriodFiles(overwrite: boolean) { if (!props.periodId) return; try { await rpaApi.prepareFromPeriod(props.periodId, overwrite); ElMessage.success('本期申报文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) await preparePeriodFiles(true); else if (error?.response?.status !== 409) ElMessage.error(detail(error, '准备本期文件失败')) } }
 async function removeImport(name: string) { try { await ElMessageBox.confirm(`确认从 input 删除“${name}”？`, '删除导入文件', { type: 'warning' }); await rpaApi.clearImportFiles([name]); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '删除失败')) } }
+async function clearImports() { try { await ElMessageBox.confirm('确认清空 INPUT 目录中的全部导入文件？', '一键清空', { type: 'warning', confirmButtonText: '确认清空' }); await rpaApi.clearImportFiles((status.value?.import_files || []).map((file) => file.name)); await refreshAll(); ElMessage.success('导入文件已清空') } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '清空失败')) } }
+async function resetResults() { try { await ElMessageBox.confirm(`确认重置 ${month.value} 的任务处理结果？`, '重置结果', { type: 'warning' }); status.value = (await rpaApi.resetResults(month.value)).data; ElMessage.success('任务处理结果已重置') } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '重置失败')) } }
 async function confirmTask(task: RpaTaskKey) { try { validate(); const { data } = await rpaApi.previewOrganizations({ period_id: props.periodId!, all_orgs: allOrgs.value, org_codes: allOrgs.value ? [] : selectedOrgCodes.value }); previewOrgs.value = data.items; pendingTask.value = task; pendingResume.value = false; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '无法开始任务')) } }
 async function startConfirmed() { if (!pendingTask.value && !pendingResume.value) return; try { if (pendingResume.value) { await rpaApi.resumeTask() } else { await rpaApi.startPeriodTask({ task_key: pendingTask.value!, period_id: props.periodId!, declaration_month: month.value, all_orgs: allOrgs.value, org_codes: allOrgs.value ? [] : selectedOrgCodes.value }) } previewVisible.value = false; logText.value = ''; logOffset.value = 0; await openRpaMonitor(); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, pendingResume.value ? '续跑失败' : '任务启动失败')) } }
 async function confirmResume() { try { const failure = status.value?.last_failure; if (!failure?.org_code) throw new Error('当前没有可续跑的失败机构'); const { data } = await rpaApi.previewOrgs({ all_orgs: true, org_code: null, start_org_code: failure.org_code }); previewOrgs.value = data.items; pendingTask.value = null; pendingResume.value = true; previewVisible.value = true } catch (error: any) { ElMessage.error(detail(error, '续跑预览失败')) } }
@@ -170,9 +201,12 @@ async function copyLog() { await navigator.clipboard.writeText(logText.value); E
 function clearLog() { logText.value = ''; logOffset.value = status.value?.current_run.run_id ? logOffset.value : 0 }
 function trackLogScroll() { if (logBox.value) autoScroll.value = logBox.value.scrollHeight - logBox.value.scrollTop - logBox.value.clientHeight < 24 }
 async function downloadOutput(file: RpaFile) { try { const response = await rpaApi.downloadFile(file.name); const url = URL.createObjectURL(response.data); const link = document.createElement('a'); link.href = url; link.download = file.name; link.click(); URL.revokeObjectURL(url) } catch (error: any) { ElMessage.error(detail(error, '下载失败')) } }
+async function downloadOutputArchive() { try { const response = await rpaApi.downloadArchive(); const disposition = response.headers['content-disposition'] || ''; const match = disposition.match(/filename\*=UTF-8''([^;]+)/i); const fileName = match ? decodeURIComponent(match[1]) : 'RPA输出文件.zip'; const url = URL.createObjectURL(response.data); const link = document.createElement('a'); link.href = url; link.download = fileName; link.click(); URL.revokeObjectURL(url) } catch (error: any) { ElMessage.error(detail(error, 'ZIP 下载失败')) } }
+async function clearOutputFiles() { try { await ElMessageBox.confirm('确认删除全部 RPA 输出文件？该操作无法撤销。', '一键清空', { type: 'warning', confirmButtonText: '确认清空' }); outputFiles.value = (await rpaApi.clearOutputFiles()).data; ElMessage.success('RPA 输出文件已清空') } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '清空失败')) } }
 function validate() { if (!props.periodId) throw new Error('请选择所属期间'); if (!month.value) throw new Error('请选择申报月份'); if (!organizations.value.length) throw new Error('当前期间没有可用机构'); if (!allOrgs.value && !selectedOrgCodes.value.length) throw new Error('请选择至少一个机构'); if (status.value?.chrome.status !== 'ready') throw new Error('请先初始化 Chrome 并完成手工登录') }
 function restoreMonth() { month.value = props.initialMonth; monthManuallyOverridden.value = false }
 function resultLabel(value: any) { return value?.label || value || '待处理' }
+function resultState(value: any) { if (value?.status) return value.status; const text = String(value || '待处理'); if (text.startsWith('成功')) return 'success'; if (text === '失败') return 'failed'; if (text === '处理中') return 'running'; if (text === '已取消') return 'cancelled'; if (text === '无需处理') return 'skipped'; return 'pending' }
 function resultTitle(value: any) { return value?.error_message || value?.reason || '' }
 function statusClass(value: any) { const state = value?.status || (String(value || '').startsWith('成功') ? 'success' : value === '失败' ? 'failed' : value === '处理中' ? 'running' : 'pending'); return ['rpa-result', state] }
 async function openRpaMonitor() { const desktopApi = (window as any).pywebview?.api; if (desktopApi?.open_rpa_monitor) { await desktopApi.open_rpa_monitor(); return } const popup = window.open('/?window=rpa-monitor', 'rpa-monitor', 'popup=yes,width=460,height=640,resizable=yes,scrollbars=no'); if (!popup) ElMessage.warning('浏览器阻止了监控窗口，请允许本站弹出窗口后重试') }
@@ -183,5 +217,6 @@ async function confirmOverwrite() { try { await ElMessageBox.confirm('发现同�
 </script>
 
 <style scoped>
-.rpa-page{display:flex;flex-direction:column;gap:14px}.rpa-heading{display:flex;align-items:center;justify-content:space-between}.rpa-heading h2{margin:0;font-size:20px;letter-spacing:0}.rpa-heading p{margin:5px 0 0;color:#667085}.rpa-state{font-weight:700}.is-ready{color:#15803d}.is-starting,.is-unavailable{color:#b45309}.is-stopped{color:#667085}.rpa-layout{display:grid;grid-template-columns:minmax(380px,440px) minmax(0,1fr);gap:14px;align-items:start}.rpa-left,.rpa-right{display:flex;flex-direction:column;gap:14px;min-width:0}.rpa-panel{border:1px solid #e3e7ee;border-radius:6px;background:#fff;padding:14px}.rpa-panel h3{margin:0 0 12px;font-size:15px;letter-spacing:0}.rpa-form{display:grid;grid-template-columns:82px minmax(0,1fr);align-items:center;gap:10px}.rpa-form label{color:#475467;font-size:13px}.rpa-file-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.rpa-hint{margin:10px 0 0 92px;color:#7b8494;font-size:12px}.rpa-step{display:grid;grid-template-columns:52px minmax(0,1fr) 64px;gap:10px;align-items:center;padding:11px 0;border-top:1px solid #eef1f5}.rpa-step:first-of-type{border-top:0}.rpa-step-no{color:#667085;font-size:12px}.rpa-step strong{font-size:14px}.rpa-step p{margin:3px 0 0;color:#7b8494;font-size:12px;line-height:1.45}.rpa-input-actions{display:flex;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid #eef1f5}.rpa-file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.rpa-file-list span{display:flex;max-width:100%;align-items:center;gap:5px;padding:4px 7px;background:#f2f4f7;border-radius:4px;font-size:12px;overflow-wrap:anywhere}.rpa-file-list button{border:0;background:transparent;color:#b42318;cursor:pointer;font-size:16px}.rpa-result{font-weight:600}.rpa-result.success{color:#15803d}.rpa-result.failed{color:#c2413b}.rpa-result.running{color:#2563eb}.rpa-result.pending{color:#7b8494}.rpa-panel-title{display:flex;justify-content:space-between;align-items:center}.rpa-panel-title span{color:#2563eb;font-size:12px}.rpa-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.rpa-log{height:280px;margin:0;padding:12px;overflow:auto;white-space:pre;font:12px/1.6 Consolas,"Courier New",monospace;background:#111827;color:#d1fae5;border-radius:4px}.rpa-output-list{display:flex;flex-direction:column}.rpa-output-list button{display:grid;grid-template-columns:minmax(0,1fr) auto 24px;align-items:center;gap:12px;width:100%;padding:9px 4px;border:0;border-top:1px solid #eef1f5;background:transparent;text-align:left;cursor:pointer}.rpa-output-list button:hover{background:#f8fafc}.rpa-output-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rpa-output-list small{color:#7b8494}@media(max-width:1100px){.rpa-layout{grid-template-columns:1fr}.rpa-left,.rpa-right{width:100%}}@media(max-width:640px){.rpa-form{grid-template-columns:1fr}.rpa-hint{margin-left:0}.rpa-step{grid-template-columns:45px minmax(0,1fr)}.rpa-step .el-button{grid-column:2}.rpa-output-list button{grid-template-columns:minmax(0,1fr) 24px}.rpa-output-list small{grid-row:2;grid-column:1}}
+.rpa-page{display:flex;flex-direction:column;gap:14px}.rpa-heading{display:flex;align-items:center;justify-content:space-between}.rpa-heading h2{margin:0;font-size:20px;letter-spacing:0}.rpa-heading p{margin:5px 0 0;color:#667085}.rpa-state{font-weight:700}.is-ready{color:#15803d}.is-starting,.is-unavailable{color:#b45309}.is-stopped{color:#667085}.rpa-layout{display:grid;grid-template-columns:minmax(380px,440px) minmax(0,1fr);gap:14px;align-items:start}.rpa-left,.rpa-right{display:flex;flex-direction:column;gap:14px;min-width:0}.rpa-panel{border:1px solid #e3e7ee;border-radius:6px;background:#fff;padding:14px}.rpa-panel h3{margin:0 0 12px;font-size:15px;letter-spacing:0}.rpa-form{display:grid;grid-template-columns:82px minmax(0,1fr);align-items:center;gap:10px}.rpa-form label{color:#475467;font-size:13px}.rpa-file-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.rpa-hint{margin:10px 0 0 92px;color:#7b8494;font-size:12px}.rpa-step{display:grid;grid-template-columns:52px minmax(0,1fr) 64px;gap:10px;align-items:center;padding:11px 0;border-top:1px solid #eef1f5}.rpa-step:first-of-type{border-top:0}.rpa-step-no{color:#667085;font-size:12px}.rpa-step strong{font-size:14px}.rpa-step p{margin:3px 0 0;color:#7b8494;font-size:12px;line-height:1.45}.rpa-input-actions{display:flex;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid #eef1f5}.rpa-file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.rpa-file-list span{display:flex;max-width:100%;align-items:center;gap:5px;padding:4px 7px;background:#f2f4f7;border-radius:4px;font-size:12px;overflow-wrap:anywhere}.rpa-file-list button{border:0;background:transparent;color:#b42318;cursor:pointer;font-size:16px}.rpa-result{font-weight:600}.rpa-result.success{color:#15803d}.rpa-result.failed{color:#c2413b}.rpa-result.running{color:#2563eb}.rpa-result.pending{color:#7b8494}.rpa-panel-title{display:flex;justify-content:space-between;align-items:center}.rpa-panel-title span{color:#2563eb;font-size:12px}.rpa-output-title{margin-bottom:12px;gap:12px}.rpa-output-title h3{margin:0}.rpa-output-title>div{display:flex;gap:8px;flex-wrap:wrap}.rpa-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.rpa-log{height:280px;margin:0;padding:12px;overflow:auto;white-space:pre;font:12px/1.6 Consolas,"Courier New",monospace;background:#111827;color:#d1fae5;border-radius:4px}.rpa-output-list{display:flex;flex-direction:column}.rpa-output-list button{display:grid;grid-template-columns:minmax(0,1fr) auto 24px;align-items:center;gap:12px;width:100%;padding:9px 4px;border:0;border-top:1px solid #eef1f5;background:transparent;text-align:left;cursor:pointer}.rpa-output-list button:hover{background:#f8fafc}.rpa-output-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rpa-output-list small{color:#7b8494}@media(max-width:1100px){.rpa-layout{grid-template-columns:1fr}.rpa-left,.rpa-right{width:100%}}@media(max-width:640px){.rpa-form{grid-template-columns:1fr}.rpa-hint{margin-left:0}.rpa-step{grid-template-columns:45px minmax(0,1fr)}.rpa-step .el-button{grid-column:2}.rpa-output-list button{grid-template-columns:minmax(0,1fr) 24px}.rpa-output-list small{grid-row:2;grid-column:1}}
+.rpa-result-title{margin-bottom:10px}.rpa-result-title h3{margin:0}.rpa-summary{display:grid;grid-template-columns:repeat(5,minmax(80px,1fr));gap:8px;margin-bottom:12px}.rpa-summary span{padding:8px;background:#f7f8fa;border:1px solid #e7eaf0;border-radius:4px;color:#667085;font-size:12px}.rpa-summary strong{display:block;margin-top:2px;color:#101828;font-size:18px}.rpa-summary .success strong{color:#15803d}.rpa-summary .failed strong{color:#c2413b}
 </style>
