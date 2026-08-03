@@ -12,7 +12,7 @@ class FakeManager:
         self.running = running
 
 
-def test_rpa_output_archive_and_clear_only_top_level_files(tmp_path, monkeypatch):
+def test_rpa_output_archive_recursively_and_clear_only_top_level_files(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     output = app_dir / "output"
     output.mkdir(parents=True)
@@ -27,7 +27,7 @@ def test_rpa_output_archive_and_clear_only_top_level_files(tmp_path, monkeypatch
     filename, content = service.build_output_archive()
     assert filename.startswith("RPA输出文件_")
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        assert archive.namelist() == ["a.xlsx", "b.pdf"]
+        assert archive.namelist() == ["a.xlsx", "b.pdf", "nested/keep.txt"]
 
     assert service.clear_output_files() == []
     assert not (output / "a.xlsx").exists()

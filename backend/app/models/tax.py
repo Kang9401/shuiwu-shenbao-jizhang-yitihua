@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, UniqueConstr
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.core.company_context import current_company_id
 
 
 class VerificationSession(Base):
@@ -15,6 +16,7 @@ class VerificationSession(Base):
     __tablename__ = "verification_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, unique=True)
     status: Mapped[str] = mapped_column(String(32), default="uploading", index=True)
     current_round: Mapped[int] = mapped_column(Integer, default=1)
@@ -30,6 +32,7 @@ class VerificationRound(Base):
     __tablename__ = "verification_rounds"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("verification_sessions.id"), nullable=False)
     round_number: Mapped[int] = mapped_column(Integer, nullable=False)
     uploaded_files: Mapped[list] = mapped_column(JSON, nullable=False)
@@ -48,6 +51,7 @@ class TaxMonthlyArtifact(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, index=True)
     artifact_type: Mapped[str] = mapped_column(String(80), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)

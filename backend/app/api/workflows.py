@@ -9,6 +9,8 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
+from app.models.core import Company
 from app.models.accounting import OrganizationMapping
 from app.workflows import list_workflows
 
@@ -30,7 +32,10 @@ def get_workflows() -> list[dict]:
 
 
 @router.get("/intern-tax/template")
-def download_intern_template(db: Session = Depends(get_db)) -> Response:
+def download_intern_template(
+    db: Session = Depends(get_db),
+    _company: Company = Depends(require_company),
+) -> Response:
     columns = [
         "机构代码", "营业部名称", "*姓名", "*证件类型", "*证件号码", "*国籍(地区)", "*性别",
         "*出生日期", "实习开始时间", "实习结束时间", "发放补贴数（元）", "联系方式", "备注",

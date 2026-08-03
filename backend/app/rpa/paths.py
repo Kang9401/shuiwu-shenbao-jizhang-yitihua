@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from app.core.config import settings
@@ -16,12 +18,16 @@ def runtime_app_dir() -> Path:
     return rpa_root() / "app"
 
 
-def state_dir() -> Path:
-    return rpa_root() / "state"
+def company_rpa_root(company_id: int | None = None) -> Path:
+    return rpa_root() / "companies" / str(company_id) if company_id is not None else rpa_root()
 
 
-def uploads_dir() -> Path:
-    return rpa_root() / "uploads"
+def state_dir(company_id: int | None = None) -> Path:
+    return company_rpa_root(company_id) / "state"
+
+
+def uploads_dir(company_id: int | None = None) -> Path:
+    return company_rpa_root(company_id) / "uploads"
 
 
 def helper_resource_dir() -> Path:

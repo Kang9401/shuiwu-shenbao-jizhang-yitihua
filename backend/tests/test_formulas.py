@@ -146,6 +146,21 @@ def test_broker_tax_subtracts_vat_and_checks_staff():
     assert result["summary"].iloc[0]["个人所得税(经纪人)"] == 100
 
 
+def test_broker_tax_adds_adjustment_and_deducts_additional_tax():
+    broker = pd.DataFrame([{
+        "员工编号": "2001", "应发合计（补足前）": 1200,
+        "调增应纳税所得额": 80, "增值税": 200, "附加税": 30,
+        "个人所得税": 100,
+    }])
+    staff = pd.DataFrame([{
+        "员工编号": "2001", "分支机构代码": "10301", "姓名": "张三",
+        "证件类型": "居民身份证", "证件号码": "110101199001010011",
+    }])
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+    assert result["detail"].iloc[0]["经纪人本期收入"] == 1080
+    assert result["detail"].iloc[0]["允许扣除的税费"] == 30
+
+
 def test_broker_tax_warns_when_personnel_master_has_unmatched_broker():
     broker = pd.DataFrame([{"员工编号": "2001", "应发工资(补足前)": 1200, "增值税": 200}])
     staff = pd.DataFrame([{"员工编号": "2002", "分支机构代码": "10301"}])

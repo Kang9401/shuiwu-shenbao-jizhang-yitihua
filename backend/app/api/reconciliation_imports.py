@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company, require_period
 from app.models.accounting import ReconciliationImportBatch
 from app.services.reconciliation_import import (
     ReconciliationImportValidationError,
@@ -15,7 +16,7 @@ from app.services.reconciliation_import import (
     list_reconciliation_batches,
 )
 
-router = APIRouter(prefix="/reconciliation-imports", tags=["reconciliation-imports"])
+router = APIRouter(prefix="/reconciliation-imports", tags=["reconciliation-imports"], dependencies=[Depends(require_company)])
 
 
 def _batch_payload(batch: ReconciliationImportBatch) -> dict:
@@ -32,6 +33,7 @@ def _batch_payload(batch: ReconciliationImportBatch) -> dict:
 
 
 def _import(import_type: str, period_id: int, file: UploadFile, db: Session) -> dict:
+    require_period(db, period_id)
     try:
         batch = import_reconciliation_file(db, period_id=period_id, import_type=import_type, file=file)
     except ReconciliationImportValidationError as exc:

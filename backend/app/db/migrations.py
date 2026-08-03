@@ -128,7 +128,160 @@ def _migration_5(connection: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5}
+def _has_legacy_business_data(connection: sqlite3.Connection) -> bool:
+    for table in ("periods", "uploaded_files", "jobs", "organization_mappings", "verification_sessions"):
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if exists and connection.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone():
+            return True
+    return False
+
+
+def _rebuild_company_unique_tables(connection: sqlite3.Connection) -> None:
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'periods'"
+    ).fetchone():
+        connection.execute(
+            """
+        CREATE TABLE periods_company_new (
+            id INTEGER NOT NULL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            name VARCHAR(32) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            created_at DATETIME NOT NULL,
+            CONSTRAINT uq_period_company_year_month UNIQUE (company_id, year, month),
+            FOREIGN KEY(company_id) REFERENCES companies(id)
+        )
+            """
+        )
+        connection.execute(
+            "INSERT INTO periods_company_new (id, company_id, year, month, name, status, created_at) "
+            "SELECT id, company_id, year, month, name, status, created_at FROM periods"
+        )
+        connection.execute("DROP TABLE periods")
+        connection.execute("ALTER TABLE periods_company_new RENAME TO periods")
+        connection.execute("CREATE INDEX ix_periods_id ON periods (id)")
+        connection.execute("CREATE INDEX ix_periods_company_id ON periods (company_id)")
+
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'"
+    ).fetchone() is None:
+        return
+    connection.execute(
+        """
+        CREATE TABLE organization_mappings_company_new (
+            id INTEGER NOT NULL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            branch_name VARCHAR(255) NOT NULL,
+            org_code VARCHAR(20) NOT NULL,
+            taxpayer_id VARCHAR(64) NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            rpa_enabled INTEGER NOT NULL DEFAULT 0,
+            rpa_org_name VARCHAR(255) NOT NULL DEFAULT '',
+            parent_branch VARCHAR(255) NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_organization_mapping_company_branch_name UNIQUE (company_id, branch_name),
+            CONSTRAINT uq_organization_mapping_company_org_code UNIQUE (company_id, org_code),
+            FOREIGN KEY(company_id) REFERENCES companies(id)
+        )
+        """
+    )
+    columns = _table_columns(connection, "organization_mappings")
+    expressions = {
+        "taxpayer_id": "taxpayer_id" if "taxpayer_id" in columns else "''",
+        "active": "active" if "active" in columns else "1",
+        "rpa_enabled": "rpa_enabled" if "rpa_enabled" in columns else "0",
+        "rpa_org_name": "rpa_org_name" if "rpa_org_name" in columns else "''",
+        "parent_branch": "parent_branch" if "parent_branch" in columns else "''",
+        "created_at": "created_at" if "created_at" in columns else "CURRENT_TIMESTAMP",
+        "updated_at": "updated_at" if "updated_at" in columns else "CURRENT_TIMESTAMP",
+    }
+    connection.execute(
+        f"""
+        INSERT INTO organization_mappings_company_new (
+            id, company_id, branch_name, org_code, taxpayer_id, active, rpa_enabled,
+            rpa_org_name, parent_branch, created_at, updated_at
+        )
+        SELECT id, company_id, branch_name, org_code, {expressions['taxpayer_id']}, {expressions['active']},
+               {expressions['rpa_enabled']}, {expressions['rpa_org_name']}, {expressions['parent_branch']},
+               {expressions['created_at']}, {expressions['updated_at']}
+        FROM organization_mappings
+        """
+    )
+    connection.execute("DROP TABLE organization_mappings")
+    connection.execute("ALTER TABLE organization_mappings_company_new RENAME TO organization_mappings")
+    for column in ("id", "company_id", "branch_name", "org_code", "taxpayer_id"):
+        connection.execute(
+            f"CREATE INDEX ix_organization_mappings_{column} ON organization_mappings ({column})"
+        )
+    connection.execute(
+        "CREATE UNIQUE INDEX uq_organization_mapping_org_code "
+        "ON organization_mappings (company_id, org_code)"
+    )
+
+
+def _migration_6(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS companies (
+            id INTEGER NOT NULL PRIMARY KEY,
+            name VARCHAR(120) NOT NULL UNIQUE,
+            code VARCHAR(60) NOT NULL UNIQUE,
+            operator_name VARCHAR(120) NOT NULL,
+            notes VARCHAR(500) NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+        """
+    )
+    has_legacy_data = _has_legacy_business_data(connection)
+    if has_legacy_data and connection.execute("SELECT 1 FROM companies LIMIT 1").fetchone() is None:
+        now = datetime.utcnow().isoformat()
+        connection.execute(
+            """
+            INSERT INTO companies (id, name, code, operator_name, notes, active, created_at, updated_at)
+            VALUES (1, '默认分公司', 'DEFAULT', '待完善', '由旧版本数据自动迁移', 1, ?, ?)
+            """,
+            (now, now),
+        )
+
+    scoped_tables = (
+        "periods",
+        "uploaded_files",
+        "jobs",
+        "artifacts",
+        "invoice_ledgers",
+        "certification_ledgers",
+        "voucher_drafts",
+        "personnel_master_artifacts",
+        "personnel_master_import_batches",
+        "reconciliation_import_batches",
+        "reconciliation_import_rows",
+        "organization_mappings",
+        "verification_sessions",
+        "verification_rounds",
+        "tax_monthly_artifacts",
+    )
+    for table in scoped_tables:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if exists and "company_id" not in _table_columns(connection, table):
+            connection.execute(
+                f'ALTER TABLE "{table}" ADD COLUMN company_id INTEGER NOT NULL DEFAULT 1 REFERENCES companies(id)'
+            )
+        if exists:
+            connection.execute(f'CREATE INDEX IF NOT EXISTS ix_{table}_company_id ON "{table}" (company_id)')
+
+    _rebuild_company_unique_tables(connection)
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5, 6: _migration_6}
 
 
 def run_migrations(engine: Engine, *, backup_existing: bool = False) -> int:

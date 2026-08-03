@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.api.dependencies import require_company, require_period
 from app.models.accounting import OrganizationMapping
 from app.models.core import Period
 from app.models.tax import TaxMonthlyArtifact, VerificationRound, VerificationSession
@@ -26,6 +28,7 @@ from app.services.generation import generate_declarations
 from app.services.personnel_declaration import build_monthly_personnel_change_table
 from app.services.personnel_master import (
     PersonnelMasterResolver,
+    materialize_employee_id_updates,
     resolve_employee_history_path,
     save_generated_employee_master,
 )
@@ -40,19 +43,44 @@ from app.services.personnel_update import (
     build_personnel_collection_files,
 )
 from app.services.storage import save_upload
+from app.core.company_context import current_company_id
 from app.services.verification import (
     build_reconciliation_report,
     build_verification_checks,
     build_working_sheet,
+    detect_employee_id_only_changes,
     check_no_blocking_issues,
     report_for_json,
     verify,
     write_reconciliation_report,
 )
 
-router = APIRouter(prefix="/tax", tags=["tax"])
+router = APIRouter(prefix="/tax", tags=["tax"], dependencies=[Depends(require_company)])
+logger = logging.getLogger(__name__)
 
 ARTIFACT_DIR = settings.artifact_dir
+
+
+def tax_artifact_dir(session_id: int) -> Path:
+    company_id = current_company_id(default=None)
+    target = (
+        ARTIFACT_DIR / str(company_id) / "tax" / str(session_id)
+        if company_id is not None
+        else ARTIFACT_DIR / str(session_id)
+    )
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def monthly_tax_artifact_dir(period_id: int) -> Path:
+    company_id = current_company_id(default=None)
+    target = (
+        ARTIFACT_DIR / str(company_id) / "tax" / "monthly" / str(period_id)
+        if company_id is not None
+        else ARTIFACT_DIR / "monthly" / str(period_id)
+    )
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 ARTIFACT_TYPE_WORKING_SHEET = "working_sheet"
 
@@ -100,7 +128,7 @@ def _upsert_monthly_artifact(
     round_number: int,
     overwrite: bool = True,
 ) -> TaxMonthlyArtifact:
-    monthly_dir = ARTIFACT_DIR / "monthly" / str(period_id)
+    monthly_dir = monthly_tax_artifact_dir(period_id)
     monthly_dir.mkdir(parents=True, exist_ok=True)
     dest = monthly_dir / file_name
 
@@ -262,7 +290,7 @@ def _remove_previous_session_results(
         VerificationRound.id != keep_round_id,
     ).delete(synchronize_session=False)
 
-    session_dir = ARTIFACT_DIR / str(session_id)
+    session_dir = tax_artifact_dir(session_id)
     keep_dir = f"round_{keep_round_number}"
     if session_dir.exists():
         for artifact_dir in session_dir.glob("round_*"):
@@ -276,6 +304,7 @@ def _remove_previous_session_results(
 
 @router.post("/sessions", response_model=SessionRead)
 def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
+    require_period(db, payload.period_id)
     existing = (
         db.query(VerificationSession)
         .filter(VerificationSession.period_id == payload.period_id)
@@ -320,7 +349,7 @@ def get_latest_result(session_id: int, db: Session = Depends(get_db)) -> dict:
     if latest_round is None or not latest_round.report_data:
         return {"status": session.status, "round_number": None, "report": None, "artifacts": [], "generated_files": []}
 
-    round_dir = ARTIFACT_DIR / str(session_id) / f"round_{latest_round.round_number}"
+    round_dir = tax_artifact_dir(session_id) / f"round_{latest_round.round_number}"
     artifacts: list[dict] = []
     change_review = round_dir / "人员信息变动表-雇员.xlsx"
     if change_review.exists():
@@ -339,7 +368,7 @@ def get_latest_result(session_id: int, db: Session = Depends(get_db)) -> dict:
             "file_type": "reconciliation_report",
         })
 
-    output_dir = ARTIFACT_DIR / str(session_id) / "output"
+    output_dir = tax_artifact_dir(session_id) / "output"
     generated_files = []
     if session.status == "done" and output_dir.exists():
         for path in sorted(output_dir.glob("*.xls")):
@@ -430,7 +459,7 @@ async def run_verify(
                     out.write(chunk)
         deduction_dir = str(dedup_dir)
 
-    artifact_path = ARTIFACT_DIR / str(session_id) / f"round_{round_num}"
+    artifact_path = tax_artifact_dir(session_id) / f"round_{round_num}"
     personnel_update_dir = artifact_path / "personnel_update"
     personnel_update_report = None
     personnel_update_result = None
@@ -485,15 +514,31 @@ async def run_verify(
     try:
         # 构建底稿 + 核对
         taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(db)
+        effective_staff_path = (personnel_update_result or {}).get("updated_staff_path", source_staff_path)
         review_sheet, review_staff_df = build_working_sheet(
-            payroll_files, source_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids
+            payroll_files, effective_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids
         )
+        employee_id_changes = detect_employee_id_only_changes(review_sheet, review_staff_df)
+        if employee_id_changes:
+            update_dir = artifact_path / "employee_id_updates"
+            update_source_path = (personnel_update_result or {}).get("full_staff_path", effective_staff_path)
+            update_result = materialize_employee_id_updates(
+                update_source_path, employee_id_changes, update_dir, year, month
+            )
+            save_generated_employee_master(
+                db,
+                period_id=session.period_id,
+                display_path=update_result["updated_staff_path"],
+                full_history_path=update_result["full_staff_path"],
+                source_session_id=session_id,
+            )
+            effective_staff_path = update_result["updated_staff_path"]
         sheet, staff_df = (
             build_working_sheet(
-                payroll_files, personnel_update_result["updated_staff_path"], deduction_dir,
+                payroll_files, effective_staff_path, deduction_dir,
                 taxpayer_org_map, duplicate_taxpayer_ids,
             )
-            if personnel_update_result
+            if employee_id_changes
             else (review_sheet, review_staff_df)
         )
         report = verify(
@@ -504,6 +549,10 @@ async def run_verify(
             month=month,
         )
         _merge_personnel_update_report(report, personnel_update_report)
+        report["employee_id_changes"] = {
+            "has_issues": bool(employee_id_changes),
+            "items": employee_id_changes,
+        }
         monthly_personnel_changes = _build_monthly_personnel_declaration_changes(db, period)
         report["monthly_personnel_changes"] = monthly_personnel_changes.to_dict(orient="records")
 
@@ -598,6 +647,7 @@ async def run_verify(
             "artifacts": artifacts,
         }
     except Exception as exc:
+        logger.exception("工资薪金核对失败")
         db.rollback()
         fresh_session = db.query(VerificationSession).filter(VerificationSession.id == session_id).first()
         if fresh_session:
@@ -672,7 +722,7 @@ def generate(session_id: int, db: Session = Depends(get_db)):
     session.status = "generating"
     db.commit()
 
-    output_dir = ARTIFACT_DIR / str(session_id) / "output"
+    output_dir = tax_artifact_dir(session_id) / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 读取最新底稿
@@ -682,7 +732,7 @@ def generate(session_id: int, db: Session = Depends(get_db)):
         .order_by(VerificationRound.round_number.desc())
         .first()
     )
-    sheet_path = ARTIFACT_DIR / str(session_id) / f"round_{last_round.round_number}" / "底稿.xlsx"
+    sheet_path = tax_artifact_dir(session_id) / f"round_{last_round.round_number}" / "底稿.xlsx"
     sheet = pd.read_excel(sheet_path)
 
     period = db.query(Period).filter(Period.id == session.period_id).first()
@@ -728,10 +778,32 @@ def generate(session_id: int, db: Session = Depends(get_db)):
 
 @router.get("/files/{session_id}/{file_name}")
 def download_file(session_id: int, file_name: str):
-    fp = ARTIFACT_DIR / str(session_id) / "output" / file_name
+    fp = tax_artifact_dir(session_id) / "output" / file_name
     if not fp.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(fp, filename=file_name)
+
+
+@router.delete("/sessions/{session_id}/generated-files")
+def clear_generated_files(session_id: int, db: Session = Depends(get_db)):
+    session = db.query(VerificationSession).filter(VerificationSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session.status == "generating":
+        raise HTTPException(status_code=409, detail="申报表生成中，不能清空")
+    output_dir = tax_artifact_dir(session_id) / "output"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    latest = (
+        db.query(VerificationRound)
+        .filter(VerificationRound.session_id == session_id)
+        .order_by(VerificationRound.round_number.desc())
+        .first()
+    )
+    report = latest.report_data if latest else {}
+    session.status = "needs_review" if report.get("summary", {}).get("has_blocking_issues") else "ready_to_generate"
+    db.commit()
+    return {"status": session.status, "files": []}
 
 
 @router.get("/sessions/{session_id}/download-all")
@@ -741,7 +813,7 @@ def download_all(session_id: int):
     import zipfile
     from urllib.parse import quote
 
-    output_dir = ARTIFACT_DIR / str(session_id) / "output"
+    output_dir = tax_artifact_dir(session_id) / "output"
     if not output_dir.exists():
         raise HTTPException(status_code=404, detail="无可下载的文件")
 
@@ -788,7 +860,7 @@ def download_round_file(session_id: int, round_number: int, file_path: str):
     requested = Path(file_path)
     if requested.is_absolute() or ".." in requested.parts:
         raise HTTPException(status_code=400, detail="文件名不合法")
-    fp = ARTIFACT_DIR / str(session_id) / f"round_{round_number}" / requested
+    fp = tax_artifact_dir(session_id) / f"round_{round_number}" / requested
     if not fp.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(fp, filename=requested.name)

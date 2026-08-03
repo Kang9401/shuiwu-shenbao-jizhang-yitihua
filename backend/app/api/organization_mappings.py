@@ -10,10 +10,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
 from app.models.accounting import OrganizationMapping
 
 
-router = APIRouter(prefix="/organization-mappings", tags=["organization-mappings"])
+router = APIRouter(prefix="/organization-mappings", tags=["organization-mappings"], dependencies=[Depends(require_company)])
 
 
 class MappingPayload(BaseModel):

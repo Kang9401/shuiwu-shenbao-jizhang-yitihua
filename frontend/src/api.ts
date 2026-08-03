@@ -1,8 +1,71 @@
 import axios from 'axios'
 
+export const COMPANY_STORAGE_KEY = 'tax-workbench-company-id'
+
+export function currentCompanyId(): number | null {
+  const value = Number(window.localStorage.getItem(COMPANY_STORAGE_KEY))
+  return Number.isInteger(value) && value > 0 ? value : null
+}
+
+export function companyUrl(path: string): string {
+  const companyId = currentCompanyId()
+  if (!companyId) return path
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}company_id=${companyId}`
+}
+
+export function currentCompanyHeaders(): Record<string, string> {
+  const companyId = currentCompanyId()
+  return companyId ? { 'X-Company-ID': String(companyId) } : {}
+}
+
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api'
 })
+
+api.interceptors.request.use((config) => {
+  const companyId = currentCompanyId()
+  if (companyId) config.headers.set('X-Company-ID', String(companyId))
+  return config
+})
+
+function scopeDownloadUrls(value: any): void {
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    value.forEach(scopeDownloadUrls)
+    return
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'download_url' && typeof child === 'string') value[key] = companyUrl(child)
+    else scopeDownloadUrls(child)
+  }
+}
+
+api.interceptors.response.use((response) => {
+  scopeDownloadUrls(response.data)
+  return response
+})
+
+export interface Company {
+  id: number
+  name: string
+  code: string
+  operator_name: string
+  notes: string
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type CompanyPayload = Pick<Company, 'name' | 'code' | 'operator_name' | 'notes'>
+
+export const companyApi = {
+  list: (includeInactive = false) => api.get<Company[]>('/companies', { params: { include_inactive: includeInactive } }),
+  create: (payload: CompanyPayload) => api.post<Company>('/companies', payload),
+  update: (id: number, payload: CompanyPayload) => api.put<Company>(`/companies/${id}`, payload),
+  updateStatus: (id: number, active: boolean) => api.patch<Company>(`/companies/${id}/status`, { active }),
+  select: (id: number) => api.post<Company>(`/companies/${id}/select`),
+}
 
 export interface Period {
   id: number
@@ -247,6 +310,10 @@ export interface VerifyReport {
   checks: VerificationCheck[]
   tax_diff: { has_issues: boolean; items: TaxDiffItem[]; by_org: any[] }
   personnel_changes: { has_issues: boolean; items: PersonnelChange[] }
+  employee_id_changes?: {
+    has_issues: boolean
+    items: Array<{ name: string; id_number: string; org_code: string; old_employee_id: string; new_employee_id: string; message: string }>
+  }
   missing_cert: { has_issues: boolean; items: { name: string; org_code: string; employee_id: string }[] }
   deduction_warnings: { has_issues: boolean; duplicates: any[]; missing_orgs: string[] }
   deduction_match_quality?: { low_confidence: any[]; name_mismatches: any[] }
@@ -311,6 +378,8 @@ export const taxApi = {
 
   generate: (sessionId: number) =>
     api.post<{ status: string; files: GeneratedFile[] }>(`/tax/sessions/${sessionId}/generate`, {}, { timeout: 120000 }),
+  clearGeneratedFiles: (sessionId: number) =>
+    api.delete<{ status: string; files: GeneratedFile[] }>(`/tax/sessions/${sessionId}/generated-files`),
 }
 
 export const workflowApi = {
@@ -345,10 +414,10 @@ export const workflowApi = {
       params: { workflow_code: workflowCode, period_id: periodId, operation },
     }),
 
-  artifactDownloadUrl: (artifactId: number) => `/api/artifacts/${artifactId}/download`,
-  batchDownloadUrl: (jobId: number) => `/api/jobs/${jobId}/download-all`,
+  artifactDownloadUrl: (artifactId: number) => companyUrl(`/api/artifacts/${artifactId}/download`),
+  batchDownloadUrl: (jobId: number) => companyUrl(`/api/jobs/${jobId}/download-all`),
   downloadArtifact: (artifactId: number) => api.get<Blob>(`/artifacts/${artifactId}/download`, { responseType: 'blob' }),
-  internTemplateUrl: () => '/api/workflows/intern-tax/template',
+  internTemplateUrl: () => companyUrl('/api/workflows/intern-tax/template'),
 }
 
 export const systemApi = {
@@ -381,7 +450,7 @@ export const organizationMappingApi = {
       timeout: 120000,
     })
   },
-  exportUrl: () => '/api/organization-mappings/export',
+  exportUrl: () => companyUrl('/api/organization-mappings/export'),
 }
 
 export const personnelMasterApi = {

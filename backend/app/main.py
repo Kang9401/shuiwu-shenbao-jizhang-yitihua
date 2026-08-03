@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import artifacts, bank_fetch, files, finance_ai, jobs, ledgers, organization_mappings, periods, personnel_masters, reconciliation_imports, rpa, system, tax, workflows
+from app.api import artifacts, bank_fetch, companies, files, finance_ai, jobs, ledgers, organization_mappings, periods, personnel_masters, reconciliation_imports, rpa, system, tax, workflows
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(periods.router, prefix=settings.api_prefix)
+    app.include_router(companies.router, prefix=settings.api_prefix)
     app.include_router(files.router, prefix=settings.api_prefix)
     app.include_router(jobs.router, prefix=settings.api_prefix)
     app.include_router(artifacts.router, prefix=settings.api_prefix)

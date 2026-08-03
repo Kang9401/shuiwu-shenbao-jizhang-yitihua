@@ -303,6 +303,38 @@ def save_generated_employee_master(
     return artifact
 
 
+def materialize_employee_id_updates(
+    source_path: str | Path,
+    changes: list[dict[str, str]],
+    output_dir: str | Path,
+    year: int,
+    month: int,
+) -> dict[str, str]:
+    """仅在本月输出副本中更新员工编号，不修改来源历史文件。"""
+    staff = read_excel(source_path).fillna("")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    id_col = "证件号码" if "证件号码" in staff.columns else "*证件号码"
+    org_col = _first_existing(staff.columns, ORG_CODE_ALIASES)
+    for change in changes:
+        mask = (
+            staff.get(id_col, pd.Series("", index=staff.index)).map(_clean).eq(change.get("id_number", ""))
+            & staff.get(org_col or "机构代码", pd.Series("", index=staff.index)).map(_clean_org_code).eq(change.get("org_code", ""))
+            & staff.get("员工编号", pd.Series("", index=staff.index)).map(_clean).eq(change.get("old_employee_id", ""))
+        )
+        if int(mask.sum()) != 1:
+            raise ValueError(f"{change.get('name', '')} 的员工编号自动更新匹配到 {int(mask.sum())} 条人员记录")
+        staff.loc[mask, "员工编号"] = change["new_employee_id"]
+    history_path = root / f"人员信息表完整数据({year}年{month:02d}月).xlsx"
+    display_path = root / f"人员信息表({year}年{month:02d}月).xlsx"
+    write_workbook(history_path, {"Sheet1": staff})
+    display = staff
+    if "人员状态" in display.columns:
+        display = display[display["人员状态"].map(_clean).isin(["", "正常", "在职"])]
+    write_workbook(display_path, {"Sheet1": display})
+    return {"updated_staff_path": str(display_path), "full_staff_path": str(history_path)}
+
+
 def get_personnel_master_artifact(
     db: Session,
     period_id: int,

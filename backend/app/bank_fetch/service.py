@@ -15,6 +15,7 @@ from fastapi import UploadFile
 from app.db.session import SessionLocal
 from app.services.reconciliation_import import import_reconciliation_file
 from app.models.accounting import ReconciliationImportBatch
+from app.core.company_context import reset_company_id, set_company_id
 
 
 class BankFetchService:
@@ -22,7 +23,7 @@ class BankFetchService:
         self._lock = threading.RLock()
         self._process = None
         self._cancelled = False
-        self._state = {"status": "idle", "period_id": None, "message": "", "events": [], "batch_id": None}
+        self._state = {"status": "idle", "company_id": None, "period_id": None, "message": "", "events": [], "batch_id": None}
 
     def _source_root(self) -> Path:
         configured = os.environ.get("BANK_FETCHER_ROOT", "").strip()
@@ -63,11 +64,11 @@ class BankFetchService:
                 time.sleep(0.25)
         raise RuntimeError("银行流水获取程序启动超时")
 
-    def start(self, *, period_id: int, accounts: str, start_date: str, end_date: str) -> dict:
+    def start(self, *, company_id: int, period_id: int, accounts: str, start_date: str, end_date: str) -> dict:
         with self._lock:
             if self._state["status"] in {"starting", "running", "waiting-login", "importing"}:
                 raise RuntimeError("已有银行流水获取任务正在运行")
-            self._state = {"status": "starting", "period_id": period_id, "message": "正在启动", "events": [], "batch_id": None}
+            self._state = {"status": "starting", "company_id": company_id, "period_id": period_id, "message": "正在启动", "events": [], "batch_id": None}
             self._cancelled = False
         self._ensure_process()
         self._request("/api/query", {"accounts": accounts, "startDate": start_date, "endDate": end_date, "pageSize": 200})
@@ -105,6 +106,7 @@ class BankFetchService:
         with self._lock:
             self._state.update(status="importing", message="流水已获取，正在导入")
             period_id = self._state["period_id"]
+        token = set_company_id(int(self._state["company_id"]))
         db = SessionLocal()
         try:
             digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
@@ -125,8 +127,11 @@ class BankFetchService:
                 self._state.update(status="import_failed", message=f"流水已获取，但导入失败：{exc}")
         finally:
             db.close()
+            reset_company_id(token)
 
-    def stop(self) -> dict:
+    def stop(self, company_id: int | None = None) -> dict:
+        if company_id is not None and self._state.get("company_id") not in {None, company_id}:
+            raise RuntimeError("银行流水任务属于其他分公司")
         self._cancelled = True
         process = self._process
         if process is not None and process.poll() is None:
@@ -138,6 +143,24 @@ class BankFetchService:
     def status(self) -> dict:
         with self._lock:
             return dict(self._state)
+
+    def status_for(self, company_id: int) -> dict:
+        with self._lock:
+            if self._state.get("company_id") in {None, company_id}:
+                return dict(self._state)
+            if self.has_running_task():
+                return {"status": "locked", "company_id": None, "period_id": None, "message": "其他分公司正在执行银行流水任务", "events": [], "batch_id": None}
+            return {"status": "idle", "company_id": company_id, "period_id": None, "message": "", "events": [], "batch_id": None}
+
+    def is_company_running(self, company_id: int) -> bool:
+        with self._lock:
+            return self._state.get("company_id") == company_id and self._state.get("status") in {
+                "starting", "running", "waiting-login", "importing"
+            }
+
+    def has_running_task(self) -> bool:
+        with self._lock:
+            return self._state.get("status") in {"starting", "running", "waiting-login", "importing"}
 
 
 bank_fetch_service = BankFetchService()

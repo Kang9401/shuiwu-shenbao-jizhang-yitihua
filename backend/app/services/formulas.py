@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -91,6 +92,52 @@ def first_existing(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]
         if column in df.columns:
             return column
     return None
+
+
+def normalize_column_label(value: Any) -> str:
+    text = _clean_cell(value).replace("（", "(").replace("）", ")")
+    text = text.replace("\n", "").replace("\r", "")
+    return re.sub(r"\s+", "", text)
+
+
+def find_normalized_column(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]:
+    lookup = {normalize_column_label(column): column for column in df.columns}
+    for candidate in candidates:
+        found = lookup.get(normalize_column_label(candidate))
+        if found is not None:
+            return found
+    return None
+
+
+BROKER_COLUMN_ALIASES = {
+    "employee_id": ("员工编号", "人员编号", "员工编码", "工号"),
+    "direct_income": ("经纪人本期收入", "本期收入", "劳务报酬收入", "佣金收入"),
+    "gross_income": ("应发工资(补足前)", "应发合计(补足前)", "应发工资", "应发合计"),
+    "vat": ("增值税", "增值税额", "应扣增值税"),
+    "adjust_income": ("调增应纳税所得额", "调增应纳税所得额 SUM", "税前调整"),
+    "additional_tax": ("附加税", "附加税额"),
+    "personal_tax": ("个人所得税(经纪人)", "经纪人个人所得税", "个人所得税"),
+}
+
+
+def broker_income_series(broker: pd.DataFrame) -> tuple[pd.Series, dict[str, str]]:
+    direct_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["direct_income"])
+    if direct_col:
+        return number_series(broker, [direct_col]), {"mode": "direct", "income_column": direct_col, "vat_column": ""}
+    gross_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["gross_income"])
+    if not gross_col:
+        raise ValueError("经纪人工资表未找到本期收入或应发工资列，禁止按 0 继续生成")
+    vat_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["vat"])
+    adjust_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["adjust_income"])
+    gross = number_series(broker, [gross_col])
+    vat = number_series(broker, [vat_col]) if vat_col else pd.Series(0, index=broker.index, dtype="float64")
+    adjust = number_series(broker, [adjust_col]) if adjust_col else pd.Series(0, index=broker.index, dtype="float64")
+    return gross + adjust - vat, {
+        "mode": "gross_plus_adjust_minus_vat",
+        "income_column": gross_col,
+        "adjust_column": adjust_col or "",
+        "vat_column": vat_col or "",
+    }
 
 
 def number_series(df: pd.DataFrame, candidates: Iterable[str], default: float = 0) -> pd.Series:
@@ -409,7 +456,15 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             "block_declarations": True,
         }
 
-    broker["员工编号"] = text_series(broker, ["员工编号"]).map(normalize_emp_id)
+    employee_id_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["employee_id"])
+    if not employee_id_col:
+        return {
+            "detail": pd.DataFrame(),
+            "summary": pd.DataFrame(),
+            "issues": [{"issue_type": "经纪人工资列缺失", "message": "经纪人工资表未找到员工编号/人员编号/员工编码/工号列"}],
+            "block_declarations": True,
+        }
+    broker["员工编号"] = broker[employee_id_col].fillna("").astype(str).str.strip().map(normalize_emp_id)
     # 平台导出文件首行是汇总，不属于经纪人申报明细。
     broker = broker[broker["员工编号"].map(_clean_cell) != ""].copy()
     duplicate_payroll_ids = broker.loc[broker["员工编号"].duplicated(keep=False), "员工编号"].unique()
@@ -417,8 +472,19 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         {"issue_type": "经纪人业绩重复", "message": f"同一所属期间员工编号重复：{employee_id}"}
         for employee_id in duplicate_payroll_ids if _clean_cell(employee_id)
     )
-    broker["经纪人本期收入"] = number_series(broker, ["应发工资(补足前)"]) - number_series(broker, ["增值税"])
-    broker["个人所得税(经纪人)"] = number_series(broker, ["个人所得税(经纪人)"])
+    try:
+        broker["经纪人本期收入"], income_rule = broker_income_series(broker)
+    except ValueError as exc:
+        return {
+            "detail": broker,
+            "summary": pd.DataFrame(),
+            "issues": [{"issue_type": "经纪人工资列缺失", "message": str(exc)}],
+            "block_declarations": True,
+        }
+    tax_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["personal_tax"])
+    broker["个人所得税(经纪人)"] = number_series(broker, [tax_col]) if tax_col else 0
+    additional_tax_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["additional_tax"])
+    broker["允许扣除的税费"] = number_series(broker, [additional_tax_col]) if additional_tax_col else 0
     zero_count = 0
     negative_count = 0
     for idx, row in broker.iterrows():
@@ -486,6 +552,7 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         "broker_missing_master": int((~matched).sum()),
         "broker_zero_income": zero_count,
         "broker_negative_income": negative_count,
+        "broker_income_rule": income_rule,
     }
     blocking_types = {"经纪人业绩重复", "经纪人主数据重复"}
     return {

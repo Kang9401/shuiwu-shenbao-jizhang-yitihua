@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.session import Base, get_db
 from app.main import app
+from app.models.core import Company
 
 
 def _client():
@@ -18,6 +19,9 @@ def _client():
     )
     testing_session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     Base.metadata.create_all(bind=engine)
+    with testing_session_local() as db:
+        db.add(Company(id=1, name="测试分公司", code="TEST", operator_name="测试人"))
+        db.commit()
 
     def override_get_db():
         db: Session = testing_session_local()
@@ -27,7 +31,7 @@ def _client():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    return TestClient(app)
+    return TestClient(app, headers={"X-Company-ID": "1"})
 
 
 def _excel_bytes(rows: list[dict]) -> bytes:

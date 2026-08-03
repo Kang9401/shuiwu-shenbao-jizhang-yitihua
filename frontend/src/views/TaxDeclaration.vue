@@ -334,6 +334,22 @@
         </div>
       </section>
 
+      <section v-if="report.employee_id_changes?.items.length" class="card">
+        <div class="card-header">
+          <strong>员工编号自动更新</strong>
+          <span class="tag tag-warning">{{ report.employee_id_changes.items.length }} 人，仅更新本月主数据</span>
+        </div>
+        <div class="card-body">
+          <el-table :data="report.employee_id_changes.items" size="small" max-height="260">
+            <el-table-column prop="name" label="姓名" width="110" />
+            <el-table-column prop="org_code" label="机构代码" width="110" />
+            <el-table-column prop="old_employee_id" label="原员工编号" width="130" />
+            <el-table-column prop="new_employee_id" label="新员工编号" width="130" />
+            <el-table-column prop="message" label="处理结果" min-width="260" />
+          </el-table>
+        </div>
+      </section>
+
       <section class="card">
         <div class="card-header">
           <strong>核对要点</strong>
@@ -408,6 +424,10 @@
             <el-icon v-else><Download /></el-icon>
             {{ batchDownloading ? `下载中 ${batchProgress}/${generatedFiles.length}` : '批量下载全部' }}
           </button>
+          <button class="btn btn-sm btn-outline" :disabled="!generatedFiles.length" @click="clearGeneratedOutput">
+            <el-icon><Delete /></el-icon>
+            一键清空
+          </button>
         </div>
       </div>
       <div class="card-body">
@@ -425,6 +445,9 @@
             <el-icon><RefreshRight /></el-icon>
             开始新的申报
           </button>
+          <button class="btn btn-primary btn-lg" :disabled="!generatedFiles.length" @click="emit('open-rpa')">
+            开始申报
+          </button>
         </div>
       </div>
     </section>
@@ -433,17 +456,18 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheck,
   Document,
+  Delete,
   Download,
   Finished,
   FolderOpened,
   RefreshRight,
   UploadFilled,
 } from '@element-plus/icons-vue'
-import { taxApi, type GeneratedFile, type TaxSession, type VerifyReport } from '../api'
+import { currentCompanyHeaders, taxApi, type GeneratedFile, type TaxSession, type VerifyReport } from '../api'
 
 const props = defineProps<{
   session: TaxSession | null
@@ -452,6 +476,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'session-updated', session: TaxSession): void
+  (event: 'open-rpa'): void
 }>()
 
 const step = ref(1)
@@ -513,7 +538,7 @@ const reconciliationReportArtifacts = computed(() =>
 const deductionMissingOrgRows = computed(() =>
   (report.value?.deduction_warnings.missing_orgs || []).map((orgCode) => ({
     org_code: orgCode,
-    message: '该工资机构的专项附加扣除合计为 0',
+    message: '该营业部未匹配到独立专项附加扣除数据，仅提醒，不影响生成',
   }))
 )
 
@@ -648,6 +673,7 @@ function classifyFolderFiles(fileList: File[]) {
   for (const file of fileList) {
     const text = normalizeFileText(file)
     const role = detectFileRole(text)
+    if (role === 'salary_role_conflict') throw new Error(`文件名同时包含5位和7位标记，无法判断工资类型：${file.name}`)
     if (role === 'deduction_files') deductionFiles.push(file)
     else if (role === 'personnel_collection' || role === 'updated_staff' || role === 'working_sheet' || role === 'reconciliation_report') knownArtifacts.push(file)
     else if (role) {
@@ -676,8 +702,14 @@ function detectFileRole(text: string) {
   if (compact.includes('当月人员信息表') || compact.includes('更新后人员信息表')) return 'updated_staff'
   if (compact.includes('专项附加扣除') || compact.includes('专项扣除')) return 'deduction_files'
   if (compact.includes('人员信息变动表雇员') || compact.includes('变动表雇员')) return 'staff_change'
-  if (compact.includes('投资顾问') || compact.includes('理财经理') || compact.includes('投顾')) return 'advisor_salary'
+  if (compact.includes('经纪人') || compact.includes('证券经纪')) return 'broker_salary'
   if (compact.includes('总部代发') || compact.includes('总部工资')) return 'headquarters_salary'
+  const rankByName = compact.includes('5位') || compact.includes('五位')
+  const marketingByName = compact.includes('7位') || compact.includes('七位')
+  if (rankByName && marketingByName) return 'salary_role_conflict'
+  if (rankByName) return 'rank_salary'
+  if (marketingByName) return 'marketing_salary'
+  if (compact.includes('投资顾问') || compact.includes('理财经理') || compact.includes('投顾')) return 'advisor_salary'
   if (compact.includes('机构业务人员') || compact.includes('机构工资')) return 'branch_salary'
   if (compact.includes('数字化运营')) return 'digital_ops_salary'
   if (compact.includes('营销人员') || compact.includes('营销工资')) return 'marketing_salary'
@@ -803,7 +835,7 @@ async function batchDownload() {
   batchDownloading.value = true
   batchProgress.value = 0
   try {
-    const response = await fetch(`/api/tax/sessions/${props.sessionId}/download-all`)
+    const response = await fetch(`/api/tax/sessions/${props.sessionId}/download-all`, { headers: currentCompanyHeaders() })
     if (!response.ok) throw new Error('下载失败')
     const blob = await response.blob()
     const fileName = `申报文件_${props.sessionId}.zip`
@@ -821,8 +853,11 @@ async function batchDownload() {
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.download = fileName
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
       anchor.click()
-      URL.revokeObjectURL(url)
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 3000)
     }
     const total = generatedFiles.value.length
     for (let i = 0; i < total; i++) {
@@ -835,6 +870,24 @@ async function batchDownload() {
   } finally {
     batchDownloading.value = false
     batchProgress.value = 0
+  }
+}
+
+async function clearGeneratedOutput() {
+  if (!props.sessionId) return
+  try {
+    await ElMessageBox.confirm(
+      '确认清空本次生成的全部申报文件？核对报告和人员主数据会保留。',
+      '一键清空',
+      { type: 'warning', confirmButtonText: '确认清空' },
+    )
+    const { data } = await taxApi.clearGeneratedFiles(props.sessionId)
+    generatedFiles.value = []
+    step.value = 2
+    if (props.session) emit('session-updated', { ...props.session, status: data.status })
+    ElMessage.success('生成的申报文件已清空')
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('清空失败：' + getErrorMessage(error))
   }
 }
 

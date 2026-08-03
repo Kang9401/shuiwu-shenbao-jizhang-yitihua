@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from urllib.parse import quote
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
+from app.models.core import Company
 from app.rpa.service import rpa_service
 from app.services.personnel_master import PersonnelMasterValidationError
 from app.schemas.rpa import RpaChromeStart, RpaConfigUpdate, RpaDeleteFilesRequest, RpaOrgPreviewRequest, RpaPreparePeriodRequest, RpaTaskStartRequest
 
-router = APIRouter(prefix="/rpa", tags=["rpa"])
+def activate_rpa_company(company: Company = Depends(require_company)) -> None:
+    try:
+        rpa_service.activate_company(company.id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+router = APIRouter(prefix="/rpa", tags=["rpa"], dependencies=[Depends(activate_rpa_company)])
+logger = logging.getLogger(__name__)
 ORG_LIMIT = 20 * 1024 * 1024
 IMPORT_LIMIT = 100 * 1024 * 1024
 
 
 def bad_request(exc: Exception):
+    logger.exception("RPA 请求失败")
     if isinstance(exc, FileExistsError):
         raise HTTPException(status_code=409, detail=f"同名文件已存在：{exc}") from exc
     if isinstance(exc, RuntimeError):

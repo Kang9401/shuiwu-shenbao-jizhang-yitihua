@@ -7,9 +7,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
 from app.models.core import Artifact
 
-router = APIRouter(prefix="/artifacts", tags=["artifacts"])
+router = APIRouter(prefix="/artifacts", tags=["artifacts"], dependencies=[Depends(require_company)])
 
 
 @router.get("/{artifact_id}/download")

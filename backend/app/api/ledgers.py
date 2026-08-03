@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
 from app.models.accounting import CertificationLedger, InvoiceLedger, VoucherDraft
 from app.schemas.ledger import (
     CertificationLedgerRead,
@@ -13,7 +14,7 @@ from app.schemas.ledger import (
     VoucherDraftRead,
 )
 
-router = APIRouter(prefix="/ledgers", tags=["ledgers"])
+router = APIRouter(prefix="/ledgers", tags=["ledgers"], dependencies=[Depends(require_company)])
 
 
 @router.get("/invoices", response_model=List[InvoiceLedgerRead])

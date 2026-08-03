@@ -27,6 +27,7 @@ def client(monkeypatch):
     monkeypatch.setattr(rpa_api, "rpa_service", StubService())
     app = FastAPI()
     app.include_router(rpa_api.router, prefix="/api")
+    app.dependency_overrides[rpa_api.activate_rpa_company] = lambda: None
     return TestClient(app)
 
 

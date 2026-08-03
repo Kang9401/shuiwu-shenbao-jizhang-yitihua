@@ -8,12 +8,14 @@ from sqlalchemy import DateTime, ForeignKey, Integer, JSON, Numeric, String, Uni
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.core.company_context import current_company_id
 
 
 class InvoiceLedger(Base):
     __tablename__ = "invoice_ledgers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[Optional[int]] = mapped_column(ForeignKey("periods.id"), nullable=True)
     job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     invoice_no: Mapped[Optional[str]] = mapped_column(String(120), index=True)
@@ -31,6 +33,7 @@ class CertificationLedger(Base):
     __tablename__ = "certification_ledgers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[Optional[int]] = mapped_column(ForeignKey("periods.id"), nullable=True)
     job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     invoice_no: Mapped[Optional[str]] = mapped_column(String(120), index=True)
@@ -46,6 +49,7 @@ class VoucherDraft(Base):
     __tablename__ = "voucher_drafts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[Optional[int]] = mapped_column(ForeignKey("periods.id"), nullable=True)
     job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     source_type: Mapped[str] = mapped_column(String(80), index=True)
@@ -72,6 +76,7 @@ class PersonnelMasterArtifact(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, index=True)
     person_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     scope_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -88,6 +93,7 @@ class PersonnelMasterImportBatch(Base):
     __tablename__ = "personnel_master_import_batches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, index=True)
     artifact_id: Mapped[Optional[int]] = mapped_column(ForeignKey("personnel_master_artifacts.id"), nullable=True)
     person_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -104,6 +110,7 @@ class ReconciliationImportBatch(Base):
     __tablename__ = "reconciliation_import_batches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, index=True)
     import_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -117,6 +124,7 @@ class ReconciliationImportRow(Base):
     __tablename__ = "reconciliation_import_rows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_import_batches.id"), nullable=False, index=True)
     period_id: Mapped[int] = mapped_column(ForeignKey("periods.id"), nullable=False, index=True)
     import_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
@@ -146,11 +154,12 @@ class ReconciliationImportRow(Base):
 class OrganizationMapping(Base):
     __tablename__ = "organization_mappings"
     __table_args__ = (
-        UniqueConstraint("branch_name", name="uq_organization_mapping_branch_name"),
-        UniqueConstraint("org_code", name="uq_organization_mapping_org_code"),
+        UniqueConstraint("company_id", "branch_name", name="uq_organization_mapping_company_branch_name"),
+        UniqueConstraint("company_id", "org_code", name="uq_organization_mapping_company_org_code"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), default=current_company_id, nullable=False, index=True)
     branch_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     org_code: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     taxpayer_id: Mapped[str] = mapped_column(String(64), default="", nullable=False, index=True)

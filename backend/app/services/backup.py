@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.version import APP_VERSION, PRODUCT_NAME, RULESET_VERSION, SCHEMA_VERSION
 
 
-BACKUP_DIRECTORIES = ("uploads", "artifacts")
+BACKUP_DIRECTORIES = ("uploads", "artifacts", "rpa")
 
 
 def database_path() -> Path:
