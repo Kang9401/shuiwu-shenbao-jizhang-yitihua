@@ -24,6 +24,7 @@ class MappingPayload(BaseModel):
     active: bool = True
     rpa_enabled: bool = False
     rpa_org_name: str = ""
+    rpa_search_result_index: int = 1
     parent_branch: str = ""
 
 
@@ -33,12 +34,14 @@ def _validate(
     taxpayer_id: str = "",
     rpa_enabled: bool = False,
     rpa_org_name: str = "",
+    rpa_search_result_index: int = 1,
     parent_branch: str = "",
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str, int, str]:
     name = branch_name.strip()
     code = org_code.strip()
     normalized_taxpayer_id = "".join(taxpayer_id.split()).upper()
     full_name = rpa_org_name.strip()
+    result_index = int(rpa_search_result_index)
     parent = parent_branch.strip()
     if not name:
         raise HTTPException(status_code=400, detail="营业部名称不能为空")
@@ -48,7 +51,9 @@ def _validate(
         raise HTTPException(status_code=400, detail="启用 RPA 时营业部全称不能为空")
     if rpa_enabled and not parent:
         raise HTTPException(status_code=400, detail="启用 RPA 时所属分公司不能为空")
-    return name, code, normalized_taxpayer_id, full_name, parent
+    if result_index < 1:
+        raise HTTPException(status_code=400, detail="RPA 搜索结果序号必须从 1 开始")
+    return name, code, normalized_taxpayer_id, full_name, result_index, parent
 
 
 def _validate_taxpayer_id_conflict(
@@ -99,6 +104,7 @@ def _payload(item: OrganizationMapping) -> dict:
         "active": bool(item.active),
         "rpa_enabled": bool(item.rpa_enabled),
         "rpa_org_name": item.rpa_org_name,
+        "rpa_search_result_index": item.rpa_search_result_index,
         "parent_branch": item.parent_branch,
         "updated_at": item.updated_at,
     }
@@ -111,9 +117,9 @@ def list_mappings(db: Session = Depends(get_db)) -> list[dict]:
 
 @router.post("")
 def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> dict:
-    name, code, taxpayer_id, full_name, parent = _validate(
+    name, code, taxpayer_id, full_name, result_index, parent = _validate(
         payload.branch_name, payload.org_code, payload.taxpayer_id,
-        payload.rpa_enabled, payload.rpa_org_name, payload.parent_branch
+        payload.rpa_enabled, payload.rpa_org_name, payload.rpa_search_result_index, payload.parent_branch
     )
     if db.query(OrganizationMapping).filter(OrganizationMapping.branch_name == name).first():
         raise HTTPException(status_code=409, detail="该营业部名称已存在")
@@ -127,6 +133,7 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
         active=int(payload.active),
         rpa_enabled=int(payload.rpa_enabled),
         rpa_org_name=full_name,
+        rpa_search_result_index=result_index,
         parent_branch=parent,
     )
     db.add(item)
@@ -140,9 +147,9 @@ def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depen
     item = db.query(OrganizationMapping).filter(OrganizationMapping.id == mapping_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="机构映射不存在")
-    name, code, taxpayer_id, full_name, parent = _validate(
+    name, code, taxpayer_id, full_name, result_index, parent = _validate(
         payload.branch_name, payload.org_code, payload.taxpayer_id,
-        payload.rpa_enabled, payload.rpa_org_name, payload.parent_branch
+        payload.rpa_enabled, payload.rpa_org_name, payload.rpa_search_result_index, payload.parent_branch
     )
     duplicate = db.query(OrganizationMapping).filter(OrganizationMapping.branch_name == name, OrganizationMapping.id != mapping_id).first()
     if duplicate:
@@ -162,6 +169,7 @@ def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depen
     item.active = int(payload.active)
     item.rpa_enabled = int(payload.rpa_enabled)
     item.rpa_org_name = full_name
+    item.rpa_search_result_index = result_index
     item.parent_branch = parent
     db.add(item)
     db.commit()
@@ -188,12 +196,18 @@ def import_mappings(file: UploadFile = File(...), db: Session = Depends(get_db))
             if "是否启用RPA" in frame.columns
             else bool(item.rpa_enabled) if item is not None else False
         )
-        name, code, taxpayer_id, full_name, parent = _validate(
+        raw_result_index = row.get("RPA搜索结果序号", item.rpa_search_result_index if item is not None else 1)
+        try:
+            result_index = int(float(str(raw_result_index).strip() or "1"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"机构代码 {raw_code} 的 RPA搜索结果序号必须为正整数") from None
+        name, code, taxpayer_id, full_name, result_index, parent = _validate(
             str(row["营业部名称"]),
             str(row["机构代码"]),
             str(row.get("机构纳税人识别号", item.taxpayer_id if item is not None else "")),
             rpa_enabled,
             str(row.get("营业部全称", item.rpa_org_name if item is not None else "")),
+            result_index,
             str(row.get("所属分公司", item.parent_branch if item is not None else "")),
         )
         if item is None:
@@ -219,6 +233,7 @@ def import_mappings(file: UploadFile = File(...), db: Session = Depends(get_db))
         item.active = 1
         item.rpa_enabled = int(rpa_enabled)
         item.rpa_org_name = full_name
+        item.rpa_search_result_index = result_index
         item.parent_branch = parent
         db.add(item)
         db.flush()
@@ -237,6 +252,7 @@ def export_mappings(db: Session = Depends(get_db)) -> Response:
             "启用": "是" if item.active else "否",
             "是否启用RPA": "是" if item.rpa_enabled else "否",
             "营业部全称": item.rpa_org_name,
+            "RPA搜索结果序号": item.rpa_search_result_index,
             "所属分公司": item.parent_branch,
         }
         for item in db.query(OrganizationMapping).order_by(OrganizationMapping.org_code).all()

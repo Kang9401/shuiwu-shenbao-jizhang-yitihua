@@ -15,6 +15,7 @@ from app.rpa.state_store import StateStore
 from app.services.personnel_master import (
     PersonnelMasterResolver,
     PersonnelMasterValidationError,
+    copy_previous_month_personnel_master_if_missing,
     import_personnel_master,
     list_rpa_organizations,
 )
@@ -212,6 +213,51 @@ def test_rpa_organizations_use_mapping_metadata_and_exclude_disabled(tmp_path, m
         {"机构名称": "第一证券营业部", "机构代码": "10001"},
         {"机构名称": "第三证券营业部", "机构代码": "10003"},
     ]
+    db.close()
+
+
+def test_copies_all_previous_month_broker_masters_when_current_month_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session()
+    previous = Period(year=2025, month=1, name="2025-01")
+    current = Period(year=2025, month=2, name="2025-02")
+    db.add_all([previous, current])
+    db.commit()
+    db.refresh(previous)
+    db.refresh(current)
+
+    for scope_type, scope_code, name in [
+        ("month", None, "month.xlsx"),
+        ("org", "10301", "org.xlsx"),
+        ("branch", "BJ", "branch.xlsx"),
+    ]:
+        source = tmp_path / name
+        row = {"员工编号": "1", "姓名": "张三", "证件号码": "110101199001010011"}
+        if scope_type == "org":
+            row["机构代码"] = scope_code
+        elif scope_type == "branch":
+            row["分公司代码"] = scope_code
+        pd.DataFrame([row]).to_excel(source, index=False)
+        import_personnel_master(
+            db,
+            period_id=previous.id,
+            person_type="broker",
+            scope_type=scope_type,
+            scope_code=scope_code,
+            file=_upload(source),
+        )
+
+    copied = copy_previous_month_personnel_master_if_missing(db, period_id=current.id, person_type="broker")
+
+    assert {(item.scope_type, item.scope_code) for item in copied} == {
+        ("month", ""), ("org", "10301"), ("branch", "BJ"),
+    }
+    assert all(Path(item.stored_path).exists() for item in copied)
+    assert db.query(PersonnelMasterImportBatch).filter(
+        PersonnelMasterImportBatch.period_id == current.id,
+        PersonnelMasterImportBatch.person_type == "broker",
+    ).count() == 3
+    assert not copy_previous_month_personnel_master_if_missing(db, period_id=current.id, person_type="broker")
     db.close()
 
 

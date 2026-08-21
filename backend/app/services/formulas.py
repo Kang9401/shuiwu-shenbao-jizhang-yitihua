@@ -346,6 +346,9 @@ def merge_staff_for_general_salary(salary: pd.DataFrame, staff_df: pd.DataFrame)
     staff["*姓名"] = text_series(staff, ["*姓名", "姓名", "员工姓名"])
     staff["*证件类型"] = text_series(staff, ["*证件类型", "证件类型"])
     staff["*证件号码"] = text_series(staff, ["*证件号码", "证件号码"])
+    staff["任职受雇从业日期"] = text_series(
+        staff, ["任职受雇从业日期", "入职日期", "入职时间"]
+    )
     staff["机构代码_人员信息表"] = text_series(staff, ["机构代码", "分支机构代码", "单位编号"]).map(normalize_org_code)
     active_col = first_existing(staff, ["人员状态"])
     if active_col:
@@ -428,13 +431,14 @@ def annual_bonus_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str,
 
 BROKER_DECLARATION_COLUMNS = [
     "工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入", "本期免税收入",
-    "累计个人养老金", "商业健康保险", "税延养老保险", "其他", "允许扣除的税费", "减免税额", "备注",
+    "累计个人养老金", "商业健康保险", "税延养老保险", "其他", "允许扣除的税费", "减免税额", "协定减免", "备注",
 ]
 
-INTERN_DECLARATION_COLUMNS = ["*姓名", "*证件类型", "证件号码", "*所得项目", "本期收入"]
+INTERN_DECLARATION_COLUMNS = list(BROKER_DECLARATION_COLUMNS)
 INTERN_ALLOWED_CERT_TYPES = {
     "居民身份证", "中国护照", "港澳居民来往内地通行证", "台湾居民来往大陆通行证", "外国护照",
 }
+INTERN_CERT_COUNTRY_DEFAULTS = {"台湾居民来往大陆通行证": "中国台湾"}
 
 
 def _clean_cell(value: Any) -> str:
@@ -442,6 +446,12 @@ def _clean_cell(value: Any) -> str:
         return ""
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "nat"} else text
+
+
+def _intern_country_default(cert_type: str, id_number: str) -> str:
+    if cert_type == "港澳居民来往内地通行证":
+        return "中国澳门" if id_number.upper().startswith("M") else "中国香港"
+    return INTERN_CERT_COUNTRY_DEFAULTS.get(cert_type, "")
 
 
 def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
@@ -629,10 +639,16 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         if not org_code:
             issues.append({"issue_type": "实习生机构未匹配", "message": f"实习生第 {source_row} 行 {name} 未填写有效机构代码，营业部也未匹配：{branch_name or '未填营业部'}"})
             continue
+        default_country = _intern_country_default(cert_type, id_number)
+        nationality = (
+            _clean_cell(row.get("*国籍(地区)"))
+            or _clean_cell(row.get("出生国家(地区)"))
+            or default_country
+        )
         if cert_type != "居民身份证":
             foreign_missing = [
                 field for field, value in {
-                    "国籍(地区)": _clean_cell(row.get("*国籍(地区)")),
+                    "国籍(地区)": nationality,
                     "性别": _clean_cell(row.get("*性别")),
                     "出生日期": _clean_cell(row.get("*出生日期")),
                 }.items() if not value
@@ -642,12 +658,15 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
                 continue
         rows.append({
             "分支机构代码": org_code,
+            "工号": _clean_cell(row.get("工号", row.get("员工编号", row.get("人员编号")))),
             "*姓名": name,
             "*证件类型": cert_type,
-            "证件号码": id_number,
-            "*国籍(地区)": _clean_cell(row.get("*国籍(地区)")),
+            "*证件号码": id_number,
+            "*国籍(地区)": nationality,
             "*性别": _clean_cell(row.get("*性别")),
             "*出生日期": _clean_cell(row.get("*出生日期")),
+            "出生国家(地区)": nationality,
+            "涉税事由": "提供临时劳务" if cert_type != "居民身份证" else "",
             "任职受雇从业日期": row.get("实习开始时间", ""),
             "手机号码": _clean_cell(row.get("联系方式", row.get("手机号码"))),
             "人员状态": "正常",
@@ -686,6 +705,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
     issues: List[Dict[str, Any]] = []
     interest_source_withheld_warnings = 0
     declaration_validation_issues = 0
+    half_rate_adjustments: list[dict[str, Any]] = []
 
     if not xsg.empty:
         xsg["机构代码"] = text_series(xsg, ["机构代码", "分支机构代码"]).map(normalize_org_code)
@@ -738,12 +758,16 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
 
     if not lxs.empty:
         lxs["机构代码"] = text_series(lxs, ["机构代码", "分支机构代码"]).map(normalize_org_code)
-        rate = text_series(lxs, ["税率（%）", "*税率"], "0").str.rstrip("%")
-        lxs["利息税申报金额"] = number_series(lxs, ["债券兑息", "*收入"])
+        rate = text_series(lxs, ["税率（%）", "税率(%)", "*税率"], "0").str.rstrip("%")
+        lxs["利息税原始收入"] = number_series(lxs, ["债券兑息", "*收入"])
+        lxs["利息税申报金额"] = lxs["利息税原始收入"]
         lxs_name = text_series(lxs, ["客户姓名", "姓名", "*姓名"])
         lxs_cert_type = text_series(lxs, ["证件类型", "*证件类型"])
         lxs_cert_number = text_series(lxs, ["证件号码", "*证件号码", "身份证号码"])
         numeric_rate = pd.to_numeric(rate, errors="coerce").fillna(0)
+        actual_withheld_columns = ["实际扣缴税额", "实际扣缴税额（元）", "兑息扣税", "扣缴税额"]
+        actual_withheld = number_series(lxs, actual_withheld_columns)
+        source_withheld_present = text_series(lxs, actual_withheld_columns) != ""
         for idx in lxs.index:
             missing = [
                 label for label, value in [
@@ -755,21 +779,45 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
             ]
             if lxs.at[idx, "利息税申报金额"] <= 0:
                 missing.append("收入")
-            if numeric_rate.at[idx] <= 0 or numeric_rate.at[idx] > 100:
+            if numeric_rate.at[idx] not in {10, 20}:
                 missing.append("税率")
             if missing:
                 declaration_validation_issues += 1
                 issues.append({
-                    "issue_type": "利息税申报必填项异常",
+                    "issue_type": "interest_invalid_rate" if "税率" in missing else "利息税申报必填项异常",
                     "message": f"利息税源表第 {int(idx) + 2} 行 {lxs_name.at[idx] or '未填姓名'} 缺失或无效：{'、'.join(missing)}",
                     "row_number": int(idx) + 2,
                     "missing_fields": missing,
                 })
+                continue
+            if numeric_rate.at[idx] == 10:
+                original_income = float(lxs.at[idx, "利息税原始收入"])
+                adjusted_income = round(original_income / 2, 2)
+                if source_withheld_present.at[idx]:
+                    adjusted_income = round(float(actual_withheld.at[idx]) / 0.2, 2)
+                lxs.at[idx, "利息税申报金额"] = adjusted_income
+                note = (
+                    f"原税率10%，税局导入税率固定20%；收入由{original_income:.2f}调整为"
+                    f"{adjusted_income:.2f}"
+                )
+                lxs.at[idx, "利息税调整说明"] = note
+                adjustment = {
+                    "issue_type": "interest_half_rate_adjustment",
+                    "severity": "warning",
+                    "message": note,
+                    "row_number": int(idx) + 2,
+                    "name": lxs_name.at[idx],
+                    "original_rate": 10,
+                    "output_rate": 20,
+                    "original_income": original_income,
+                    "adjusted_income": adjusted_income,
+                }
+                half_rate_adjustments.append(adjustment)
+                issues.append(adjustment)
+        lxs["利息税输出税率"] = "20%"
         lxs["利息税税费(申报表)"] = (
-            lxs["利息税申报金额"] * numeric_rate / 100
+            lxs["利息税申报金额"] * 0.2
         ).round(2)
-        actual_withheld = number_series(lxs, ["兑息扣税"])
-        source_withheld_present = text_series(lxs, ["兑息扣税"]) != ""
         source_withheld_mismatch = source_withheld_present & (
             (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() > 0.01
         )
@@ -829,6 +877,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
         "interest_declared_amount": float(lxs.get("利息税申报金额", pd.Series(dtype=float)).sum()),
         "interest_withheld_tax": float(lxs.get("利息税税费(申报表)", pd.Series(dtype=float)).sum()),
         "interest_source_withheld_warnings": interest_source_withheld_warnings,
+        "interest_half_rate_adjustments": len(half_rate_adjustments),
     }
     metrics["total_records"] = metrics["restricted_stock_records"] + metrics["interest_records"]
     metrics["total_declared_amount"] = metrics["restricted_stock_declared_amount"] + metrics["interest_declared_amount"]
@@ -839,6 +888,9 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
         "issues": issues,
         "metrics": metrics,
         "reconciliation_rows": reconciliation_rows,
+        "extra_sheets": {
+            "利息税减半调整记录": pd.DataFrame(half_rate_adjustments),
+        },
         "block_declarations": declaration_validation_issues > 0,
     }
 

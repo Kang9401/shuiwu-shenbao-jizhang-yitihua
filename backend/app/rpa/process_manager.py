@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,6 +13,7 @@ class ProcessManager:
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
         self._cancelled = False
+        self._cancel_file: Path | None = None
 
     @property
     def running(self) -> bool:
@@ -24,8 +26,12 @@ class ProcessManager:
                 raise RuntimeError("已有 RPA 任务正在运行")
             env = os.environ.copy()
             env.update(PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+            cancel_file = cwd / f".rpa-cancel-{uuid.uuid4().hex}"
+            cancel_file.unlink(missing_ok=True)
+            env["ETAX_RPA_CANCEL_FILE"] = str(cancel_file)
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             self._cancelled = False
+            self._cancel_file = cancel_file
             self._process = subprocess.Popen(
                 command, cwd=str(cwd), env=env, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1, creationflags=flags,
@@ -50,7 +56,13 @@ class ProcessManager:
             cancelled = self._cancelled
             if self._process is process:
                 self._process = None
-        on_exit(code, cancelled)
+            cancel_file = self._cancel_file
+            self._cancel_file = None
+        try:
+            on_exit(code, cancelled)
+        finally:
+            if cancel_file:
+                cancel_file.unlink(missing_ok=True)
 
     def stop(self) -> bool:
         with self._lock:
@@ -58,12 +70,24 @@ class ProcessManager:
             if process is None or process.poll() is not None:
                 return False
             self._cancelled = True
-            process.terminate()
+            cancel_file = self._cancel_file
+            if cancel_file:
+                cancel_file.write_text("cancelled\n", encoding="ascii")
         try:
-            process.wait(timeout=3)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False, capture_output=True, shell=False)
             else:
-                process.kill()
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"RPA 进程树未能停止，残留 PID：{process.pid}") from exc
+        if process.poll() is None:
+            raise RuntimeError(f"RPA 进程仍在运行，残留 PID：{process.pid}")
         return True

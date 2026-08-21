@@ -61,7 +61,7 @@ def _normalize_master(frame: pd.DataFrame) -> list[dict[str, str]]:
             "gender": _first_value(row, ["性别", "*性别"]),
             "birth_date": _first_value(row, ["出生日期", "*出生日期"]),
             "phone": _first_value(row, ["手机号码", "手机", "联系电话"]),
-            "hire_date": _first_value(row, ["任职受雇从业日期", "入职日期"]),
+            "hire_date": _first_value(row, ["任职受雇从业日期", "入职日期", "入职时间"]),
             "leave_date": _first_value(row, ["离职日期"]),
             "org_code": _first_value(row, ["机构代码", "机构代码(人员信息表)", "机构代码(工资单)"]),
             "status": _first_value(row, ["人员状态", "*人员状态", "状态"]),

@@ -1,14 +1,17 @@
 from pathlib import Path
+import shutil
 
 import pytest
 
 from app.rpa import runtime
-from app.rpa.protected_files import PROTECTED_SHA256
+from app.rpa.protected_files import PROTECTED_SHA256, UNPROTECTED_DOCUMENTATION
 
 
 def test_protected_vendor_files_match_baseline():
     root = Path(__file__).parents[1] / "vendor" / "etax_rpa"
-    assert set(path.name for path in root.iterdir() if path.is_file()) == set(PROTECTED_SHA256)
+    vendor_files = {path.name for path in root.iterdir() if path.is_file()}
+    assert UNPROTECTED_DOCUMENTATION <= vendor_files
+    assert vendor_files - UNPROTECTED_DOCUMENTATION == set(PROTECTED_SHA256)
     for name, expected in PROTECTED_SHA256.items():
         assert runtime.sha256_file(root / name) == expected
 
@@ -36,6 +39,21 @@ def test_runtime_copy_repairs_protected_file_and_preserves_data(tmp_path, monkey
         Path(runtime.__file__).with_name("extensions") / "etax_extra_income_reports.py"
     ).read_bytes()
     assert (app / "etax_runtime_compat.py").is_file()
+
+
+def test_runtime_ignores_documentation_changes(tmp_path, monkeypatch):
+    source_vendor = Path(__file__).parents[1] / "vendor" / "etax_rpa"
+    vendor = tmp_path / "vendor"
+    shutil.copytree(source_vendor, vendor)
+    (vendor / "用户操作说明.md").write_text("updated documentation", encoding="utf-8")
+
+    monkeypatch.setattr(runtime, "vendor_dir", lambda: vendor)
+    monkeypatch.setattr(runtime, "runtime_app_dir", lambda: tmp_path / "app")
+    monkeypatch.setattr(runtime, "state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(runtime, "uploads_dir", lambda: tmp_path / "uploads")
+    monkeypatch.setattr(runtime, "helper_resource_dir", lambda: tmp_path / "helpers")
+
+    assert runtime.ensure_runtime_app() == tmp_path / "app"
 
 
 def test_runtime_rejects_missing_extension(tmp_path, monkeypatch):

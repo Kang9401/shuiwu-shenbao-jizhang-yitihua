@@ -63,6 +63,8 @@ def test_monthly_working_sheet_is_overwritten_per_period(tmp_path: Path, monkeyp
     artifacts = db.query(TaxMonthlyArtifact).all()
     assert len(artifacts) == 1
     assert artifacts[0].source_round_number == 2
+    assert artifacts[0].file_content == second.read_bytes()
+    assert artifacts[0].content_sha256
     saved = pd.read_excel(artifacts[0].stored_path)
     assert saved.iloc[0]["value"] == "second"
     db.close()

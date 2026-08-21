@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -56,6 +56,8 @@ class TaxMonthlyArtifact(Base):
     artifact_type: Mapped[str] = mapped_column(String(80), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_content: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    content_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source_session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     source_round_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

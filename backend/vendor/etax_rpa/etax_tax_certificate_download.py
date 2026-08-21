@@ -4,6 +4,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -19,11 +20,6 @@ from etax_batch_export import (
     default_month,
     ensure_withholding_page,
     set_tax_month,
-    drag_visible_slider_to_end,
-    close_security_dialog,
-    has_visible_security_dialog,
-    security_dialog,
-    SLIDER_STRATEGIES,
     log,
     make_context,
     month_label,
@@ -32,6 +28,28 @@ from etax_batch_export import (
     wait_for_user,
 )
 
+try:
+    from etax_report_download import (
+        SLIDER_STRATEGIES,
+        TaskCancelled,
+        check_cancelled,
+        interruptible_wait,
+        run_report_download,
+        solve_security_challenge,
+    )
+except ImportError:  # Source-tree execution before runtime synchronization.
+    extension_dir = Path(__file__).parents[2] / "app" / "rpa" / "extensions"
+    if str(extension_dir) not in sys.path:
+        sys.path.insert(0, str(extension_dir))
+    from etax_report_download import (  # type: ignore[no-redef]
+        SLIDER_STRATEGIES,
+        TaskCancelled,
+        check_cancelled,
+        interruptible_wait,
+        run_report_download,
+        solve_security_challenge,
+    )
+
 
 CDP_URL = "http://127.0.0.1:9222"
 
@@ -39,6 +57,40 @@ CDP_URL = "http://127.0.0.1:9222"
 def safe_filename_part(value: str) -> str:
     value = re.sub(r'[\\/:*?"<>|\s]+', "_", value.strip())
     return value.strip("_") or "未命名"
+
+
+def previous_month(month: str) -> str:
+    match = re.fullmatch(r"(\d{4})-(0[1-9]|1[0-2])", month)
+    if not match:
+        raise ValueError(f"月份格式无效：{month}")
+    year, value = map(int, match.groups())
+    return f"{year - 1 if value == 1 else year}-{12 if value == 1 else value - 1:02d}"
+
+
+def certificate_filename(org: TaxOrg, payment_month: str, item: dict) -> str:
+    declaration_month = previous_month(payment_month)
+    return (
+        f"{declaration_month}_"
+        f"{safe_filename_part(org.code)}_"
+        f"{safe_filename_part(org.name)}_"
+        f"个税完税证明_"
+        f"{safe_filename_part(item['report_type'])}_"
+        f"{item['ticket_suffix']}.pdf"
+    )
+
+
+def comprehensive_report_filename(org: TaxOrg, target_month: str, suggested_filename: str) -> str:
+    suffix = Path(suggested_filename).suffix or ".xlsx"
+    report_name = safe_filename_part(Path(suggested_filename).stem)
+    for identifier in (safe_filename_part(org.code), safe_filename_part(org.name)):
+        report_name = report_name.replace(identifier, "")
+    report_name = report_name.strip("_-") or "综合所得申报表"
+    return (
+        f"{target_month}_"
+        f"{safe_filename_part(org.code)}_"
+        f"{safe_filename_part(org.name)}_"
+        f"{report_name}{suffix}"
+    )
 
 
 def unique_path(path: Path) -> Path:
@@ -286,24 +338,19 @@ def save_captured_pdf_blob(page: Page, target: Path, timeout_seconds: int = 60) 
     target.write_bytes(data)
 
 
-def download_certificate_for_row(page: Page, org: TaxOrg, target_month: str, item: dict) -> Path:
+def download_certificate_for_row(page: Page, org: TaxOrg, payment_month: str, item: dict) -> Path:
     report_type = item["report_type"]
     ticket_suffix = item["ticket_suffix"]
-    filename = (
-        f"{target_month}_"
-        f"{safe_filename_part(org.code)}_"
-        f"{safe_filename_part(org.name)}_"
-        f"{safe_filename_part(report_type)}_"
-        f"{ticket_suffix}.pdf"
-    )
+    filename = certificate_filename(org, payment_month, item)
     target = reusable_or_skip_path(OUTPUT_DIR / filename)
     if target is None:
         return OUTPUT_DIR / filename
     last_error: Exception | None = None
 
     for attempt in range(1, 4):
+        check_cancelled()
         try:
-            page.wait_for_timeout(1000)
+            interruptible_wait(page, 1000)
             log(f"下载完税证明：{report_type}，电子税票后四位：{ticket_suffix}，第 {attempt} 次")
             current_rows = extract_payment_rows(page)
             current = next((row for row in current_rows if row["ticket"] == item["ticket"]), item)
@@ -311,24 +358,26 @@ def download_certificate_for_row(page: Page, org: TaxOrg, target_month: str, ite
             select_row(current)
             install_pdf_blob_hook(page)
             clear_captured_pdf_blobs(page)
-            page.wait_for_timeout(1000)
+            interruptible_wait(page, 1000)
             with page.expect_response(lambda response: "/web/dkdj/levy/kjsbsk/wszmkj" in response.url, timeout=30000):
                 page.get_by_role("button", name="完税证明", exact=True).click()
                 confirm = page.locator(".el-message-box__wrapper:visible, .el-dialog:visible").filter(has_text="确定")
                 confirm.first.wait_for(state="visible", timeout=10000)
-                page.wait_for_timeout(1000)
+                interruptible_wait(page, 1000)
                 confirm.first.get_by_role("button", name="确定", exact=True).click()
 
             save_captured_pdf_blob(page, target)
             close_pdf_tabs(page)
             log(f"已保存完税证明：{target}")
             return target
+        except TaskCancelled:
+            raise
         except Exception as exc:
             last_error = exc
             log(f"本次下载未成功，准备重试：{exc}")
             close_common_popups(page)
             close_pdf_tabs(page)
-            page.wait_for_timeout(3000)
+            interruptible_wait(page, 3000)
 
     raise RuntimeError(f"完税证明下载失败：{report_type}，电子税票后四位：{ticket_suffix}") from last_error
 
@@ -340,61 +389,86 @@ def enter_comprehensive_income_page(page: Page, target_month: str) -> None:
     page.wait_for_load_state("domcontentloaded", timeout=20000)
     page.wait_for_timeout(1500)
     close_common_popups(page)
-    if page.get_by_text("税款所属月份", exact=False).filter(visible=True).count() == 0:
+    if (
+        not is_comprehensive_income_overview_url(page.url)
+        or page.get_by_text("税款所属月份", exact=False).filter(visible=True).count() == 0
+    ):
         log("菜单点击后未进入综合所得申报，使用页面路由兜底进入")
         page.evaluate("location.hash = '#/withholding/income_declaration'")
         page.wait_for_load_state("domcontentloaded", timeout=20000)
         page.wait_for_timeout(1800)
         close_common_popups(page)
+    if not is_comprehensive_income_overview_url(page.url):
+        raise RuntimeError(f"未进入综合所得申报总览页，当前页面：{page.url}")
+    page.get_by_text("税款所属月份", exact=False).filter(visible=True).first.wait_for(
+        state="visible", timeout=15000
+    )
     set_tax_month(page, target_month)
 
 
-def open_withholding_report_export(page: Page) -> None:
+def is_comprehensive_income_overview_url(url: str) -> bool:
+    route = urlsplit(url).fragment.split("?", 1)[0].rstrip("/")
+    return route == "/withholding/income_declaration"
+
+
+def visible_comprehensive_income_status(page: Page) -> str:
+    for status in ("申报成功", "未申报", "申报失败", "申报处理中", "待申报", "未完成"):
+        if page.get_by_text(status, exact=True).filter(visible=True).count() > 0:
+            return status
+    return "未显示申报成功状态"
+
+
+def open_withholding_report_export(page: Page) -> bool:
     log("点击导出 -> 个人所得税扣缴申报表")
+    close_common_popups(page)
+    if not is_comprehensive_income_overview_url(page.url):
+        raise RuntimeError(f"当前不是综合所得申报总览页，无法导出申报表：{page.url}")
     export_button = page.locator(".dropdown-export button, button", has_text="导出").filter(visible=True).first
-    export_button.wait_for(state="visible", timeout=15000)
+    try:
+        export_button.wait_for(state="visible", timeout=15000)
+    except PlaywrightTimeoutError as exc:
+        status = visible_comprehensive_income_status(page)
+        if status == "申报成功":
+            raise RuntimeError("综合所得申报状态为“申报成功”，但页面没有显示导出按钮") from exc
+        log(f"综合所得申报状态为“{status}”，没有申报成功记录，正常跳过")
+        return False
     export_button.click()
     item = page.locator(".el-dropdown-menu:visible .el-dropdown-menu__item", has_text="个人所得税扣缴申报表").first
     item.wait_for(state="visible", timeout=10000)
     item.click()
+    return True
 
 
 def solve_report_export_security(page: Page, max_attempts: int = 5) -> None:
-    try:
-        security_dialog(page).wait_for(state="visible", timeout=12000)
-    except PlaywrightTimeoutError:
-        log("未出现安全验证滑块，继续后续确认")
-        return
+    solve_security_challenge(
+        page,
+        lambda: open_withholding_report_export(page),
+        strategies=SLIDER_STRATEGIES[:max_attempts],
+        success_check=lambda: has_visible_confirm_export(page),
+        log=log,
+    )
 
-    for attempt, strategy in enumerate(SLIDER_STRATEGIES[:max_attempts], start=1):
-        if not has_visible_security_dialog(page):
-            return
-        log(f"安全验证第 {attempt} 次尝试：{strategy['name']}")
-        try:
-            try:
-                page.locator("#aliyunCaptcha-sliding-slider, #aliyunCaptcha-sliding-body").filter(visible=True).first.wait_for(
-                    state="visible", timeout=5000
-                )
-            except PlaywrightTimeoutError:
-                pass
-            if drag_visible_slider_to_end(page, strategy):
-                log("安全验证已通过")
-                return
-        except Exception as exc:
-            log(f"安全验证策略失败：{exc}")
-        if has_visible_security_dialog(page):
-            log("安全验证未通过，关闭当前验证弹框并重新发起导出")
-            close_security_dialog(page)
-            open_withholding_report_export(page)
-            security_dialog(page).wait_for(state="visible", timeout=12000)
 
-    raise RuntimeError("多次尝试安全验证滑块仍未通过，请手动拖动当前弹框后再继续。")
+def export_confirmation_dialog(page: Page):
+    return page.locator(".el-message-box__wrapper:visible, .el-dialog:visible").filter(
+        has_text="确定", has_not_text="安全验证"
+    )
+
+
+def has_visible_confirm_export(page: Page) -> bool:
+    return export_confirmation_dialog(page).count() == 1
 
 
 def confirm_report_export(page: Page) -> None:
-    confirm = page.locator(".el-message-box__wrapper:visible, .el-dialog:visible").filter(has_text="确定").first
-    confirm.wait_for(state="visible", timeout=20000)
-    confirm.get_by_role("button", name="确定", exact=True).click()
+    dialogs = export_confirmation_dialog(page)
+    dialogs.first.wait_for(state="visible", timeout=20000)
+    if dialogs.count() != 1:
+        raise RuntimeError(f"导出确认弹窗不是唯一匹配：{dialogs.count()}")
+    confirm = dialogs.first
+    buttons = confirm.get_by_role("button", name="确定", exact=True).filter(visible=True)
+    if buttons.count() != 1:
+        raise RuntimeError(f"导出确认按钮不是唯一匹配：{buttons.count()}")
+    buttons.first.click()
     log("已确认导出个人所得税扣缴申报表")
 
     message_box = page.locator(".el-message-box__wrapper:visible, .el-dialog:visible").filter(
@@ -412,6 +486,7 @@ def download_latest_export_record(page: Page, org: TaxOrg, target_month: str, ma
     row_locator = page.locator(".el-table__body-wrapper tbody tr, .el-table__row").filter(visible=True)
     last_text = ""
     for attempt in range(1, max_attempts + 1):
+        check_cancelled()
         try:
             row_locator.first.wait_for(state="visible", timeout=10000)
             row = row_locator.first
@@ -422,11 +497,9 @@ def download_latest_export_record(page: Page, org: TaxOrg, target_month: str, ma
                 with page.expect_download(timeout=30000) as download_info:
                     row.get_by_text("下载", exact=False).first.click()
                 download = download_info.value
-                suggested = safe_filename_part(Path(download.suggested_filename).stem)
-                suffix = Path(download.suggested_filename).suffix or ".xlsx"
                 target = unique_path(
                     OUTPUT_DIR
-                    / f"{target_month}_{safe_filename_part(org.code)}_{safe_filename_part(org.name)}_{suggested}{suffix}"
+                    / comprehensive_report_filename(org, target_month, download.suggested_filename)
                 )
                 download.save_as(str(target))
                 log(f"已下载综合所得申报表：{target}")
@@ -436,7 +509,7 @@ def download_latest_export_record(page: Page, org: TaxOrg, target_month: str, ma
 
         if attempt < max_attempts:
             log("处理未完成，等待5秒后刷新")
-            page.wait_for_timeout(5000)
+            interruptible_wait(page, 5000)
             try:
                 click_button(page, "刷新", exact=False, timeout=3000)
             except Exception:
@@ -445,17 +518,30 @@ def download_latest_export_record(page: Page, org: TaxOrg, target_month: str, ma
     raise TimeoutError(f"综合所得申报表导出记录未处理成功，最后状态：{last_text[:200]}")
 
 
-def download_comprehensive_income_report(page: Page, org: TaxOrg, target_month: str) -> Path:
-    page.wait_for_timeout(1000)
+def download_comprehensive_income_report(page: Page, org: TaxOrg, target_month: str) -> Path | None:
+    interruptible_wait(page, 1000)
     enter_comprehensive_income_page(page, target_month)
-    page.wait_for_timeout(1000)
-    open_withholding_report_export(page)
-    solve_report_export_security(page, max_attempts=len(SLIDER_STRATEGIES))
-    confirm_report_export(page)
-    return download_latest_export_record(page, org, target_month)
+    interruptible_wait(page, 1000)
+    status_text = visible_comprehensive_income_status(page)
+
+    def open_export() -> None:
+        if not open_withholding_report_export(page):
+            raise RuntimeError("综合所得申报状态与导出按钮不一致")
+
+    return run_report_download(
+        page,
+        report_title=f"{org.name}（{org.code}）综合所得申报表",
+        status_text=status_text,
+        open_export=open_export,
+        confirm_export=lambda: confirm_report_export(page),
+        download_export=lambda: download_latest_export_record(page, org, target_month),
+        success_check=lambda: has_visible_confirm_export(page),
+        log=log,
+    )
 
 
 def process_org(page: Page, org: TaxOrg, target_month: str, task: str = "all") -> tuple[Page, list[Path]]:
+    check_cancelled()
     log("=" * 70)
     if task in {"all", "tax_certificate"}:
         log(f"开始下载完税证明：{org.name}（{org.code}）")
@@ -479,6 +565,7 @@ def process_org(page: Page, org: TaxOrg, target_month: str, task: str = "all") -
             log(f"未查询到缴款记录，跳过完税证明下载：{org.name}（{org.code}）")
         else:
             for row in rows:
+                check_cancelled()
                 current_rows = extract_payment_rows(page)
                 current = next((item for item in current_rows if item["ticket"] == row["ticket"]), row)
                 downloaded.append(download_certificate_for_row(page, org, target_month, current))
@@ -487,8 +574,10 @@ def process_org(page: Page, org: TaxOrg, target_month: str, task: str = "all") -
         log(f"机构完税证明下载完成：{org.name}（{org.code}），共 {certificate_count} 个文件")
 
     if task in {"all", "income_report"}:
-        downloaded.append(download_comprehensive_income_report(page, org, target_month))
-        log(f"机构综合所得申报表下载完成：{org.name}（{org.code}），共 1 个文件")
+        income_report = download_comprehensive_income_report(page, org, target_month)
+        if income_report is not None:
+            downloaded.append(income_report)
+        log(f"机构综合所得申报表下载完成：{org.name}（{org.code}），共 {int(income_report is not None)} 个文件")
 
     if task == "all":
         log(f"机构完税证明及综合所得申报表下载完成：{org.name}（{org.code}），共 {len(downloaded)} 个文件")
@@ -560,6 +649,7 @@ def main() -> int:
 
             all_downloaded: list[Path] = []
             for org in orgs:
+                check_cancelled()
                 page, downloaded = process_org(page, org, args.month, args.task)
                 all_downloaded.extend(downloaded)
 

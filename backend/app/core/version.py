@@ -1,6 +1,7 @@
-PRODUCT_NAME = "税务申报核对工作台"
+# Keep the internal slug stable so existing LocalAppData data remains compatible.
+PRODUCT_NAME = "智能税务平台"
 APP_SLUG = "TaxWorkbench"
 APP_VERSION = "0.9.0"
 RULESET_VERSION = "2026.07"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 

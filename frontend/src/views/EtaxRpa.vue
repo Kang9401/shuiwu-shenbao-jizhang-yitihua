@@ -80,7 +80,7 @@
           <div class="rpa-toolbar">
             <el-button :icon="Monitor" @click="openRpaMonitor">打开监控窗口</el-button>
             <el-button :icon="RefreshRight" :disabled="running || !status?.can_resume" @click="confirmResume">从失败继续</el-button>
-            <el-button :icon="VideoPause" type="danger" :disabled="!running" @click="stopTask">停止任务</el-button>
+            <el-button :icon="VideoPause" type="danger" :disabled="!status?.can_stop" :loading="status?.current_run.status === 'stopping'" @click="stopTask">停止任务</el-button>
             <el-button :icon="CopyDocument" @click="copyLog">复制</el-button>
             <el-button :icon="Delete" @click="clearLog">清空</el-button>
           </div>
@@ -140,7 +140,7 @@ const pendingTask = ref<RpaTaskKey | null>(null)
 const pendingResume = ref(false)
 let timer: number | undefined
 
-const running = computed(() => ['starting', 'running'].includes(status.value?.current_run.status || ''))
+const running = computed(() => ['starting', 'running', 'stopping'].includes(status.value?.current_run.status || ''))
 const monthResults = computed(() => (status.value?.results || []).filter((item) => item.month === month.value))
 const resultSummary = computed(() => {
   const values = monthResults.value.flatMap((row) => resultColumns.map((column) => (row as any)[column.key]))
@@ -200,9 +200,31 @@ async function stopTask() { try { const { data } = await rpaApi.stopTask(); ElMe
 async function copyLog() { await navigator.clipboard.writeText(logText.value); ElMessage.success('日志内容已复制到剪贴板') }
 function clearLog() { logText.value = ''; logOffset.value = status.value?.current_run.run_id ? logOffset.value : 0 }
 function trackLogScroll() { if (logBox.value) autoScroll.value = logBox.value.scrollHeight - logBox.value.scrollTop - logBox.value.clientHeight < 24 }
-function saveBlob(blob: Blob, fileName: string) { if (!blob.size) throw new Error('下载文件为空'); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = fileName; link.style.display = 'none'; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 3000) }
-async function downloadOutput(file: RpaFile) { try { const response = await rpaApi.downloadFile(file.name); saveBlob(response.data instanceof Blob ? response.data : new Blob([response.data]), file.name) } catch (error: any) { ElMessage.error(detail(error, '下载失败')) } }
-async function downloadOutputArchive() { try { const response = await rpaApi.downloadArchive(); const disposition = response.headers['content-disposition'] || ''; const match = disposition.match(/filename\*=UTF-8''([^;]+)/i); const fileName = match ? decodeURIComponent(match[1]) : 'RPA输出文件.zip'; const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: 'application/zip' }); saveBlob(blob, fileName) } catch (error: any) { ElMessage.error(detail(error, 'ZIP 下载失败')) } }
+async function saveBlob(blob: Blob, fileName: string) {
+  if (!blob.size) throw new Error('下载文件为空')
+  const savePicker = (window as any).showSaveFilePicker
+  if (savePicker) {
+    const handle = await savePicker({
+      suggestedName: fileName,
+      types: [{ description: fileName.endsWith('.zip') ? 'ZIP 压缩包' : '下载文件', accept: { [blob.type || 'application/octet-stream']: [`.${fileName.split('.').pop()}`] } }],
+    })
+    const writable = await handle.createWritable()
+    await writable.write(blob)
+    await writable.close()
+    return
+  }
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
+async function downloadOutput(file: RpaFile) { try { const response = await rpaApi.downloadFile(file.name); await saveBlob(response.data instanceof Blob ? response.data : new Blob([response.data]), file.name) } catch (error: any) { if (error?.name !== 'AbortError') ElMessage.error(detail(error, '下载失败')) } }
+async function downloadOutputArchive() { try { const response = await rpaApi.downloadArchive(); const disposition = response.headers['content-disposition'] || ''; const match = disposition.match(/filename\*=UTF-8''([^;]+)/i); const fileName = match ? decodeURIComponent(match[1]) : 'RPA输出文件.zip'; const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: 'application/zip' }); await saveBlob(blob, fileName) } catch (error: any) { if (error?.name !== 'AbortError') ElMessage.error(detail(error, 'ZIP 下载失败')) } }
 async function clearOutputFiles() { try { await ElMessageBox.confirm('确认删除全部 RPA 输出文件？该操作无法撤销。', '一键清空', { type: 'warning', confirmButtonText: '确认清空' }); outputFiles.value = (await rpaApi.clearOutputFiles()).data; ElMessage.success('RPA 输出文件已清空') } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '清空失败')) } }
 function validate() { if (!props.periodId) throw new Error('请选择所属期间'); if (!month.value) throw new Error('请选择申报月份'); if (!organizations.value.length) throw new Error('当前期间没有可用机构'); if (!allOrgs.value && !selectedOrgCodes.value.length) throw new Error('请选择至少一个机构'); if (status.value?.chrome.status !== 'ready') throw new Error('请先初始化 Chrome 并完成手工登录') }
 function restoreMonth() { month.value = props.initialMonth; monthManuallyOverridden.value = false }

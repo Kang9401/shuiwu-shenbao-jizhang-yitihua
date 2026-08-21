@@ -2,6 +2,7 @@
 """个税申报 API 路由"""
 from __future__ import annotations
 
+import hashlib
 import shutil
 import logging
 from pathlib import Path
@@ -50,6 +51,7 @@ from app.services.verification import (
     build_working_sheet,
     detect_employee_id_only_changes,
     check_no_blocking_issues,
+    RetirementWelfareColumnSelectionError,
     report_for_json,
     verify,
     write_reconciliation_report,
@@ -137,11 +139,14 @@ def _upsert_monthly_artifact(
         return artifact
 
     shutil.copy2(source_path, dest)
+    content = source_path.read_bytes()
     if artifact is None:
         artifact = TaxMonthlyArtifact(period_id=period_id, artifact_type=artifact_type)
         db.add(artifact)
     artifact.file_name = file_name
     artifact.stored_path = str(dest)
+    artifact.file_content = content
+    artifact.content_sha256 = hashlib.sha256(content).hexdigest()
     artifact.source_session_id = session_id
     artifact.source_round_number = round_number
     return artifact
@@ -397,8 +402,10 @@ async def run_verify(
     headquarters_salary: Optional[UploadFile] = File(None),
     digital_ops_salary: Optional[UploadFile] = File(None),
     advisor_salary: Optional[UploadFile] = File(None),
+    retirement_welfare: Optional[UploadFile] = File(None),
     staff_change: Optional[UploadFile] = File(None),
     deduction_files: list[UploadFile] = File(default_factory=list),
+    retirement_welfare_column: str = Form(""),
     verification_stage: str = Form("initial"),
     db: Session = Depends(get_db),
 ):
@@ -412,6 +419,7 @@ async def run_verify(
     round_num = session.current_round
     uploaded: list[dict] = []
     payroll_files: list[tuple[str, str]] = []
+    retirement_welfare_path = ""
 
     for role, upload in [
         ("rank_salary", rank_salary),
@@ -425,6 +433,10 @@ async def run_verify(
             path, _ = save_upload(upload, session.period_id, role)
             uploaded.append({"file_role": role, "original_name": upload.filename, "stored_path": str(path)})
             payroll_files.append((role, str(path)))
+    if retirement_welfare:
+        path, _ = save_upload(retirement_welfare, session.period_id, "retirement_welfare")
+        uploaded.append({"file_role": "retirement_welfare", "original_name": retirement_welfare.filename, "stored_path": str(path)})
+        retirement_welfare_path = str(path)
     try:
         payroll_files = normalize_payroll_files(payroll_files)
     except ValueError as exc:
@@ -515,9 +527,19 @@ async def run_verify(
         # 构建底稿 + 核对
         taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(db)
         effective_staff_path = (personnel_update_result or {}).get("updated_staff_path", source_staff_path)
-        review_sheet, review_staff_df = build_working_sheet(
-            payroll_files, effective_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids
-        )
+        try:
+            review_sheet, review_staff_df = build_working_sheet(
+                payroll_files, effective_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids,
+                retirement_welfare_path, retirement_welfare_column,
+            )
+        except RetirementWelfareColumnSelectionError as exc:
+            session.status = "needs_review"
+            db.commit()
+            raise HTTPException(status_code=422, detail={
+                "code": "retirement_welfare_column_required",
+                "message": str(exc),
+                "columns": exc.columns,
+            }) from exc
         employee_id_changes = detect_employee_id_only_changes(review_sheet, review_staff_df)
         if employee_id_changes:
             update_dir = artifact_path / "employee_id_updates"
@@ -537,6 +559,7 @@ async def run_verify(
             build_working_sheet(
                 payroll_files, effective_staff_path, deduction_dir,
                 taxpayer_org_map, duplicate_taxpayer_ids,
+                retirement_welfare_path, retirement_welfare_column,
             )
             if employee_id_changes
             else (review_sheet, review_staff_df)
@@ -646,6 +669,8 @@ async def run_verify(
             "report": stored_report,
             "artifacts": artifacts,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("工资薪金核对失败")
         db.rollback()
@@ -850,9 +875,15 @@ def download_monthly_working_sheet(period_id: int, db: Session = Depends(get_db)
     if not artifact:
         raise HTTPException(status_code=404, detail="该月份尚未保存底稿")
     fp = Path(artifact.stored_path)
-    if not fp.exists():
-        raise HTTPException(status_code=404, detail="底稿文件不存在")
-    return FileResponse(fp, filename=artifact.file_name)
+    if fp.exists():
+        return FileResponse(fp, filename=artifact.file_name)
+    if artifact.file_content:
+        return Response(
+            content=artifact.file_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{artifact.file_name}"'},
+        )
+    raise HTTPException(status_code=404, detail="底稿文件不存在")
 
 
 @router.get("/round-files/{session_id}/{round_number}/{file_path:path}")

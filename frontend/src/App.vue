@@ -7,7 +7,7 @@
   <div v-else-if="!selectedCompany" class="company-entry">
     <header class="company-entry-header">
       <span class="brand-mark"><el-icon><Tickets /></el-icon></span>
-      <div><h1>税务申报核对工作台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
+      <div><h1>智能税务平台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
     </header>
     <div class="company-entry-grid">
       <section class="company-entry-list">
@@ -36,7 +36,7 @@
           <el-icon><Tickets /></el-icon>
         </span>
         <div class="brand-text">
-          <strong>税务申报核对</strong>
+            <strong>智能税务平台</strong>
           <small>工作台</small>
         </div>
       </div>

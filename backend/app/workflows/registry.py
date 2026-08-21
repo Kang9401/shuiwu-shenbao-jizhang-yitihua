@@ -21,7 +21,10 @@ from app.services.formulas import (
     INTERN_DECLARATION_COLUMNS,
     restricted_stock_interest_transform,
 )
-from app.services.personnel_master import PersonnelMasterResolver
+from app.services.personnel_master import (
+    PersonnelMasterResolver,
+    copy_previous_month_personnel_master_if_missing,
+)
 from app.services.organization_mapping import active_mapping_dict
 from app.services.reconciliation_import import read_balance_sheet
 from app.services.personnel_update import (
@@ -190,7 +193,7 @@ class TaxTransformWorkflow(ExcelWorkflow):
             file_name = f"{org_text}_{self.split_file_label}({year}年{month:02d}月).xlsx"
             output = artifact_path(job_id, file_name)
             export = group.drop(columns=[org_col], errors="ignore")
-            write_workbook(output, {self.detail_sheet: export})
+            write_workbook(output, {self.detail_sheet: export}, text_values=True)
             artifacts.append((self.split_artifact_type, str(output)))
         return artifacts
 
@@ -217,6 +220,12 @@ class TaxTransformWorkflow(ExcelWorkflow):
         files: list[UploadedFile],
         operation: str = "generate",
     ) -> WorkflowResult:
+        if db is not None and period_id is not None and self.person_type == "broker" and not any(file.file_role == "staff_info" for file in files):
+            copy_previous_month_personnel_master_if_missing(
+                db,
+                period_id=period_id,
+                person_type="broker",
+            )
         files, used_shared_staff_info = _inject_shared_staff_info(db, period_id, files, self.person_type)
         is_balance_reconciliation = self.supports_balance_reconciliation and operation == "reconcile"
         files, used_period_balance_sheet = (
@@ -520,9 +529,6 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
         rows: list[dict[str, Any]] = []
         for _, row in source.fillna("").iterrows():
             cert_type = cls._declaration_text(row, ["证件类型", "*证件类型"])
-            rate = cls._declaration_text(row, ["税率（%）", "税率(%)", "*税率"])
-            if rate and not rate.endswith("%"):
-                rate = f"{rate}%"
             rows.append({
                 "工号": cls._declaration_text(row, ["工号", "员工编号"]),
                 "*姓名": cls._declaration_text(row, ["客户姓名", "姓名", "*姓名"]),
@@ -530,14 +536,14 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
                 "*证件号码": cls._declaration_text(row, ["证件号码", "*证件号码", "身份证号码"]),
                 "*所得项目": cls._declaration_text(row, ["所得项目", "*所得项目"], "其他利息、股息、红利所得"),
                 "上市板块": cls._declaration_text(row, ["上市板块"]),
-                "*收入": cls._declaration_number(row, ["债券兑息", "*收入"]),
+                "*收入": cls._declaration_number(row, ["利息税申报金额", "债券兑息", "*收入"]),
                 "免税收入": cls._declaration_number(row, ["免税收入"]),
                 "准予扣除的捐赠额": cls._declaration_number(row, ["准予扣除的捐赠额"]),
-                "*税率": rate,
+                "*税率": "20%",
                 "协定税率": cls._declaration_text(row, ["协定税率"]),
                 "减免税额": cls._declaration_number(row, ["减免税额"]),
                 "协定减免": cls._declaration_number(row, ["协定减免"]),
-                "备注": "",
+                "备注": cls._declaration_text(row, ["利息税调整说明", "备注"]),
             })
         return pd.DataFrame(rows, columns=columns)
 
@@ -562,7 +568,7 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
                 if not org_text or org_text.lower() == "nan":
                     continue
                 output = artifact_path(job_id, f"{org_text}{label}({year}年{month:02d}月).xlsx")
-                write_workbook(output, {"Sheet1": builder(group)})
+                write_workbook(output, {"Sheet1": builder(group)}, text_values=True)
                 artifacts.append(("declaration", str(output)))
         return artifacts
 
@@ -575,20 +581,29 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
     ) -> list[tuple[str, str]]:
         rows: list[dict[str, str]] = []
         for _, row in detail.fillna("").iterrows():
+            is_restricted_stock = _row_first_text(row, ["所得类型"]) == "限售股"
             name = _row_first_text(row, ["客户姓名", "姓名", "*姓名"])
             id_number = _row_first_text(row, ["证件号码", "*证件号码", "身份证号码"])
             org_code = _row_first_text(row, ["机构代码", "分支机构代码", "公司段"])
             if not name or not id_number or not org_code:
                 continue
+            cert_type = _row_first_text(row, ["证件类型", "*证件类型"]) or "居民身份证"
+            if is_restricted_stock and cert_type == "身份证":
+                cert_type = "居民身份证"
             rows.append({
                 "*姓名": name,
-                "证件类型": _row_first_text(row, ["证件类型", "*证件类型"]) or "居民身份证",
+                "证件类型": cert_type,
                 "证件号码": id_number,
                 "国籍(地区)": _row_first_text(row, ["国籍(地区)", "国籍"]) or "中国",
                 "性别": _row_first_text(row, ["性别", "客户性别"]),
                 "出生日期": _row_first_text(row, ["出生日期", "生日", "出生年月日"]),
                 "人员状态": "正常",
                 "任职受雇从业类型": "其他",
+                "其他情况说明": (
+                    "申报其他所得"
+                    if is_restricted_stock
+                    else "扣缴申报利息股息红利所得"
+                ),
                 "手机号码": _row_first_text(row, ["手机号码", "客户手机号码"]),
                 "任职受雇从业日期": "",
                 "离职日期": "",
@@ -667,7 +682,11 @@ class InternTaxWorkflow(TaxTransformWorkflow):
             if not org_text or org_text.lower() == "nan":
                 continue
             output = artifact_path(job_id, f"{org_text}_4-个税申报表_实习生({year}年{month:02d}月).xlsx")
-            write_workbook(output, {"Sheet1": group.reindex(columns=INTERN_DECLARATION_COLUMNS)})
+            write_workbook(
+                output,
+                {"Sheet1": group.reindex(columns=INTERN_DECLARATION_COLUMNS)},
+                text_values=True,
+            )
             artifacts.append(("declaration", str(output)))
         return artifacts
 
@@ -682,6 +701,7 @@ class InternTaxWorkflow(TaxTransformWorkflow):
             return []
         collection = detail.rename(columns={
             "*证件类型": "证件类型",
+            "*证件号码": "证件号码",
             "*国籍(地区)": "国籍(地区)",
             "*性别": "性别",
             "*出生日期": "出生日期",
@@ -735,7 +755,11 @@ class BrokerTaxWorkflow(TaxTransformWorkflow):
             if not org_text or org_text.lower() == "nan":
                 continue
             output = artifact_path(job_id, f"{org_text}_5-个税申报_经纪人({year}年{month:02d}月).xlsx")
-            write_workbook(output, {"Sheet1": group.reindex(columns=BROKER_DECLARATION_COLUMNS)})
+            write_workbook(
+                output,
+                {"Sheet1": group.reindex(columns=BROKER_DECLARATION_COLUMNS)},
+                text_values=True,
+            )
             artifacts.append(("declaration", str(output)))
         return artifacts
 

@@ -189,7 +189,7 @@ export interface RpaStatus {
     period_id?: number | null
     display_name?: string | null
     org_codes?: string[]
-    status: 'idle' | 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+    status: 'idle' | 'starting' | 'running' | 'stopping' | 'succeeded' | 'failed' | 'cancelled'
     current_org_code: string | null
     current_org_name: string | null
   }
@@ -250,6 +250,7 @@ export interface OrganizationMapping {
   active: boolean
   rpa_enabled: boolean
   rpa_org_name: string
+  rpa_search_result_index: number
   parent_branch: string
   updated_at: string
 }
@@ -324,6 +325,22 @@ export interface VerifyReport {
   key_field_missing?: { has_issues: boolean; items: any[] }
   personnel_update_issues?: { match_failures: any[]; duplicate_additions: any[]; multiple_matches: any[] }
   headcount_reconciliation?: { has_issues: boolean; items: any[] }
+  retirement_welfare?: {
+    items: Array<{
+      name: string
+      org_code: string
+      id_number: string
+      welfare_column: string
+      welfare_amount: number
+      payroll_exists: boolean
+      personnel_status: string
+      match_method: string
+      payroll_taxable_adjustment: number
+      status: string
+      action: string
+      blocking: boolean
+    }>
+  }
 }
 
 export interface GeneratedFile {
@@ -438,9 +455,9 @@ export const systemApi = {
 
 export const organizationMappingApi = {
   list: () => api.get<OrganizationMapping[]>('/organization-mappings'),
-  create: (payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; parent_branch: string }) =>
+  create: (payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string }) =>
     api.post<OrganizationMapping>('/organization-mappings', payload),
-  update: (id: number, payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; parent_branch: string }) =>
+  update: (id: number, payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string }) =>
     api.put<OrganizationMapping>(`/organization-mappings/${id}`, payload),
   importFile: (file: File) => {
     const form = new FormData()

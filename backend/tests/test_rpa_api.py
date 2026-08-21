@@ -1,4 +1,6 @@
+import io
 from pathlib import Path
+import zipfile
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -21,6 +23,12 @@ class StubService:
 
     def resolve_output(self, name):
         raise ValueError("输出文件不存在")
+
+    def build_output_archive(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("测试输出.xlsx", b"workbook-content")
+        return "RPA输出文件.zip", buffer.getvalue()
 
 
 def client(monkeypatch):
@@ -47,6 +55,16 @@ def test_org_excel_validation(monkeypatch):
 
 def test_missing_output_is_rejected(monkeypatch):
     assert client(monkeypatch).get("/api/rpa/files/download", params={"name": "../secret.txt"}).status_code == 400
+
+
+def test_output_archive_is_returned_as_a_valid_zip(monkeypatch):
+    response = client(monkeypatch).get("/api/rpa/files/archive")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "filename*=UTF-8''" in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.read("测试输出.xlsx") == b"workbook-content"
 
 
 def test_state_store_recovers_interrupted_run(tmp_path):

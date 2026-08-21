@@ -3,14 +3,256 @@ from pathlib import Path
 import pandas as pd
 
 from app.services.verification import (
+    RetirementWelfareColumnSelectionError,
     analyze_deduction_matches,
     apply_deduction_matches,
+    build_working_sheet,
     build_reconciliation_report,
     check_deduction_issues,
     check_payroll_org_format,
     check_personnel_changes,
     verify,
+    load_retirement_welfare,
 )
+
+
+def _retirement_welfare_file(path: Path, headers: list[str], rows: list[list[object]]) -> Path:
+    values = [
+        ["2026年法定退休员工慰问发放明细"],
+        ["统计时点：2026年6月30日"],
+        headers,
+        *rows,
+    ]
+    pd.DataFrame(values).to_excel(path, index=False, header=False)
+    return path
+
+
+def test_retirement_welfare_detects_variable_header_and_requires_choice_for_multiple_columns(tmp_path: Path):
+    source = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["序号", "姓名", "机构段（5位代码）", "春节慰问，2500元/人", "体检慰问，2000元/人"],
+        [[1, "张三", "13248", 2500, 2000]],
+    )
+
+    try:
+        load_retirement_welfare(str(source))
+    except RetirementWelfareColumnSelectionError as exc:
+        assert exc.columns == ["春节慰问，2500元/人", "体检慰问，2000元/人"]
+    else:
+        raise AssertionError("expected manual column selection")
+
+    result = load_retirement_welfare(str(source), "体检慰问，2000元/人")
+    assert result.to_dict(orient="records") == [{
+        "姓名": "张三", "机构代码": "13248", "慰问金额": 2000.0,
+        "慰问列": "体检慰问，2000元/人", "身份证号": "",
+    }]
+
+
+def test_retirement_welfare_existing_payroll_only_reconciles(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000, "福利费": 2000, "调增应纳税所得额": 1000},
+    ]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "体检慰问，2000元/人"],
+        [["张三", "13248", 2000]],
+    )
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    retirement_rows = sheet.attrs["retirement_welfare"]
+    normal = next(item for item in retirement_rows if item["name"] == "张三")
+    assert normal["status"] == "福利费待核对"
+    assert normal["payroll_exists"] is True
+    assert normal["payroll_taxable_adjustment"] == 1000.0
+    assert len(sheet) == 1
+
+
+def test_retirement_welfare_existing_payroll_does_not_block_on_ambiguous_staff(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "李四", "机构代码": "13248", "应发工资": 10000, "福利费": 0, "调增应纳税所得额": 2000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常"},
+        {"员工编号": "2002", "*姓名": "李四", "机构代码": "13248", "人员状态": "正常"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "体检慰问，2000元/人"],
+        [["李四", "13248", 2000]],
+    )
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    item = sheet.attrs["retirement_welfare"][0]
+    assert item["payroll_exists"] is True
+    assert item["status"] == "金额一致"
+    assert item["blocking"] is False
+    assert len(sheet) == 1
+
+
+def test_retirement_welfare_normal_staff_without_payroll_is_added_without_departure(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
+        {"员工编号": "1002", "*姓名": "李四", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010022"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "体检慰问，2000元/人"],
+        [["李四", "13248", 2000]],
+    )
+
+    sheet, staff = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    added = sheet[sheet["*姓名"] == "李四"].iloc[0]
+    item = sheet.attrs["retirement_welfare"][0]
+    changes = check_personnel_changes(sheet, staff_df=staff)["items"]
+    assert item["status"] == "正常人员补入工资"
+    assert item["payroll_exists"] is False
+    assert added["福利费"] == 2000
+    assert added["本期收入"] == 2000
+    assert not any(change["name"] == "李四" for change in changes)
+
+
+def test_retirement_welfare_non_normal_staff_without_payroll_is_new_hire(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
+        {"员工编号": "2001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常", "证件类型": "居民身份证", "证件号码": "110101199001010022", "手机号码": "13800000000", "任职受雇从业日期": "2020-01-01"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "体检慰问，2000元/人"],
+        [["李四", "13248", 2000]],
+    )
+
+    sheet, staff = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    item = sheet.attrs["retirement_welfare"][0]
+    changes = check_personnel_changes(sheet, staff_df=staff)["items"]
+    assert item["status"] == "非正常人员入职"
+    assert any(change["name"] == "李四" and change["change_type"] == "入职" for change in changes)
+
+
+def test_retirement_welfare_missing_staff_is_new_hire_with_required_data(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"}]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "身份证号", "体检慰问，2000元/人"],
+        [["王五", "13248", "110101199001010033", 2000]],
+    )
+
+    sheet, staff = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    item = sheet.attrs["retirement_welfare"][0]
+    changes = check_personnel_changes(sheet, staff_df=staff)["items"]
+    hire = next(change for change in changes if change["name"] == "王五")
+    assert item["status"] == "无人员信息待补"
+    assert item["id_number"] == "110101199001010033"
+    assert item["blocking"] is True
+    assert "员工编号" in hire["missing_fields"]
+
+
+def test_retirement_welfare_duplicate_history_requires_manual_confirmation(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "2001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常"},
+        {"员工编号": "2002", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "慰问金额"],
+        [["李四", "13248", 2000]],
+    )
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    item = sheet.attrs["retirement_welfare"][0]
+    assert item["status"] == "人员信息待确认"
+    assert item["blocking"] is True
+    assert "李四" not in set(sheet["*姓名"])
+
+
+def test_retirement_welfare_duplicate_rows_use_id_number_for_precise_matching(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"},
+        {"员工编号": "2001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常", "证件号码": "110101199001010021"},
+        {"员工编号": "2002", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常", "证件号码": "110101199001010022"},
+    ]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "身份证号", "体检慰问，2000元/人"],
+        [["李四", "13248", "110101199001010021", 2000], ["李四", "13248", "110101199001010022", 2000]],
+    )
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    items = sheet.attrs["retirement_welfare"]
+    added = sheet[sheet["*姓名"] == "李四"]
+    assert len(added) == 2
+    assert {item["match_method"] for item in items} == {"机构+身份证号"}
+    assert {item["status"] for item in items} == {"非正常人员入职"}
+
+
+def test_retirement_welfare_duplicate_rows_with_same_or_missing_id_require_confirmation(tmp_path: Path):
+    payroll_path = tmp_path / "职级工资.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    staff_path = tmp_path / "人员信息.xlsx"
+    pd.DataFrame([{"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"}]).to_excel(staff_path, index=False)
+    welfare_path = _retirement_welfare_file(
+        tmp_path / "退休福利.xlsx",
+        ["姓名", "机构段（5位代码）", "身份证号", "体检慰问，2000元/人"],
+        [["李四", "13248", "110101199001010021", 2000], ["李四", "13248", "110101199001010021", 2000]],
+    )
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(staff_path), "",
+        retirement_welfare_path=str(welfare_path),
+    )
+
+    items = sheet.attrs["retirement_welfare"]
+    assert len(items) == 2
+    assert all(item["status"] == "重复退休记录待确认" and item["blocking"] for item in items)
+    assert "李四" not in set(sheet["*姓名"])
 
 
 def test_deduction_duplicates_include_source_file_details(tmp_path: Path):

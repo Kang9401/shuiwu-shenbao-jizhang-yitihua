@@ -120,7 +120,7 @@ def _validate_archive(archive: zipfile.ZipFile) -> dict[str, Any]:
             raise ValueError("备份包包含不安全路径")
     required = {"manifest.json", "data/tax_accounting.db"}
     if not required.issubset(archive.namelist()):
-        raise ValueError("不是有效的税务申报核对工作台备份")
+        raise ValueError("不是有效的智能税务平台备份")
     manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     if manifest.get("format_version") != 1:
         raise ValueError("备份格式版本不受支持")

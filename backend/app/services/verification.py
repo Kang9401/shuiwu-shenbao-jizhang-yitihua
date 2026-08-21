@@ -98,6 +98,7 @@ EMPLOYEE_PAYROLL_FIELD_ALIASES = {
         "应发工资 I=A+B+D-F-G9+K", "应发工资H=A+B+J",
         "应发工资H=A+B+E+I+J+K-A8",
     ),
+    "福利费": ("福利费", "福利费用", "福利费 SUM"),
     "调增应纳税所得额": ("调增应纳税所得额 SUM", "调增应纳税所得额"),
     "本期免税收入": ("本期免税收入 SUM", "本期免税收入", "免税支出 SUM", "免税支出"),
     "基本养老保险费": ("基本养老保险费", "养老(个人部分)", "养老保险金的员工部分 SUM", "养老保险金的员工部分"),
@@ -109,6 +110,14 @@ EMPLOYEE_PAYROLL_FIELD_ALIASES = {
     "本期应预扣预缴税额 SUM": ("本期应预扣预缴税额 SUM", "本期应预扣预缴税额"),
     "个人所得税 SUM": ("个人所得税 SUM", "个人所得税"),
 }
+
+
+class RetirementWelfareColumnSelectionError(ValueError):
+    """Raised when a retirement welfare workbook needs a user-selected amount column."""
+
+    def __init__(self, columns: list[str]):
+        self.columns = columns
+        super().__init__("退休福利表存在多个慰问金额列，请选择本次导入列")
 
 PAYROLL_DEDUCTION_ALIASES = {
     "累计子女教育": ("累计子女教育", "累计当月子女教育附加扣除", "累计子女教育附加扣除"),
@@ -277,6 +286,56 @@ def _read_employee_payroll(file_path: str) -> pd.DataFrame:
         if values.intersection(markers):
             return pd.read_excel(file_path, skiprows=int(row_index), dtype=str)
     return first
+
+
+def load_retirement_welfare(
+    file_path: str,
+    selected_column: str = "",
+) -> pd.DataFrame:
+    """Read a retirement welfare workbook with a variable header row and amount label."""
+    raw = pd.read_excel(file_path, header=None, dtype=object)
+    header_index = None
+    for index, row in raw.iterrows():
+        values = [_clean_text(value) for value in row.tolist()]
+        if any("姓名" in value for value in values) and any("机构段" in value for value in values):
+            header_index = int(index)
+            break
+    if header_index is None:
+        raise ValueError("退休福利表未找到同时包含姓名和机构段的表头")
+
+    headers = [_clean_text(value) for value in raw.iloc[header_index].tolist()]
+    welfare_columns = [header for header in headers if "慰问" in header]
+    if not welfare_columns:
+        raise ValueError("退休福利表未找到包含“慰问”的金额列")
+    if not selected_column and len(welfare_columns) > 1:
+        raise RetirementWelfareColumnSelectionError(welfare_columns)
+    amount_column = selected_column or welfare_columns[0]
+    if amount_column not in welfare_columns:
+        raise ValueError("所选退休福利金额列不在当前上传表中")
+
+    name_index = next(index for index, header in enumerate(headers) if "姓名" in header)
+    org_index = next(index for index, header in enumerate(headers) if "机构段" in header)
+    id_index = next(
+        (index for index, header in enumerate(headers) if "身份证" in header or "证件号码" in header),
+        None,
+    )
+    amount_index = headers.index(amount_column)
+    records: list[dict[str, Any]] = []
+    for _, row in raw.iloc[header_index + 1:].iterrows():
+        name = _clean_text(row.iloc[name_index])
+        org_code = normalize_org_code(row.iloc[org_index])
+        id_number = _normalize_id_number(row.iloc[id_index]) if id_index is not None else ""
+        amount = float(_to_numeric(pd.Series([row.iloc[amount_index]])).iloc[0])
+        if not name or not org_code or amount == 0:
+            continue
+        records.append({
+            "姓名": name,
+            "机构代码": org_code,
+            "慰问金额": amount,
+            "慰问列": amount_column,
+            "身份证号": id_number,
+        })
+    return pd.DataFrame(records, columns=["姓名", "机构代码", "慰问金额", "慰问列", "身份证号"])
 
 
 def load_employee_payroll(
@@ -491,6 +550,7 @@ def load_headquarters_payroll(
     _apply_payroll_org_mapping(result, df, cols, taxpayer_org_map, duplicate_taxpayer_ids)
 
     salary_col = _first_col(cols, "本期收入", "应发合计 SUM")
+    welfare_col = _first_col(cols, "福利费", "福利费用", "福利费 SUM")
     housing_col = _first_col(cols, "住房公积金的员工部分", "住房公积金的员工部分 SUM")
     pension_col = _first_col(cols, "养老保险金的员工部分", "养老保险金的员工部分 SUM")
     medical_col = _first_col(cols, "医疗保险金的员工部分", "医疗保险金的员工部分 SUM")
@@ -501,6 +561,7 @@ def load_headquarters_payroll(
     exempt_col = _first_col(cols, "免税支出", "免税支出 SUM")
 
     result["应发工资"] = _to_numeric(df[salary_col]) if salary_col else 0
+    result["福利费"] = _to_numeric(df[welfare_col]) if welfare_col else 0
     result["住房公积金"] = _to_numeric(df[housing_col]) if housing_col else 0
     result["基本养老保险费"] = _to_numeric(df[pension_col]) if pension_col else 0
     result["基本医疗保险费"] = _to_numeric(df[medical_col]) if medical_col else 0
@@ -683,6 +744,8 @@ def build_working_sheet(
     deduction_folder: str,
     taxpayer_org_map: dict[str, str] | None = None,
     duplicate_taxpayer_ids: set[str] | None = None,
+    retirement_welfare_path: str = "",
+    retirement_welfare_column: str = "",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """构建完整底稿（大表）。返回 (sheet, staff_df)。"""
     # ---- 1. 加载人员信息表 ----
@@ -705,14 +768,21 @@ def build_working_sheet(
         # 无"人员状态"列时，视为全部正常
         staff["人员状态"] = "正常"
         staff_full["人员状态"] = "正常"
-    for col in [
-        "员工编号", "*姓名", "证件类型", "证件号码", "机构代码",
-        "手机号码", "任职受雇从业日期", "离职日期",
-    ]:
-        if col not in staff.columns:
-            staff[col] = ""
-    staff["员工编号"] = _normalize_emp_id(staff["员工编号"])
-    staff["*姓名"] = staff["*姓名"].astype(str)
+    for frame in (staff, staff_full):
+        for col in [
+            "员工编号", "*姓名", "证件类型", "证件号码", "机构代码",
+            "手机号码", "任职受雇从业日期", "离职日期",
+        ]:
+            if col not in frame.columns:
+                frame[col] = ""
+        frame["员工编号"] = _normalize_emp_id(frame["员工编号"])
+        frame["*姓名"] = frame["*姓名"].map(_clean_text)
+        frame["机构代码"] = frame["机构代码"].map(normalize_org_code)
+
+    retirement_welfare = (
+        load_retirement_welfare(retirement_welfare_path, retirement_welfare_column)
+        if retirement_welfare_path else pd.DataFrame(columns=["姓名", "机构代码", "慰问金额", "慰问列"])
+    )
 
     # ---- 2. 分类型加载工资单 ----
     all_frames = []
@@ -743,12 +813,205 @@ def build_working_sheet(
     all_payroll = all_payroll[all_payroll["*姓名"].fillna("").astype(str).str.strip() != ""]
     all_payroll = all_payroll[all_payroll["*姓名"].astype(str).str.strip() != "nan"]
 
+    retirement_reconciliation: list[dict[str, Any]] = []
+    retirement_profiles: dict[str, dict[str, Any]] = {}
+    if not retirement_welfare.empty:
+        retirement_welfare = retirement_welfare.copy()
+        retirement_welfare["_name_key"] = retirement_welfare["姓名"].map(_key_text)
+        retirement_welfare["_org_key"] = retirement_welfare["机构代码"].map(normalize_org_code)
+        retirement_welfare["身份证号"] = retirement_welfare["身份证号"].map(_normalize_id_number)
+
+        full_lookup = {
+            key: group for key, group in staff_full.groupby(
+                [staff_full["*姓名"].map(_key_text), staff_full["机构代码"].map(normalize_org_code)], sort=False
+            )
+        }
+        identity_lookup = {
+            key: group for key, group in staff_full.groupby(
+                [staff_full["机构代码"].map(normalize_org_code), staff_full["证件号码"].map(_normalize_id_number)], sort=False
+            )
+        }
+        payroll = all_payroll.copy()
+        payroll["_name_key"] = payroll["*姓名"].map(_key_text)
+        payroll["_org_key"] = payroll["机构代码"].map(normalize_org_code)
+        payroll["_employee_key"] = _normalize_emp_id(payroll["员工编号"])
+        welfare_groups = {
+            key: group for key, group in retirement_welfare.groupby(["_name_key", "_org_key"], sort=False)
+        }
+        synthetic_rows: list[dict[str, Any]] = []
+
+        def append_reconciliation(
+            welfare_row: pd.Series,
+            *,
+            payroll_exists: bool,
+            personnel_status: str,
+            match_method: str,
+            payroll_taxable_adjustment: float,
+            status: str,
+            action: str,
+            blocking: bool,
+            id_number: str = "",
+        ) -> None:
+            retirement_reconciliation.append({
+                "name": _key_text(welfare_row["姓名"]),
+                "org_code": normalize_org_code(welfare_row["机构代码"]),
+                "id_number": id_number or _normalize_id_number(welfare_row.get("身份证号", "")),
+                "welfare_column": welfare_row["慰问列"],
+                "welfare_amount": round(float(welfare_row["慰问金额"]), 2),
+                "payroll_exists": payroll_exists,
+                "personnel_status": personnel_status or "未找到",
+                "match_method": match_method,
+                "payroll_taxable_adjustment": round(payroll_taxable_adjustment, 2),
+                "status": status,
+                "action": action,
+                "blocking": blocking,
+            })
+
+        for _, welfare_row in retirement_welfare.iterrows():
+            name = welfare_row["_name_key"]
+            org_code = welfare_row["_org_key"]
+            id_number = _normalize_id_number(welfare_row["身份证号"])
+            welfare_group = welfare_groups[(name, org_code)]
+            duplicate_welfare_rows = len(welfare_group) > 1
+            exact_duplicate_ready = (
+                duplicate_welfare_rows
+                and welfare_group["身份证号"].ne("").all()
+                and welfare_group["身份证号"].nunique() == len(welfare_group)
+            )
+            if duplicate_welfare_rows and not exact_duplicate_ready:
+                append_reconciliation(
+                    welfare_row,
+                    payroll_exists=False,
+                    personnel_status="待确认",
+                    match_method="机构+姓名（重复记录）",
+                    payroll_taxable_adjustment=0,
+                    status="重复退休记录待确认",
+                    action="同机构同名退休记录存在相同或缺失身份证号，需人工确认后重新核对",
+                    blocking=True,
+                )
+                continue
+
+            if not duplicate_welfare_rows:
+                payroll_rows = payroll[
+                    (payroll["_name_key"].eq(name)) & (payroll["_org_key"].eq(org_code))
+                ]
+                if not payroll_rows.empty:
+                    basic_matches = full_lookup.get((name, org_code), pd.DataFrame())
+                    basic_profile = basic_matches.iloc[0].to_dict() if len(basic_matches) == 1 else {}
+                    payroll_taxable_adjustment = float(payroll_rows["调增应纳税所得额"].sum())
+                    status = "金额一致" if round(payroll_taxable_adjustment, 2) == round(float(welfare_row["慰问金额"]), 2) else "福利费待核对"
+                    append_reconciliation(
+                        welfare_row,
+                        payroll_exists=True,
+                        personnel_status=_clean_text(basic_profile.get("人员状态", "")),
+                        match_method="机构+姓名",
+                        payroll_taxable_adjustment=payroll_taxable_adjustment,
+                        status=status,
+                        action="本月工资已存在该人员，仅核对调增应纳税所得额，不新增工资或人员变动；待核对时请更正原工资表后重新核对",
+                        blocking=False,
+                        id_number=_normalize_id_number(basic_profile.get("证件号码", "")),
+                    )
+                    continue
+
+            profile_matches = full_lookup.get((name, org_code), pd.DataFrame())
+            match_method = "机构+姓名"
+            if exact_duplicate_ready or (len(profile_matches) > 1 and id_number):
+                identity_matches = identity_lookup.get((org_code, id_number), pd.DataFrame())
+                identity_matches = identity_matches[
+                    identity_matches["*姓名"].map(_key_text).eq(name)
+                ]
+                profile_matches = identity_matches
+                match_method = "机构+身份证号"
+            if len(profile_matches) > 1:
+                append_reconciliation(
+                    welfare_row,
+                    payroll_exists=False,
+                    personnel_status="待确认",
+                    match_method=match_method,
+                    payroll_taxable_adjustment=0,
+                    status="人员信息待确认",
+                    action="同机构同名人员不唯一，需补充身份证号或人工确认后重新核对",
+                    blocking=True,
+                    id_number=id_number,
+                )
+                continue
+
+            profile: dict[str, Any] = profile_matches.iloc[0].to_dict() if len(profile_matches) == 1 else {}
+            employee_id = _clean_text(profile.get("员工编号", ""))
+            payroll_match_method = match_method
+            if exact_duplicate_ready and employee_id:
+                payroll_rows = payroll[payroll["_employee_key"].eq(employee_id)]
+                payroll_match_method = "工资员工编号+身份证号"
+            else:
+                payroll_rows = payroll[(payroll["_name_key"].eq(name)) & (payroll["_org_key"].eq(org_code))]
+            payroll_exists = not payroll_rows.empty
+            personnel_status = _clean_text(profile.get("人员状态", ""))
+            profile_id = _normalize_id_number(profile.get("证件号码", ""))
+            resolved_id_number = id_number or profile_id
+
+            if payroll_exists:
+                payroll_taxable_adjustment = float(payroll_rows["调增应纳税所得额"].sum())
+                status = "金额一致" if round(payroll_taxable_adjustment, 2) == round(float(welfare_row["慰问金额"]), 2) else "福利费待核对"
+                append_reconciliation(
+                    welfare_row,
+                    payroll_exists=True,
+                    personnel_status=personnel_status,
+                    match_method=payroll_match_method,
+                    payroll_taxable_adjustment=payroll_taxable_adjustment,
+                    status=status,
+                    action="本月工资已存在该人员，仅核对调增应纳税所得额，不新增工资或人员变动；待核对时请更正原工资表后重新核对",
+                    blocking=False,
+                    id_number=resolved_id_number,
+                )
+                continue
+
+            profile_key = f"{name}|{org_code}|{resolved_id_number or employee_id or len(synthetic_rows)}"
+            row = {column: 0 for column in all_payroll.columns}
+            row.update({
+                "员工编号": employee_id,
+                "*姓名": name,
+                "机构代码": org_code,
+                "工资单类型": "退休福利工资单",
+                "机构映射异常": "",
+                "应发工资": float(welfare_row["慰问金额"]),
+                "福利费": float(welfare_row["慰问金额"]),
+                "退休福利标记": "是",
+                "退休福利匹配键": profile_key,
+            })
+            synthetic_rows.append(row)
+            retirement_profiles[profile_key] = {**profile, "证件号码": resolved_id_number}
+            if personnel_status == "正常":
+                status = "正常人员补入工资"
+                action = "人员信息为正常且本月工资缺失，已补入退休福利工资，不作为离职处理"
+                blocking = False
+            elif profile:
+                status = "非正常人员入职"
+                action = "人员信息为非正常，已补入退休福利工资并作为本月入职处理"
+                blocking = False
+            else:
+                status = "无人员信息待补"
+                action = "人员信息表无记录，已补入退休福利工资并作为本月入职；资料不全时不可申报"
+                blocking = True
+            append_reconciliation(
+                welfare_row,
+                payroll_exists=False,
+                personnel_status=personnel_status,
+                match_method=match_method,
+                payroll_taxable_adjustment=float(welfare_row["慰问金额"]),
+                status=status,
+                action=action,
+                blocking=blocking,
+                id_number=resolved_id_number,
+            )
+        if synthetic_rows:
+            all_payroll = pd.concat([all_payroll, pd.DataFrame(synthetic_rows)], ignore_index=True, sort=False)
+
     # 填充数值列为0
     numeric_cols = [
         "应发工资", "住房公积金", "基本养老保险费", "基本医疗保险费",
         "失业保险费", "企业(职业)年金", "调增应纳税所得额",
         "商业健康保险", "本期应预扣预缴税额 SUM", "个人所得税 SUM",
-        "本期免税收入",
+        "本期免税收入", "福利费",
     ]
     for col in numeric_cols:
         if col in all_payroll.columns:
@@ -803,6 +1066,16 @@ def build_working_sheet(
                 if col in sheet.columns:
                     sheet.at[idx, col] = matched_staff.get(col, "")
 
+    if "退休福利标记" in sheet.columns:
+        for idx in sheet[sheet["退休福利标记"].fillna("").eq("是")].index:
+            profile_key = _clean_text(sheet.at[idx, "退休福利匹配键"])
+            profile = retirement_profiles.get(profile_key)
+            if not profile:
+                continue
+            for field in ["证件类型", "证件号码", "手机号码", "任职受雇从业日期", "离职日期"]:
+                if field in sheet.columns and _clean_text(sheet.at[idx, field]) == "":
+                    sheet.at[idx, field] = profile.get(field, "")
+
     # ---- 6. 关联专项附加扣除（完整证件号优先；脱敏号码按姓名和首尾唯一匹配）----
     deductions, _ = load_deduction_files(deduction_folder)
     if not deductions.empty and "证件号码" in sheet.columns:
@@ -844,6 +1117,10 @@ def build_working_sheet(
     if "员工编号" in sheet.columns:
         sheet["员工编号"] = sheet["员工编号"].astype(str).str.replace(r"\.0$", "", regex=True).fillna("")
 
+    sheet.attrs["retirement_welfare"] = sorted(
+        retirement_reconciliation,
+        key=lambda item: (item["status"] != "福利费待核对", item["name"], item["org_code"]),
+    )
     return sheet, staff
 
 
@@ -1339,6 +1616,7 @@ def build_reconciliation_report(report: dict) -> dict[str, pd.DataFrame]:
         {"项目": "新增人员疑似重复", "数量": len(report.get("personnel_update_issues", {}).get("duplicate_additions", [])), "分级": "提醒项", "是否阻断": False},
         {"项目": "数据质量问题", "数量": len(report.get("data_quality", {}).get("items", [])), "分级": "阻断/提醒", "是否阻断": any(item.get("severity") == "blocking" for item in report.get("data_quality", {}).get("items", []))},
         {"项目": "人数对账异常", "数量": len(report.get("headcount_reconciliation", {}).get("items", [])), "分级": "阻断项", "是否阻断": bool(report.get("headcount_reconciliation", {}).get("items", []))},
+        {"项目": "退休福利慰问核对", "数量": len(report.get("retirement_welfare", {}).get("items", [])), "分级": "提示/阻断", "是否阻断": any(item.get("blocking") for item in report.get("retirement_welfare", {}).get("items", []))},
     ]
 
     tax_rows = []
@@ -1368,6 +1646,7 @@ def build_reconciliation_report(report: dict) -> dict[str, pd.DataFrame]:
         "10_新增人员疑似重复": pd.DataFrame(report.get("personnel_update_issues", {}).get("duplicate_additions", [])),
         "11_数据质量前置校验": pd.DataFrame(report.get("data_quality", {}).get("items", [])),
         "12_人数对账": pd.DataFrame(report.get("headcount_reconciliation", {}).get("items", [])),
+        "13_退休福利慰问核对": pd.DataFrame(report.get("retirement_welfare", {}).get("items", [])),
     }
 
 
@@ -1405,7 +1684,7 @@ def build_verification_checks(report: dict) -> list[dict]:
     missing_personnel_fields = sum(1 for item in personnel_items if item.get("missing_fields"))
     confirmable_personnel = sum(1 for item in personnel_items if item.get("can_confirm"))
 
-    return [
+    checks = [
         {
             "code": "tax_diff",
             "title": "个税差异核对",
@@ -1449,6 +1728,16 @@ def build_verification_checks(report: dict) -> list[dict]:
             if deduction_count else "专项附加扣除核对通过。",
         },
     ]
+    retirement_items = report.get("retirement_welfare", {}).get("items", [])
+    if retirement_items:
+        checks.append({
+            "code": "retirement_welfare",
+            "title": "退休福利慰问核对",
+            "status": "fail" if any(item.get("blocking") for item in retirement_items) else ("warn" if any(item.get("status") != "金额一致" for item in retirement_items) else "pass"),
+            "issue_count": sum(1 for item in retirement_items if item.get("status") != "金额一致"),
+            "message": f"退休福利表已处理 {len(retirement_items)} 人。",
+        })
+    return checks
 
 
 def verify(
@@ -1490,6 +1779,7 @@ def verify(
         "key_field_missing": {"has_issues": False, "items": []},
         "personnel_update_issues": {"match_failures": [], "duplicate_additions": [], "multiple_matches": []},
         "headcount_reconciliation": {"has_issues": False, "items": []},
+        "retirement_welfare": {"items": sheet.attrs.get("retirement_welfare", [])},
     }
 
     if deduction_folder:
@@ -1518,6 +1808,7 @@ def verify(
         total += len(report["data_quality"]["items"])
     total += len(report["deduction_match_quality"].get("low_confidence", []))
     total += len(report["deduction_match_quality"].get("name_mismatches", []))
+    total += sum(1 for item in report["retirement_welfare"]["items"] if item.get("status") != "金额一致")
 
     report["summary"]["total_issues"] = total
     report["summary"]["blocking_issues"] = int(
@@ -1528,6 +1819,7 @@ def verify(
         + len(report["taxpayer_org_mapping"]["items"])
         + len(report["deduction_warnings"]["duplicates"])
         + sum(1 for item in report["data_quality"]["items"] if item.get("severity") == "blocking")
+        + sum(1 for item in report["retirement_welfare"]["items"] if item.get("blocking"))
     )
     report["summary"]["has_blocking_issues"] = report["summary"]["blocking_issues"] > 0
     report["checks"] = build_verification_checks(report)

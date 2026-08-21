@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import urllib.request
 import uuid
 import zipfile
@@ -123,14 +124,27 @@ class RpaService:
         temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
 
-    def _clear_runtime_output(self) -> None:
+    def _clear_runtime_output(self, preserve_names: set[str] | None = None) -> None:
         root = (ensure_runtime_app() / "output").resolve()
         root.mkdir(parents=True, exist_ok=True)
+        preserve_names = preserve_names or set()
         for path in root.iterdir():
+            if path.is_file() and path.name in preserve_names:
+                continue
             if path.is_dir():
                 shutil.rmtree(path)
             else:
                 path.unlink(missing_ok=True)
+
+    def _restore_resume_reconciliation(self, month: str) -> set[str]:
+        """Bring a prior configured-output reconciliation workbook back to runtime."""
+        name = f"{month}个税申报核对.xlsx"
+        source = inside(self._output_root(), self._output_root() / name)
+        target_root = (ensure_runtime_app() / "output").resolve()
+        target = target_root / name
+        if source.is_file() and source.resolve() != target.resolve():
+            shutil.copy2(source, target)
+        return {name} if target.is_file() else set()
 
     def _sync_output_files(self) -> None:
         source = (ensure_runtime_app() / "output").resolve()
@@ -150,6 +164,7 @@ class RpaService:
             headers = [str(value or "").strip().replace(" ", "").replace("\u3000", "") for value in next(rows, [])]
             name_index = next((i for i, value in enumerate(headers) if value in NAME_HEADERS), None)
             code_index = next((i for i, value in enumerate(headers) if value in CODE_HEADERS), None)
+            result_index_column = next((i for i, value in enumerate(headers) if value in {"RPA搜索结果序号", "RPA机构序号"}), None)
             if name_index is None or code_index is None:
                 raise ValueError("机构信息表必须包含机构名称和机构代码列")
             result, seen = [], set()
@@ -158,9 +173,17 @@ class RpaService:
                 code = str(row[code_index] or "").strip() if code_index < len(row) else ""
                 if code.endswith(".0"):
                     code = code[:-2]
+                result_index = 1
+                if result_index_column is not None and result_index_column < len(row) and row[result_index_column] not in (None, ""):
+                    try:
+                        result_index = int(float(str(row[result_index_column]).strip()))
+                    except (TypeError, ValueError):
+                        raise ValueError(f"机构 {code or name} 的 RPA 搜索结果序号不是有效正整数") from None
+                    if result_index < 1:
+                        raise ValueError(f"机构 {code or name} 的 RPA 搜索结果序号必须从 1 开始")
                 if name and code and (name, code) not in seen:
                     seen.add((name, code))
-                    result.append({"code": code, "name": name})
+                    result.append({"code": code, "name": name, "rpa_search_result_index": result_index})
             if not result:
                 raise ValueError("机构信息表没有有效机构数据")
             return result
@@ -197,14 +220,18 @@ class RpaService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "机构信息"
-        sheet.append(["机构名称", "机构代码"])
+        include_result_index = any(item.get("rpa_search_result_index", 1) != 1 for item in selected)
+        sheet.append(["机构名称", "机构代码", "RPA搜索结果序号"] if include_result_index else ["机构名称", "机构代码"])
         for item in selected:
-            sheet.append([item["name"], item["code"]])
+            values = [item["name"], item["code"]]
+            if include_result_index:
+                values.append(item.get("rpa_search_result_index", 1))
+            sheet.append(values)
             sheet.cell(sheet.max_row, 2).number_format = "@"
         workbook.save(temp)
         temp.replace(target)
         reread = self._read_orgs()
-        if [(item["code"], item["name"]) for item in reread] != [(item["code"], item["name"]) for item in selected]:
+        if [(item["code"], item["name"], item.get("rpa_search_result_index", 1)) for item in reread] != [(item["code"], item["name"], item.get("rpa_search_result_index", 1)) for item in selected]:
             raise RuntimeError("运行时机构信息表回读校验失败")
         self.store.update(lambda data: data["config"].update(org_excel_path=None, org_excel_name="人员主数据自动生成"))
         return target, selected
@@ -240,8 +267,8 @@ class RpaService:
         run_status = data["current_run"].get("status")
         data["results"] = results
         data["import_files"] = import_files
-        data["can_start"] = run_status not in {"starting", "running"} and data["chrome"].get("status") == "ready"
-        data["can_stop"] = self.manager.running
+        data["can_start"] = run_status not in {"starting", "running", "stopping"} and data["chrome"].get("status") == "ready"
+        data["can_stop"] = self.manager.running and run_status != "stopping"
         failure = data.get("last_failure", {})
         data["can_resume"] = not self.manager.running and bool(failure.get("task_key") and failure.get("org_code"))
         data["company_id"] = self.company_id
@@ -362,7 +389,11 @@ class RpaService:
         if task_key == "import" and not any(input_root.iterdir()):
             raise ValueError("input 中没有可导入文件")
         self._write_runtime_config()
-        self._clear_runtime_output()
+        preserve_names: set[str] = set()
+        if task_key == "import" and resume_mode == "resume":
+            preserve_names = self._restore_resume_reconciliation(month)
+        self._clear_runtime_output(preserve_names)
+        resume_output_preserved = bool(preserve_names)
         actual_task = "income_report" if task_key == "declaration_reports" else task_key
         command, backend_month = build_task_command(app_dir, actual_task, month, all_orgs, org_code, resume_mode, start_org_code, input_root=input_root)
         run_id, started = uuid.uuid4().hex, now_text()
@@ -387,6 +418,9 @@ class RpaService:
                     row[task_key] = "待处理"
             data["current_run"].update(run_id=run_id, task_key=task_key, subtask_key=actual_task if task_key == "declaration_reports" else None, subtask_index=1 if task_key == "declaration_reports" else None, subtask_count=2 if task_key == "declaration_reports" else None, display_name=TASK_NAMES[task_key], month=month, declaration_month=month, backend_month=backend_month, all_orgs=all_orgs, org_code=org_code, current_org_code=None, current_org_name=None, status="starting", pid=None, started_at=started, finished_at=None, exit_code=None, error_message=None, log_path=str(log_path))
         self.store.update(starting)
+        if resume_output_preserved:
+            # The import runner appends/replaces institution sheets in place.
+            self._handle_line(f"保留已有核对表并追加机构：{month}个税申报核对.xlsx")
         self._cancel_requested = False
         self._stderr_lines = []
         self._composite = {"app_dir": app_dir, "month": month, "all_orgs": all_orgs, "org_code": org_code, "start_org_code": start_org_code} if task_key == "declaration_reports" else None
@@ -449,6 +483,7 @@ class RpaService:
         finished = now_text()
         data = self.store.read()
         run = data["current_run"]
+        cancelled = cancelled or self._cancel_requested
         if self._composite and run.get("task_key") == "declaration_reports" and run.get("subtask_key") == "income_report" and exit_code == 0 and not cancelled:
             app_dir = self._composite["app_dir"]
             command, backend_month = build_task_command(app_dir, "extra_income_reports", self._composite["month"], self._composite["all_orgs"], self._composite["org_code"], None, self._composite["start_org_code"])
@@ -481,8 +516,26 @@ class RpaService:
         self._composite = None
 
     def stop_task(self) -> dict:
+        run_status = self.store.read()["current_run"].get("status")
+        if not self.manager.running and run_status not in {"starting", "running", "stopping"}:
+            return {"message": "当前没有正在运行的任务"}
+        self._cancel_requested = True
+        self.store.update(lambda data: data["current_run"].update(status="stopping", error_message=None))
         stopped = self.manager.stop()
-        return {"message": "已请求停止任务" if stopped else "当前没有正在运行的任务"}
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            state = self.store.read()["current_run"]
+            if state.get("status") != "stopping" and not self.manager.running:
+                return {"message": "RPA 任务及相关子进程已停止"}
+            time.sleep(0.05)
+        if not self.manager.running:
+            def finish_cancel(data: dict) -> None:
+                run = data["current_run"]
+                if run.get("status") == "stopping":
+                    run.update(status="cancelled", finished_at=now_text(), pid=None, exit_code=None, error_message=None)
+            self.store.update(finish_cancel)
+            return {"message": "RPA 任务及相关子进程已停止"}
+        raise RuntimeError("RPA 停止请求未能确认全部相关进程退出")
 
     def reset_results(self, month: str | None = None) -> dict:
         if self.manager.running:

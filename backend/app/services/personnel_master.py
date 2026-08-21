@@ -64,15 +64,18 @@ def list_rpa_organizations(db: Session, *, period_id: int, person_type: str = "e
                 if code:
                     counts[code] = counts.get(code, 0) + 1
 
-    return [
-        {
+    result = []
+    for code, items in mappings_by_code.items():
+        item = {
             "code": code,
             "name": items[0].rpa_org_name,
             "parent_branch": items[0].parent_branch,
             "employee_count": counts.get(code, 0),
         }
-        for code, items in mappings_by_code.items()
-    ]
+        if items[0].rpa_search_result_index != 1:
+            item["rpa_search_result_index"] = items[0].rpa_search_result_index
+        result.append(item)
+    return result
 
 
 def _clean(value: Any) -> str:
@@ -392,6 +395,89 @@ def list_personnel_master_batches(db: Session, period_id: int, person_type: str)
         .limit(200)
         .all()
     )
+
+
+def copy_previous_month_personnel_master_if_missing(
+    db: Session,
+    *,
+    period_id: int,
+    person_type: str,
+) -> list[PersonnelMasterArtifact]:
+    """Materialize a missing monthly master from the immediately preceding period."""
+    current_artifacts = (
+        db.query(PersonnelMasterArtifact)
+        .filter(
+            PersonnelMasterArtifact.period_id == period_id,
+            PersonnelMasterArtifact.person_type == person_type,
+        )
+        .all()
+    )
+    if current_artifacts:
+        return []
+
+    current_period = db.query(Period).filter(Period.id == period_id).first()
+    if current_period is None:
+        return []
+    previous_year = current_period.year if current_period.month > 1 else current_period.year - 1
+    previous_month = current_period.month - 1 if current_period.month > 1 else 12
+    previous_period = (
+        db.query(Period)
+        .filter(Period.year == previous_year, Period.month == previous_month)
+        .first()
+    )
+    if previous_period is None:
+        return []
+
+    source_artifacts = (
+        db.query(PersonnelMasterArtifact)
+        .filter(
+            PersonnelMasterArtifact.period_id == previous_period.id,
+            PersonnelMasterArtifact.person_type == person_type,
+        )
+        .order_by(PersonnelMasterArtifact.scope_type, PersonnelMasterArtifact.scope_code)
+        .all()
+    )
+    target_dir = settings.artifact_dir / "personnel_masters" / str(period_id) / person_type
+    created: list[PersonnelMasterArtifact] = []
+    current_label = _period_label(current_period, period_id)
+    previous_label = _period_label(previous_period, previous_period.id)
+    for source in source_artifacts:
+        source_path = Path(source.stored_path)
+        if not source_path.exists():
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"{current_label}_{person_type}_{source.scope_type}_{source.scope_code or 'all'}.xlsx"
+        target_path = target_dir / file_name
+        shutil.copy2(source_path, target_path)
+        artifact = PersonnelMasterArtifact(
+            period_id=period_id,
+            person_type=person_type,
+            scope_type=source.scope_type,
+            scope_code=source.scope_code,
+            file_name=file_name,
+            stored_path=str(target_path),
+            row_count=source.row_count,
+            validation_issues=[],
+        )
+        db.add(artifact)
+        db.flush()
+        db.add(PersonnelMasterImportBatch(
+            period_id=period_id,
+            artifact_id=artifact.id,
+            person_type=person_type,
+            scope_type=source.scope_type,
+            scope_code=source.scope_code,
+            original_name=f"自动复制{previous_label}人员主数据：{source.file_name}",
+            stored_path=str(target_path),
+            row_count=source.row_count,
+            validation_issues=[],
+        ))
+        created.append(artifact)
+    if created:
+        db.commit()
+        for artifact in created:
+            db.refresh(artifact)
+    return created
 
 
 class PersonnelMasterResolver:

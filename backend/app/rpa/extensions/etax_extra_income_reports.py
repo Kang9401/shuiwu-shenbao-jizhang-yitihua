@@ -14,6 +14,11 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+try:
+    from .etax_report_download import capture_sanitized_failure, check_cancelled, interruptible_wait, run_report_download
+except ImportError:  # Runtime copies extension modules into one directory.
+    from etax_report_download import capture_sanitized_failure, check_cancelled, interruptible_wait, run_report_download
+
 
 WORK_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 OUTPUT_DIR = WORK_DIR / "output"
@@ -201,30 +206,6 @@ def _open_export(page: Any, scope: Any, spec: ReportSpec, config: dict[str, str]
     log(f"已选择导出报表：{spec.export_label}")
 
 
-def _solve_export_security(page: Any, reopen: Any, helpers: dict[str, Any]) -> None:
-    try:
-        helpers["security_dialog"](page).wait_for(state="visible", timeout=12000)
-    except Exception:
-        log("未出现安全验证滑块，继续后续确认")
-        return
-    strategies = helpers["slider_strategies"]
-    for attempt, strategy in enumerate(strategies, start=1):
-        if not helpers["has_security_dialog"](page):
-            return
-        log(f"安全验证第 {attempt} 次尝试：{strategy['name']}")
-        try:
-            if helpers["drag_slider"](page, strategy):
-                log("安全验证已通过")
-                return
-        except Exception as exc:
-            log(f"安全验证策略失败：{exc}")
-        if helpers["has_security_dialog"](page):
-            helpers["close_security_dialog"](page)
-            reopen()
-            helpers["security_dialog"](page).wait_for(state="visible", timeout=12000)
-    raise RuntimeError("多次尝试安全验证滑块仍未通过，请手动处理当前验证弹框后重试")
-
-
 def export_record_matches(text: str, org_name: str, month: str, spec: ReportSpec) -> bool:
     compact = re.sub(r"\s+", "", text)
     return all(value in compact for value in (org_name, month.replace("-", ""), spec.keyword, "处理成功", "下载"))
@@ -236,6 +217,7 @@ def _download_matching_record(page: Any, org: Any, month: str, spec: ReportSpec,
     month_compact = month.replace("-", "")
     last_status = ""
     for attempt in range(1, 21):
+        check_cancelled()
         rows = dialog.locator(config["export_rows"]).filter(has_text=org.name).filter(has_text=month_compact).filter(has_text=spec.keyword)
         for index in range(rows.count()):
             row = rows.nth(index)
@@ -255,7 +237,7 @@ def _download_matching_record(page: Any, org: Any, month: str, spec: ReportSpec,
             log(f"导出记录尚未处理成功，第 {attempt} 次刷新")
             refresh = dialog.locator(config["export_refresh"]).filter(visible=True).first
             refresh.click()
-            page.wait_for_timeout(3000)
+            interruptible_wait(page, 3000)
     raise TimeoutError(f"未找到匹配的成功导出记录：{org.name} / {spec.keyword} / {month_compact}；最后状态：{last_status}")
 
 
@@ -267,6 +249,7 @@ def _download_one(
     config: dict[str, str],
     helpers: dict[str, Any],
 ) -> bool:
+    check_cancelled()
     target = report_path(spec, month, org)
     if target.exists():
         valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
@@ -276,7 +259,7 @@ def _download_one(
         quarantine_invalid(target, reason)
 
     page.evaluate(f"location.hash = '{spec.route}'")
-    page.wait_for_timeout(1200)
+    interruptible_wait(page, 1200)
     helpers["close_popups"](page)
     helpers["set_tax_month"](page, month)
     scope = page.locator(config["page_scope"]).filter(visible=True).first
@@ -284,40 +267,42 @@ def _download_one(
     status = scope.locator(config["status_value"]).filter(visible=True).first
     status.wait_for(state="visible", timeout=15000)
     status_text = status.inner_text(timeout=5000).strip()
-    if status_text != "申报成功":
-        log(f"{org.name}（{org.code}）{spec.title}状态为“{status_text}”，没有申报成功记录，正常跳过")
-        return False
-
     successful = scope.locator(config["success_record"]).filter(visible=True).first
-    successful.wait_for(state="visible", timeout=10000)
-    reopen = lambda: _open_export(page, successful, spec, config)
-    reopen()
-    _solve_export_security(page, reopen, helpers)
-    helpers["confirm_export"](page)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _download_matching_record(page, org, month, spec, target, config)
-    valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
-    if not valid:
-        quarantine_invalid(target, reason)
-        raise RuntimeError(f"下载的 {spec.title} 校验失败：{reason}")
-    log(f"已下载{spec.title}：{target}")
-    return True
+
+    def open_export() -> None:
+        successful.wait_for(state="visible", timeout=10000)
+        _open_export(page, successful, spec, config)
+
+    def download_export() -> Path:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        _download_matching_record(page, org, month, spec, target, config)
+        valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
+        if not valid:
+            quarantine_invalid(target, reason)
+            raise RuntimeError(f"下载的 {spec.title} 校验失败：{reason}")
+        return target
+
+    downloaded = run_report_download(
+        page,
+        report_title=f"{org.name}（{org.code}）{spec.title}",
+        status_text=status_text,
+        open_export=open_export,
+        confirm_export=lambda: helpers["confirm_export"](page),
+        download_export=download_export,
+        success_check=lambda: helpers["export_ready"](page),
+        log=log,
+    )
+    if downloaded is not None:
+        log(f"已下载{spec.title}：{downloaded}")
+    return downloaded is not None
 
 
 def capture_failure_evidence(page: Any, org: Any, exc: Exception) -> None:
-    evidence = OUTPUT_DIR / "failure_evidence"
-    evidence.mkdir(parents=True, exist_ok=True)
-    prefix = f"{dt.datetime.now():%Y%m%d_%H%M%S}_{safe_filename_part(org.code)}"
     try:
-        page.screenshot(path=str(evidence / f"{prefix}.png"), full_page=True)
-    except Exception:
-        pass
-    try:
-        (evidence / f"{prefix}.html").write_text(page.content(), encoding="utf-8")
-    except Exception:
-        pass
-    (evidence / f"{prefix}.txt").write_text(f"URL: {getattr(page, 'url', '')}\nERROR: {exc}\n", encoding="utf-8")
-    log(f"失败证据已保存：{evidence}")
+        evidence = capture_sanitized_failure(page, OUTPUT_DIR, exc)
+        log(f"失败证据已保存：{evidence}")
+    except Exception as capture_error:
+        log(f"失败证据采集未完成：{capture_error}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -350,12 +335,8 @@ def main() -> int:
         switch_org,
     )
     from etax_tax_certificate_download import (  # type: ignore[import-not-found]
-        SLIDER_STRATEGIES,
-        close_security_dialog,
         confirm_report_export,
-        drag_visible_slider_to_end,
-        has_visible_security_dialog,
-        security_dialog,
+        has_visible_confirm_export,
     )
     from playwright.sync_api import sync_playwright
 
@@ -364,12 +345,8 @@ def main() -> int:
     helpers = {
         "close_popups": close_common_popups,
         "set_tax_month": set_tax_month,
-        "slider_strategies": SLIDER_STRATEGIES,
-        "security_dialog": security_dialog,
-        "has_security_dialog": has_visible_security_dialog,
-        "drag_slider": drag_visible_slider_to_end,
-        "close_security_dialog": close_security_dialog,
         "confirm_export": confirm_report_export,
+        "export_ready": has_visible_confirm_export,
     }
     log(f"目标税款所属月份：{args.month}；待处理机构数：{len(orgs)}")
     with sync_playwright() as playwright:
@@ -381,6 +358,7 @@ def main() -> int:
         try:
             page = ensure_withholding_page(page)
             for org in orgs:
+                check_cancelled()
                 log(f"开始下载扩展申报表：{org.name}（{org.code}）")
                 try:
                     switch_org(page, org)
@@ -388,6 +366,7 @@ def main() -> int:
                     _verify_current_org(page, org, config["current_org_scope"])
                     count = 0
                     for spec in REPORT_SPECS:
+                        check_cancelled()
                         downloaded = _download_one(page, org, args.month, spec, config, helpers)
                         count += int(downloaded)
                         status = "success" if downloaded else "skipped"

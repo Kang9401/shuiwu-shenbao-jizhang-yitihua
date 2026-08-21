@@ -95,3 +95,44 @@ def test_migration_5_deduplicates_org_codes_and_adds_unique_index(tmp_path):
         indexes = connection.execute("PRAGMA index_list(organization_mappings)").fetchall()
     assert any(row[1] == "uq_organization_mapping_org_code" and row[2] == 1 for row in indexes)
 
+
+def test_migration_8_backfills_monthly_artifact_content(tmp_path):
+    database = tmp_path / "monthly_artifact.db"
+    source = tmp_path / "底稿.xlsx"
+    source.write_bytes(b"working-sheet-bytes")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE tax_monthly_artifacts (
+                id INTEGER PRIMARY KEY,
+                period_id INTEGER NOT NULL,
+                artifact_type VARCHAR(80) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                stored_path VARCHAR(500) NOT NULL,
+                source_session_id INTEGER,
+                source_round_number INTEGER,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO tax_monthly_artifacts "
+            "(id, period_id, artifact_type, file_name, stored_path, created_at, updated_at) "
+            "VALUES (1, 1, 'working_sheet', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (source.name, str(source)),
+        )
+        connection.execute(
+            "CREATE TABLE app_schema_version (id INTEGER PRIMARY KEY, version INTEGER, app_version TEXT, updated_at DATETIME)"
+        )
+        connection.execute("INSERT INTO app_schema_version VALUES (1, 7, '0.9.0', CURRENT_TIMESTAMP)")
+    engine = create_engine(f"sqlite:///{database.as_posix()}")
+
+    assert run_migrations(engine) == SCHEMA_VERSION
+    with sqlite3.connect(database) as connection:
+        content, digest = connection.execute(
+            "SELECT file_content, content_sha256 FROM tax_monthly_artifacts WHERE id = 1"
+        ).fetchone()
+    assert content == source.read_bytes()
+    assert len(digest) == 64
+

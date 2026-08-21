@@ -4,6 +4,7 @@ from app.services.formulas import (
     annual_bonus_transform,
     broker_tax_transform,
     general_salary_tax_transform,
+    INTERN_DECLARATION_COLUMNS,
     intern_tax_transform,
     merge_duplicate_invoice_lines,
     normalize_org_code,
@@ -183,6 +184,50 @@ def test_intern_tax_builds_legacy_personnel_and_declaration_data():
     assert row["任职受雇从业类型"] == "实习学生（全日制学历教育）"
     assert row["*所得项目"] == "其他连续劳务报酬"
     assert row["本期收入"] == 500
+
+
+def test_intern_tax_uses_broker_headers_and_fills_foreign_fields():
+    intern = pd.DataFrame([{
+        "营业部名称": "广州昌岗中路", "工号": "I-001", "*姓名": "港籍实习生",
+        "*证件类型": "港澳居民来往内地通行证", "*证件号码": "M1234567",
+        "*性别": "男", "*出生日期": "2005-01-01", "实习开始时间": "2026-06-01",
+        "发放补贴数（元）": 500,
+    }])
+    result = intern_tax_transform({"intern_salary_sheet": intern})
+    row = result["detail"].iloc[0]
+    assert list(INTERN_DECLARATION_COLUMNS[:6]) == ["工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入"]
+    assert row["工号"] == "I-001"
+    assert row["*证件号码"] == "M1234567"
+    assert row["出生国家(地区)"] == "中国澳门"
+    assert row["涉税事由"] == "提供临时劳务"
+
+
+def test_interest_half_rate_outputs_twenty_percent_and_halves_income():
+    source = pd.DataFrame([{
+        "机构代码": "301", "客户姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "债券兑息": 1000, "税率(%)": 10,
+    }])
+    result = restricted_stock_interest_transform({"interest_tax_sheet": source})
+    detail = result["detail"].iloc[0]
+    assert detail["利息税原始收入"] == 1000
+    assert detail["利息税申报金额"] == 500
+    assert detail["利息税输出税率"] == "20%"
+    assert detail["利息税税费(申报表)"] == 100
+    assert result["metrics"]["interest_half_rate_adjustments"] == 1
+    assert any(item["issue_type"] == "interest_half_rate_adjustment" for item in result["issues"])
+
+
+def test_interest_half_rate_prefers_actual_withheld_tax_to_derive_income():
+    source = pd.DataFrame([{
+        "机构代码": "301", "客户姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "债券兑息": 1234, "税率（%）": 10,
+        "实际扣缴税额": 100,
+    }])
+    result = restricted_stock_interest_transform({"interest_tax_sheet": source})
+
+    detail = result["detail"].iloc[0]
+    assert detail["利息税申报金额"] == 500
+    assert detail["利息税税费(申报表)"] == 100
 
 
 def test_intern_tax_blocks_unknown_branch_instead_of_silent_export():

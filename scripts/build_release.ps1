@@ -141,7 +141,10 @@ try {
 }
 
 $ZipPath = Join-Path $StagingOutput "TaxWorkbench_${Version}_Windows_x64.zip"
-Compress-Archive -LiteralPath $PackageDir -DestinationPath $ZipPath -CompressionLevel Optimal
+# Windows PowerShell Compress-Archive can race with Defender while scanning a new EXE.
+# tar.exe is built into supported Windows versions and creates the same ZIP layout.
+& tar.exe -a -c -f $ZipPath -C $StagingOutput "TaxWorkbench"
+if ($LASTEXITCODE -ne 0) { throw "ZIP creation failed" }
 $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath
 "$($Hash.Hash)  $([System.IO.Path]::GetFileName($ZipPath))" | Set-Content -Encoding UTF8 (Join-Path $StagingOutput "SHA256.txt")
 if (Test-Path -LiteralPath $SmokeData) {

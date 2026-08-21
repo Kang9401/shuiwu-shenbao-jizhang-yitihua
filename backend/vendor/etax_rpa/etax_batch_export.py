@@ -1,14 +1,26 @@
+from __future__ import annotations
+
 import argparse
 import datetime as dt
+import json
 import math
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from openpyxl import load_workbook
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
+
+try:
+    from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait
+except ImportError:  # Source-tree execution before runtime synchronization.
+    extension_dir = Path(__file__).parents[2] / "app" / "rpa" / "extensions"
+    if str(extension_dir) not in sys.path:
+        sys.path.insert(0, str(extension_dir))
+    from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait  # type: ignore[no-redef]
 
 
 ETAX_URL = "https://etax.chinatax.gov.cn/"
@@ -22,10 +34,33 @@ DEFAULT_ORG_EXCEL = WORK_DIR / "机构信息表.xlsx"
 class TaxOrg:
     name: str
     code: str
+    search_result_index: int = 1
 
 
 NAME_HEADERS = {"机构名称", "机构简称", "单位名称", "名称"}
 CODE_HEADERS = {"机构代码", "机构编号", "代码", "编号"}
+RESULT_INDEX_HEADERS = {"RPA搜索结果序号", "RPA机构序号"}
+COMMON_POPUP_TITLES = ("未注册个税APP提醒", "温 馨 提 示", "温馨提示", "自然人代开发票提醒")
+TAX_REMINDER_MARKERS = (
+    "上一个所属期未申报",
+    "上期所属期未申报",
+    "综合所得年度汇算补税提醒",
+    "汇算清缴未完成",
+    "未完成办理综合所得汇算清缴",
+)
+POPUP_CLOSE_SELECTOR = (
+    ".el-message-box__headerbtn, .el-dialog__headerbtn, .ant-modal-close, "
+    "button[aria-label='Close'], button[aria-label='关闭']"
+)
+WORKFLOW_DIALOG_MARKERS = ("请选择为哪个单位办税", "安全验证", "导出报表文件", "文件导入")
+POPUP_CONTEXT = {"org_code": "", "month": ""}
+
+
+def set_popup_context(org: TaxOrg | None = None, target_month: str | None = None) -> None:
+    if org is not None:
+        POPUP_CONTEXT["org_code"] = org.code
+    if target_month is not None:
+        POPUP_CONTEXT["month"] = target_month
 
 
 def normalize_header(value) -> str:
@@ -43,6 +78,7 @@ def read_orgs_from_excel(path: Path) -> list[TaxOrg]:
         headers = [normalize_header(cell) for cell in next(rows, [])]
         name_index = next((i for i, header in enumerate(headers) if header in NAME_HEADERS), None)
         code_index = next((i for i, header in enumerate(headers) if header in CODE_HEADERS), None)
+        result_index_column = next((i for i, header in enumerate(headers) if header in RESULT_INDEX_HEADERS), None)
         if name_index is None or code_index is None:
             raise ValueError(
                 "机构信息表必须包含名称列和代码列；"
@@ -57,6 +93,14 @@ def read_orgs_from_excel(path: Path) -> list[TaxOrg]:
             code = str(row[code_index] or "").strip() if code_index < len(row) else ""
             if code.endswith(".0"):
                 code = code[:-2]
+            result_index = 1
+            if result_index_column is not None and result_index_column < len(row) and row[result_index_column] not in (None, ""):
+                try:
+                    result_index = int(float(str(row[result_index_column]).strip()))
+                except (TypeError, ValueError):
+                    raise ValueError(f"第 {row_number} 行的 RPA 搜索结果序号必须为正整数") from None
+                if result_index < 1:
+                    raise ValueError(f"第 {row_number} 行的 RPA 搜索结果序号必须从 1 开始")
             if not name and not code:
                 continue
             if not name or not code:
@@ -67,7 +111,7 @@ def read_orgs_from_excel(path: Path) -> list[TaxOrg]:
                 log(f"跳过重复机构：{name}（{code}）")
                 continue
             seen.add(key)
-            orgs.append(TaxOrg(name, code))
+            orgs.append(TaxOrg(name, code, result_index))
 
         if not orgs:
             raise ValueError(f"机构信息表没有有效机构数据：{path}")
@@ -154,6 +198,70 @@ def fill_first_visible(page: Page, selectors: list[str], value: str, timeout: in
     raise RuntimeError(f"找不到可输入控件，候选选择器：{selectors}") from last_error
 
 
+def capture_unknown_popup(page: Page, popup) -> Path:
+    evidence = OUTPUT_DIR / "failure_evidence" / "unknown_popups" / f"{dt.datetime.now():%Y%m%d_%H%M%S_%f}"
+    evidence.mkdir(parents=True, exist_ok=False)
+    details = popup.evaluate(
+        r"""dialog => {
+            const title = dialog.querySelector('.el-dialog__title,.ant-modal-title,[role=heading],h1,h2,h3');
+            const clone = dialog.cloneNode(true);
+            clone.querySelectorAll('input,textarea').forEach(el => { el.removeAttribute('value'); el.textContent = ''; });
+            clone.querySelectorAll('tbody').forEach(el => { el.innerHTML = '<tr><td>&lt;TABLE_DATA&gt;</td></tr>'; });
+            clone.querySelectorAll('*').forEach(el => [...el.attributes].forEach(attr => {
+                if (attr.name.startsWith('on') || attr.name.startsWith('data-v-') || ['value','data-value','srcdoc'].includes(attr.name)) el.removeAttribute(attr.name);
+            }));
+            const safeTerms = ['查询','搜索','下载','导出','刷新','关闭','取消','确定','确认','我知道了','申报结果',
+                '综合所得','分类所得','限售股','安全验证','拖动滑块','立即进入','返回','下一步'];
+            const safeText = value => {
+                const raw = String(value || '').replace(/\s+/g, '');
+                const kept = safeTerms.filter(term => raw.includes(term));
+                return kept.length ? kept.join(' / ') : (raw ? '<TEXT>' : '');
+            };
+            const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+            const textNodes = [];
+            while (walker.nextNode()) textNodes.push(walker.currentNode);
+            for (const node of textNodes) {
+                const raw = (node.nodeValue || '').replace(/\s+/g, '');
+                if (!raw) continue;
+                const kept = safeTerms.filter(term => raw.includes(term));
+                node.nodeValue = kept.length ? kept.join(' / ') : '<TEXT>';
+            }
+            return {
+                title: safeText(title?.textContent), body: safeText(dialog.textContent),
+                buttons: [...dialog.querySelectorAll('button,[role=button]')].map(el => safeText(el.textContent)).filter(Boolean),
+                html: clone.outerHTML
+            };
+        }"""
+    )
+    parsed = urlsplit(page.url)
+    details.update(
+        url=urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.fragment.split("?", 1)[0])),
+        captured_at=dt.datetime.now().astimezone().isoformat(),
+    )
+    sanitized_html = details.pop("html")
+    (evidence / "metadata.json").write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding="utf-8")
+    (evidence / "sanitized_dom.html").write_text(sanitized_html, encoding="utf-8")
+    masks = [
+        page.locator(
+            "header, nav, tbody, input, textarea, [contenteditable='true'], "
+            "[class*='company'], [class*='org'], [class*='taxpayer'], "
+            "[class*='user'], [class*='person'], [class*='name'], [class*='amount']"
+        ),
+        popup.locator(".el-dialog__body, .ant-modal-body"),
+    ]
+    page.screenshot(path=str(evidence / "screenshot.png"), full_page=True, mask=masks, mask_color="#111827")
+    try:
+        popup.screenshot(
+            path=str(evidence / "dialog.png"),
+            mask=[popup.locator(".el-dialog__body, .ant-modal-body, input, textarea, tbody")],
+            mask_color="#111827",
+        )
+    except Exception:
+        pass
+    log(f"检测到未知弹窗，已保存脱敏证据并暂停：{evidence}")
+    return evidence
+
+
 def close_common_popups(page: Page) -> None:
     log("检查并关闭可能出现的提示弹框")
     other_window_box = page.locator(".el-message-box__wrapper:visible").filter(has_text="其他窗口进行了单位切换")
@@ -170,33 +278,65 @@ def close_common_popups(page: Page) -> None:
         log("已关闭导出记录弹框")
         return
 
-    for popup_text in ["温 馨 提 示", "温馨提示"]:
+    # These tax-site reminders are informational.  Never click their primary
+    # buttons (which may start a declaration); close only the header button.
+    reminder_dialogs = page.locator(
+        ".el-message-box__wrapper:visible, .el-dialog:visible, .ant-modal:visible, [role='dialog']:visible"
+    )
+    for index in range(reminder_dialogs.count()):
+        popup = reminder_dialogs.nth(index)
+        try:
+            popup_text = popup.inner_text(timeout=2000)
+        except Exception:
+            continue
+        marker = next((value for value in TAX_REMINDER_MARKERS if value in popup_text), None)
+        if not marker:
+            continue
+        close_button = popup.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
+        if close_button.count() != 1:
+            evidence = capture_unknown_popup(page, popup)
+            raise RuntimeError(f"提醒弹窗无法自动关闭；证据目录：{evidence}")
+        close_button.click(force=True, timeout=3000)
+        page.wait_for_timeout(800)
+        log(
+            "popup_skipped："
+            f"类型={marker}；机构代码={POPUP_CONTEXT['org_code'] or '未知'}；"
+            f"税款所属期={POPUP_CONTEXT['month'] or '未知'}；未点击业务确认按钮"
+        )
+        return
+
+    for popup_text in COMMON_POPUP_TITLES:
         popup = page.locator(".el-dialog, [role='dialog']").filter(has_text=popup_text).filter(visible=True)
         if popup.count() > 0:
             try:
-                popup.first.get_by_role("button", name="关闭", exact=True).click(timeout=3000)
+                close_button = popup.first.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
+                if close_button.count() > 0:
+                    close_button.first.click(force=True, timeout=3000)
+                else:
+                    popup.first.get_by_role("button", name="关闭", exact=True).click(timeout=3000)
                 page.wait_for_timeout(800)
-                log("已关闭温馨提示弹框")
+                log(f"已关闭提示弹框：{popup_text}")
                 return
             except Exception:
                 pass
 
-    close_selectors = [
-        ".el-dialog__headerbtn:visible",
-        ".ant-modal-close:visible",
-        "button[aria-label='Close']:visible",
-        "button[aria-label='关闭']:visible",
-    ]
-    for selector in close_selectors:
-        for _ in range(5):
-            locator = page.locator(selector)
-            try:
-                if locator.count() == 0:
-                    break
-                locator.first.click(timeout=1000)
-                page.wait_for_timeout(400)
-            except Exception:
-                break
+    # Tax-site reminders change frequently. Close any otherwise unknown dialog by its
+    # visible header close button, while preserving dialogs the workflow must operate.
+    unknown = page.locator(
+        ".el-message-box__wrapper:visible, .el-dialog:visible, .ant-modal:visible, [role='dialog']:visible"
+    )
+    if unknown.count() > 0:
+        popup = unknown.first
+        popup_text = popup.inner_text(timeout=3000)
+        if not any(marker in popup_text for marker in WORKFLOW_DIALOG_MARKERS):
+            close_button = popup.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
+            if close_button.count() == 1:
+                close_button.click(force=True, timeout=3000)
+                page.wait_for_timeout(800)
+                log("已通过右上角关闭按钮关闭提示弹框")
+                return
+        evidence = capture_unknown_popup(page, popup)
+        raise RuntimeError(f"检测到未知弹窗，已暂停自动操作；证据目录：{evidence}")
 
 
 def ensure_withholding_page(page: Page) -> Page:
@@ -248,14 +388,22 @@ def switch_org(page: Page, org: TaxOrg) -> None:
     dialog.first.get_by_role("button", name="搜索", exact=True).click()
     log("已点击搜索")
 
-    result = dialog.first.locator("label.el-radio", has_text=org.name).filter(visible=True).first
-    result.wait_for(state="visible", timeout=20000)
-    result.click()
-    log("已选择搜索结果")
+    results = dialog.first.locator("label.el-radio").filter(has_text=org.name).filter(visible=True)
+    results.first.wait_for(state="visible", timeout=20000)
+    count = results.count()
+    if org.search_result_index > count:
+        raise RuntimeError(
+            f"机构 {org.name}（{org.code}）配置选择第 {org.search_result_index} 条搜索结果，但税局只返回 {count} 条"
+        )
+    results.nth(org.search_result_index - 1).click()
+    log(f"已选择搜索结果第 {org.search_result_index} 条（共 {count} 条）")
 
     dialog.first.get_by_role("button", name="办理个税业务", exact=True).click()
     page.wait_for_load_state("domcontentloaded", timeout=20000)
     page.wait_for_timeout(1500)
+    close_common_popups(page)
+    # 新版提醒可能在扣缴端首页完成渲染后延迟出现。
+    page.wait_for_timeout(1000)
     close_common_popups(page)
 
 
@@ -375,6 +523,7 @@ def close_security_dialog(page: Page) -> None:
 
 
 def drag_aliyun_slider(page: Page, strategy: dict) -> bool:
+    check_cancelled()
     aliyun_slider = page.locator("#aliyunCaptcha-sliding-slider").filter(visible=True)
     aliyun_track = page.locator("#aliyunCaptcha-sliding-body").filter(visible=True)
     if aliyun_slider.count() == 0 or aliyun_track.count() == 0:
@@ -397,6 +546,7 @@ def drag_aliyun_slider(page: Page, strategy: dict) -> bool:
     page.wait_for_timeout(260)
 
     for step in range(1, steps + 1):
+        check_cancelled()
         progress = step / steps
         if strategy["ease"] == "linear":
             eased = progress
@@ -430,6 +580,7 @@ def drag_aliyun_slider(page: Page, strategy: dict) -> bool:
 
 
 def drag_generic_slider(page: Page, strategy: dict) -> bool:
+    check_cancelled()
     candidates = [
         ".slider-handle",
         ".handler",
@@ -446,13 +597,30 @@ def drag_generic_slider(page: Page, strategy: dict) -> bool:
     if handle is None:
         return False
 
+    handle.scroll_into_view_if_needed(timeout=5000)
     box = handle.bounding_box()
-    if not box:
-        raise RuntimeError("无法读取滑块位置。")
+    track_box = handle.evaluate(
+        """el => {
+            let current = el.parentElement;
+            const handleRect = el.getBoundingClientRect();
+            while (current) {
+                const rect = current.getBoundingClientRect();
+                if (rect.width >= handleRect.width * 3 && rect.height >= handleRect.height) {
+                    return {x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+                }
+                current = current.parentElement;
+            }
+            return null;
+        }"""
+    )
+    if not box or not track_box:
+        raise RuntimeError("无法读取滑块或滑道位置。")
 
     start_x = box["x"] + box["width"] / 2
     start_y = box["y"] + box["height"] / 2
-    end_x = start_x + 460
+    end_x = track_box["x"] + track_box["width"] - box["width"] / 2 - 2
+    if end_x <= start_x:
+        raise RuntimeError("滑块拖动距离无效。")
 
     page.mouse.move(start_x, start_y)
     page.mouse.down()
@@ -474,6 +642,7 @@ def drag_visible_slider_to_end(page: Page, strategy: dict) -> bool:
 
 def solve_security_slider_with_retries(page: Page, max_attempts: int = 5) -> None:
     for attempt, strategy in enumerate(SLIDER_STRATEGIES[:max_attempts], start=1):
+        check_cancelled()
         if not has_visible_security_dialog(page):
             return
         log(f"安全验证第 {attempt} 次尝试：{strategy['name']}")
@@ -485,6 +654,8 @@ def solve_security_slider_with_retries(page: Page, max_attempts: int = 5) -> Non
                 if not has_visible_security_dialog(page):
                     log("安全验证弹框已消失")
                     return
+        except TaskCancelled:
+            raise
         except Exception as exc:
             log(f"安全验证策略失败：{exc}")
 
@@ -567,6 +738,7 @@ def wait_and_download_export(page: Page, export_name: str, org: TaxOrg, max_wait
             pass
 
     while time.monotonic() < deadline:
+        check_cancelled()
         try:
             row.first.wait_for(state="visible", timeout=10000)
             row_text = row.first.inner_text(timeout=3000)
@@ -589,7 +761,7 @@ def wait_and_download_export(page: Page, export_name: str, org: TaxOrg, max_wait
             log(f"暂未找到成功记录：{exc}")
 
         log("处理未完成，等待10秒后刷新")
-        page.wait_for_timeout(10000)
+        interruptible_wait(page, 10000)
         try:
             click_button(page, "刷新", exact=False, timeout=3000)
         except Exception:
@@ -599,6 +771,8 @@ def wait_and_download_export(page: Page, export_name: str, org: TaxOrg, max_wait
 
 
 def process_org(page: Page, org: TaxOrg, target_month: str, max_wait_seconds: int) -> tuple[Path, Page]:
+    check_cancelled()
+    set_popup_context(org, target_month)
     log("=" * 70)
     log(f"开始处理单位：{org.name}（{org.code}）")
     page = ensure_withholding_page(page)
@@ -718,6 +892,7 @@ def main() -> int:
 
             downloaded: list[Path] = []
             for org in orgs:
+                check_cancelled()
                 result, page = process_org(page, org, args.month, args.max_wait)
                 downloaded.append(result)
 

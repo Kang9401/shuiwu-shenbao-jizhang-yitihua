@@ -9,7 +9,8 @@ export function useRpaMonitor() {
   const loading = ref(false)
   let timer: number | undefined
 
-  const running = computed(() => ['starting', 'running'].includes(status.value?.current_run.status || ''))
+  const running = computed(() => ['starting', 'running', 'stopping'].includes(status.value?.current_run.status || ''))
+  const canStop = computed(() => status.value?.can_stop === true)
 
   async function refresh() {
     loading.value = true
@@ -27,12 +28,12 @@ export function useRpaMonitor() {
   }
 
   async function stop() {
+    if (status.value?.current_run.status === 'stopping') return
     await rpaApi.stopTask()
     await refresh()
   }
 
   onMounted(async () => { await refresh(); timer = window.setInterval(refresh, 1500) })
   onBeforeUnmount(() => window.clearInterval(timer))
-  return { status, logText, logBox, loading, running, refresh, stop }
+  return { status, logText, logBox, loading, running, canStop, refresh, stop }
 }
-

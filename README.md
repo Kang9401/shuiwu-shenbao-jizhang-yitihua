@@ -1,4 +1,4 @@
-# 税务申报核对工作台
+# 智能税务平台
 
 本项目将个税申报、人员主数据、专项附加扣除、限售股/利息税和核对底稿整合为本地桌面工作台。开发架构为 `FastAPI + Vue 3 + SQLite`，Windows 发布版使用 `pywebview + PyInstaller`，用户电脑不需要安装 Python、Node.js 或数据库。
 

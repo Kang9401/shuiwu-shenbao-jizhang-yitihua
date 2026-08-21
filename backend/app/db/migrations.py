@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -181,6 +182,7 @@ def _rebuild_company_unique_tables(connection: sqlite3.Connection) -> None:
             active INTEGER NOT NULL DEFAULT 1,
             rpa_enabled INTEGER NOT NULL DEFAULT 0,
             rpa_org_name VARCHAR(255) NOT NULL DEFAULT '',
+            rpa_search_result_index INTEGER NOT NULL DEFAULT 1,
             parent_branch VARCHAR(255) NOT NULL DEFAULT '',
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
@@ -196,6 +198,7 @@ def _rebuild_company_unique_tables(connection: sqlite3.Connection) -> None:
         "active": "active" if "active" in columns else "1",
         "rpa_enabled": "rpa_enabled" if "rpa_enabled" in columns else "0",
         "rpa_org_name": "rpa_org_name" if "rpa_org_name" in columns else "''",
+        "rpa_search_result_index": "rpa_search_result_index" if "rpa_search_result_index" in columns else "1",
         "parent_branch": "parent_branch" if "parent_branch" in columns else "''",
         "created_at": "created_at" if "created_at" in columns else "CURRENT_TIMESTAMP",
         "updated_at": "updated_at" if "updated_at" in columns else "CURRENT_TIMESTAMP",
@@ -204,10 +207,10 @@ def _rebuild_company_unique_tables(connection: sqlite3.Connection) -> None:
         f"""
         INSERT INTO organization_mappings_company_new (
             id, company_id, branch_name, org_code, taxpayer_id, active, rpa_enabled,
-            rpa_org_name, parent_branch, created_at, updated_at
+            rpa_org_name, rpa_search_result_index, parent_branch, created_at, updated_at
         )
         SELECT id, company_id, branch_name, org_code, {expressions['taxpayer_id']}, {expressions['active']},
-               {expressions['rpa_enabled']}, {expressions['rpa_org_name']}, {expressions['parent_branch']},
+               {expressions['rpa_enabled']}, {expressions['rpa_org_name']}, {expressions['rpa_search_result_index']}, {expressions['parent_branch']},
                {expressions['created_at']}, {expressions['updated_at']}
         FROM organization_mappings
         """
@@ -281,7 +284,54 @@ def _migration_6(connection: sqlite3.Connection) -> None:
     _rebuild_company_unique_tables(connection)
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5, 6: _migration_6}
+def _migration_7(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'"
+    ).fetchone()
+    if table is None:
+        return
+    if "rpa_search_result_index" not in _table_columns(connection, "organization_mappings"):
+        connection.execute(
+            'ALTER TABLE organization_mappings ADD COLUMN "rpa_search_result_index" INTEGER NOT NULL DEFAULT 1'
+        )
+
+
+def _migration_8(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tax_monthly_artifacts'"
+    ).fetchone()
+    if table is None:
+        return
+    columns = _table_columns(connection, "tax_monthly_artifacts")
+    if "file_content" not in columns:
+        connection.execute('ALTER TABLE tax_monthly_artifacts ADD COLUMN "file_content" BLOB')
+    if "content_sha256" not in columns:
+        connection.execute('ALTER TABLE tax_monthly_artifacts ADD COLUMN "content_sha256" VARCHAR(64)')
+    rows = connection.execute(
+        "SELECT id, stored_path FROM tax_monthly_artifacts "
+        "WHERE file_content IS NULL AND stored_path IS NOT NULL"
+    ).fetchall()
+    for artifact_id, stored_path in rows:
+        path = Path(str(stored_path))
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        connection.execute(
+            "UPDATE tax_monthly_artifacts SET file_content = ?, content_sha256 = ? WHERE id = ?",
+            (content, hashlib.sha256(content).hexdigest(), artifact_id),
+        )
+
+
+MIGRATIONS = {
+    1: _migration_1,
+    2: _migration_2,
+    3: _migration_3,
+    4: _migration_4,
+    5: _migration_5,
+    6: _migration_6,
+    7: _migration_7,
+    8: _migration_8,
+}
 
 
 def run_migrations(engine: Engine, *, backup_existing: bool = False) -> int:

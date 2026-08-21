@@ -132,7 +132,7 @@ def write_personnel_change_review_table(df: pd.DataFrame, path: str | Path) -> N
         column_index = {cell.value: cell.column for cell in worksheet[1]}
 
         for row_number, (_, row) in enumerate(df.iterrows(), start=2):
-            required = ["*姓名", "证件类型", "证件号码", "员工编号", "机构代码(人员信息表)"]
+            required = ["*姓名", "证件类型", "证件号码", "手机号码", "员工编号", "机构代码(人员信息表)"]
             cert_type = _clean(row.get("证件类型"))
             if cert_type and cert_type != "居民身份证":
                 required.extend(["国籍(地区)", "性别", "出生日期"])

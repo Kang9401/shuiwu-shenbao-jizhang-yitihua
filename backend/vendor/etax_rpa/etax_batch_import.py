@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import datetime as dt
 import json
@@ -17,14 +19,17 @@ from etax_batch_export import (
     TaxOrg,
     click_button,
     click_text,
+    check_cancelled,
     close_common_popups,
     close_duplicate_etax_tabs,
     default_month,
     ensure_withholding_page,
+    interruptible_wait,
     log,
     make_context,
     month_label,
     read_orgs_from_excel,
+    set_popup_context,
     set_tax_month,
     switch_org,
     wait_for_user,
@@ -32,6 +37,13 @@ from etax_batch_export import (
 
 
 INPUT_ROOT = WORK_DIR / "input"
+
+# The eTax SPA can take noticeably longer to render the action bar after an
+# organization/month switch.  Keep these waits separate so a delayed dropdown
+# or confirmation dialog does not look like a missing control.
+ACTION_BAR_WAIT_SECONDS = 30
+DROPDOWN_MENU_WAIT_SECONDS = 30
+CLEAR_CONFIRMATION_WAIT_SECONDS = 30
 
 
 class ImportTask:
@@ -43,12 +55,20 @@ class ImportTask:
         label: str,
         *,
         needs_month: bool = True,
+        clear_before_import: bool = True,
+        exclude_patterns: list[str] | None = None,
     ) -> None:
         self.menu = menu
         self.item = item
         self.patterns = patterns
         self.label = label
         self.needs_month = needs_month
+        self.clear_before_import = clear_before_import
+        self.exclude_patterns = exclude_patterns or []
+
+    @property
+    def task_id(self) -> str:
+        return "|".join((self.menu, self.item or "", self.label))
 
 
 def visible_dialog(page: Page, title_text: str):
@@ -137,6 +157,11 @@ def enter_declaration_page(page: Page, menu: str, item: str | None, target_month
         page.wait_for_load_state("domcontentloaded", timeout=20000)
         page.wait_for_timeout(1500)
         close_common_popups(page)
+        # Detail pages render the action bar asynchronously after the route
+        # changes. Wait for the actual button instead of racing the renderer.
+        page.get_by_role("button", name="更多操作", exact=False).filter(visible=True).first.wait_for(
+            state="visible", timeout=ACTION_BAR_WAIT_SECONDS * 1000
+        )
 
 
 def open_import_dialog(page: Page) -> Page:
@@ -151,6 +176,82 @@ def open_import_dialog(page: Page) -> Page:
     dialog = visible_dialog(page, "文件导入")
     dialog.wait_for(state="visible", timeout=15000)
     return dialog
+
+
+def clear_existing_data(page: Page, task: ImportTask) -> None:
+    """Clear the current declaration page before the first upload for its scope."""
+    if not task.clear_before_import:
+        log(f"clear_data_skipped：{task.label}；原因：当前税局页面不支持清空或按业务规则不清空")
+        return
+    log(f"clear_data_started：{task.label}")
+    try:
+        action_button = page.get_by_role("button", name="更多操作", exact=False).filter(visible=True).first
+        action_button.wait_for(state="visible", timeout=ACTION_BAR_WAIT_SECONDS * 1000)
+        # Element UI attaches the popper to <body>.  Re-open it once if the
+        # first click is swallowed during a component re-render.
+        clear_item = None
+        visible_menu_items: list[str] = []
+        for attempt in range(2):
+            action_button.click()
+            deadline = time.monotonic() + DROPDOWN_MENU_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                check_cancelled()
+                menu_items = page.locator(
+                    "ul.el-dropdown-menu.el-popper:visible li.el-dropdown-menu__item:visible, "
+                    ".el-dropdown-menu:visible li.el-dropdown-menu__item:visible, "
+                    ".ant-dropdown:visible [role='menuitem']:visible"
+                )
+                visible_menu_items = [item.strip() for item in menu_items.all_inner_texts() if item.strip()]
+                clear_item = menu_items.filter(has_text="清空数据")
+                if clear_item.count() == 0:
+                    clear_item = page.get_by_text("清空数据", exact=True).filter(visible=True)
+                if clear_item.count() == 1:
+                    break
+                page.wait_for_timeout(500)
+            if clear_item is not None and clear_item.count() == 1:
+                break
+            if attempt == 0:
+                log(f"清空数据菜单尚未出现，将重新打开更多操作：已见菜单项={visible_menu_items or ['无']}")
+        if clear_item is None or clear_item.count() != 1:
+            raise RuntimeError(
+                f"未找到清空数据菜单：{task.label}；路由={page.url}；已见菜单项={visible_menu_items or ['无']}"
+            )
+        clear_item.click()
+        dialogs = page.locator(
+            ".el-message-box__wrapper:visible, .el-dialog:visible, [role='dialog']:visible"
+        )
+        # The tax site uses a generic "提示" title and asks whether to clear
+        # the whole month's data; the body does not repeat the menu label.
+        confirmation = None
+        deadline = time.monotonic() + CLEAR_CONFIRMATION_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            check_cancelled()
+            for marker in ("是否确定清空当前所得的整月数据", "清空当前所得的整月数据", "清空数据", "删除数据"):
+                candidate = dialogs.filter(has_text=marker)
+                if candidate.count() == 1:
+                    confirmation = candidate.first
+                    break
+            if confirmation is not None:
+                break
+            page.wait_for_timeout(500)
+        if confirmation is None:
+            visible_dialog_text = [text.strip().replace("\n", " ")[:120] for text in dialogs.all_inner_texts() if text.strip()]
+            raise RuntimeError(
+                f"清空数据确认弹窗无法唯一识别：{task.label}；路由={page.url}；可见弹窗={visible_dialog_text or ['无']}"
+            )
+        buttons = confirmation.get_by_role("button", name="确定", exact=True).filter(visible=True)
+        if buttons.count() == 0:
+            buttons = confirmation.get_by_role("button", name="确认", exact=True).filter(visible=True)
+        if buttons.count() != 1:
+            raise RuntimeError(f"清空数据确认按钮不唯一：{task.label}")
+        buttons.first.click()
+        confirmation.wait_for(state="hidden", timeout=CLEAR_CONFIRMATION_WAIT_SECONDS * 1000)
+        page.wait_for_timeout(1200)
+        close_common_popups(page)
+    except Exception as exc:
+        log(f"clear_data_failed：{task.label}；原因：{exc}")
+        raise
+    log(f"clear_data_completed：{task.label}")
 
 
 def choose_input_file(dialog, file_path: Path) -> None:
@@ -177,6 +278,7 @@ def wait_import_success(page: Page, filename: str, *, max_wait_seconds: int) -> 
     deadline = time.monotonic() + max_wait_seconds
     last_status = ""
     while time.monotonic() < deadline:
+        check_cancelled()
         click_import_result_tab(dialog)
         row_text = import_status_text(dialog, filename)
         if row_text:
@@ -193,7 +295,7 @@ def wait_import_success(page: Page, filename: str, *, max_wait_seconds: int) -> 
         refresh = dialog.get_by_role("button", name="刷新", exact=False).filter(visible=True)
         if refresh.count() > 0:
             refresh.first.click()
-        page.wait_for_timeout(5000)
+        interruptible_wait(page, 5000)
 
     raise TimeoutError(f"超过 {max_wait_seconds} 秒仍未看到导入成功：{filename}；最后状态：{last_status}")
 
@@ -205,17 +307,18 @@ def progress_file_for_month(target_month: str) -> Path:
 def load_progress(target_month: str) -> dict:
     path = progress_file_for_month(target_month)
     if not path.exists():
-        return {"month": target_month, "completed": {}}
+        return {"month": target_month, "completed": {}, "tasks": {}}
     try:
         with path.open("r", encoding="utf-8") as file:
             data = json.load(file)
     except Exception as exc:
         log(f"读取进度文件失败，将忽略旧进度：{path}；原因：{exc}")
-        return {"month": target_month, "completed": {}}
+        return {"month": target_month, "completed": {}, "tasks": {}}
     if not isinstance(data, dict):
         return {"month": target_month, "completed": {}}
     data.setdefault("month", target_month)
     data.setdefault("completed", {})
+    data.setdefault("tasks", {})
     return data
 
 
@@ -231,25 +334,44 @@ def save_progress(target_month: str, progress: dict) -> None:
 def reset_progress_for_orgs(target_month: str, orgs: list[TaxOrg]) -> dict:
     progress = load_progress(target_month)
     completed = progress.setdefault("completed", {})
+    tasks = progress.setdefault("tasks", {})
     for org in orgs:
         completed.pop(org.code, None)
+        tasks.pop(org.code, None)
     save_progress(target_month, progress)
     log("已按用户选择清除本次机构的历史完成记录，将全部重跑")
     return progress
 
 
+def completed_task_ids(progress: dict, org: TaxOrg) -> set[str]:
+    tasks = progress.setdefault("tasks", {}).get(org.code, [])
+    return {str(task_id) for task_id in tasks if task_id}
+
+
+def mark_task_completed(target_month: str, org: TaxOrg, task: ImportTask, progress: dict) -> None:
+    task_progress = progress.setdefault("tasks", {})
+    task_ids = set(task_progress.get(org.code, []))
+    task_ids.add(task.task_id)
+    task_progress[org.code] = sorted(task_ids)
+    save_progress(target_month, progress)
+    log(f"已记录任务完成状态：{org.name}（{org.code}）/{task.label}")
+
+
 def mark_org_completed(target_month: str, org: TaxOrg, progress: dict) -> None:
     completed = progress.setdefault("completed", {})
+    previous = completed.get(org.code, {})
+    tasks = previous.get("tasks", []) if isinstance(previous, dict) else []
     completed[org.code] = {
         "name": org.name,
         "code": org.code,
+        "tasks": sorted(set(tasks)),
         "completed_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     save_progress(target_month, progress)
     log(f"已记录机构完成状态：{org.name}（{org.code}）")
 
 
-def find_one_file(base_dir: Path, patterns: list[str]) -> Path | None:
+def find_one_file(base_dir: Path, patterns: list[str], exclude_patterns: list[str] | None = None) -> Path | None:
     if not base_dir.exists():
         log(f"未找到申报表目录，跳过该目录下文件匹配：{base_dir}")
         return None
@@ -257,7 +379,15 @@ def find_one_file(base_dir: Path, patterns: list[str]) -> Path | None:
     matches: list[Path] = []
     for pattern in patterns:
         matches.extend(base_dir.glob(pattern))
-    matches = sorted({path.resolve() for path in matches if path.is_file()}, key=lambda p: p.name)
+    excluded = exclude_patterns or []
+    matches = sorted(
+        {
+            path.resolve()
+            for path in matches
+            if path.is_file() and not any(path.match(pattern) for pattern in excluded)
+        },
+        key=lambda p: p.name,
+    )
     if not matches:
         log(f"未找到待上传文件，跳过：目录={base_dir}，匹配={patterns}")
         return None
@@ -289,47 +419,163 @@ def parse_amount(value: str) -> float:
         return 0.0
 
 
-def extract_summary_table(page: Page) -> list[dict[str, str]]:
-    tables = page.locator(".el-table").filter(visible=True)
-    for table_index in range(tables.count()):
-        table = tables.nth(table_index)
-        text = table.inner_text(timeout=3000)
-        if all(header in text for header in ["所得项目", "填写人次", "收入合计", "应补/退税额"]):
+SUMMARY_COLUMN_ALIASES = {
+    "所得项目": ("所得项目",),
+    "填写人次": ("填写人次", "填报人次"),
+    "收入合计（元）": ("收入合计", "收入合计（元）"),
+    "应补/退税额（元）": ("应补/退税额", "应补/退税额（元）"),
+}
+
+
+def summary_column_indices(headers: list[str]) -> dict[str, int]:
+    indices: dict[str, int] = {}
+    for key, aliases in SUMMARY_COLUMN_ALIASES.items():
+        for index, header in enumerate(headers):
+            if any(alias in header for alias in aliases):
+                indices[key] = index
+                break
+    return indices
+
+
+def map_summary_cells(headers: list[str], cells: list[str]) -> dict[str, str] | None:
+    if not cells or all(cell.strip() in {"", "暂无数据"} for cell in cells):
+        return None
+    indices = summary_column_indices(headers)
+    if len(indices) == len(SUMMARY_COLUMN_ALIASES) and max(indices.values()) < len(cells):
+        return {key: cells[index].strip() for key, index in indices.items()}
+    values = [cell.strip() for cell in cells if cell.strip() and cell.strip() != "暂无数据"]
+    if len(values) < 4:
+        return None
+    return dict(zip(SUMMARY_COLUMN_ALIASES, values[:4]))
+
+
+def wait_for_declaration_table(page: Page, *, timeout_seconds: int = 15) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        check_cancelled()
+        loading = page.locator(".el-loading-mask:visible, .ant-spin-spinning:visible")
+        tables = page.locator(".el-table:visible, table:visible")
+        empty = page.get_by_text("暂无数据", exact=False).filter(visible=True)
+        if loading.count() == 0 and (tables.count() > 0 or empty.count() > 0):
+            return
+        interruptible_wait(page, 300)
+    raise TimeoutError("reconciliation_capture_failed：申报页面表格异步加载超时")
+
+
+def _next_page_button(page: Page):
+    buttons = page.locator(
+        ".el-pagination:visible .btn-next, .ant-pagination:visible .ant-pagination-next"
+    ).filter(visible=True)
+    if buttons.count() == 0:
+        return None
+    button = buttons.first
+    class_name = button.get_attribute("class") or ""
+    if button.get_attribute("disabled") is not None or "disabled" in class_name:
+        return None
+    return button
+
+
+def extract_summary_table(page: Page, *, allow_missing: bool = False) -> list[dict[str, str]]:
+    wait_for_declaration_table(page)
+    results: list[dict[str, str]] = []
+    seen_pages: set[tuple[tuple[str, str, str, str], ...]] = set()
+    page_number = 1
+    while True:
+        check_cancelled()
+        page_rows: list[dict[str, str]] = []
+        matched_table = False
+        tables = page.locator(".el-table").filter(visible=True)
+        for table_index in range(tables.count()):
+            table = tables.nth(table_index)
+            text = table.inner_text(timeout=3000)
+            if not all(header in text for header in ["所得项目", "收入合计", "应补/退税额"]):
+                continue
+            matched_table = True
+            header_cells = table.locator(
+                ".el-table__header-wrapper th, thead th"
+            ).filter(visible=True)
+            headers = [cell.inner_text(timeout=1000).strip() for cell in header_cells.all()]
             rows = table.locator("tbody tr, .el-table__row").filter(visible=True)
-            results: list[dict[str, str]] = []
             for i in range(rows.count()):
-                cells = [cell.strip() for cell in rows.nth(i).locator("td").all_inner_texts()]
-                cells = [cell for cell in cells if cell and cell != "暂无数据"]
-                if len(cells) < 4:
-                    continue
-                results.append(
-                    {
-                        "所得项目": cells[0],
-                        "填写人次": cells[1],
-                        "收入合计（元）": cells[2],
-                        "应补/退税额（元）": cells[3],
-                    }
-                )
-            return results
-    return []
+                values = map_summary_cells(headers, rows.nth(i).locator("td").all_inner_texts())
+                if values is not None:
+                    page_rows.append(values)
+            break
+        if not matched_table:
+            if page.get_by_text("暂无数据", exact=False).filter(visible=True).count() > 0:
+                log("核对表抓取：页面显示暂无数据")
+                return []
+            if allow_missing:
+                log("核对表抓取：当前页面没有汇总表，改为读取限售股明细")
+                return []
+            raise RuntimeError("reconciliation_capture_failed：未识别到申报汇总表")
+        signature = tuple(
+            (row["所得项目"], row["填写人次"], row["收入合计（元）"], row["应补/退税额（元）"])
+            for row in page_rows
+        )
+        if signature in seen_pages:
+            log(f"核对表抓取：检测到重复分页内容，停止于第 {page_number} 页")
+            break
+        seen_pages.add(signature)
+        results.extend(page_rows)
+        log(f"核对表抓取：页码={page_number}，行数={len(page_rows)}")
+        next_button = _next_page_button(page)
+        if next_button is None:
+            break
+        next_button.click()
+        page_number += 1
+        interruptible_wait(page, 800)
+        wait_for_declaration_table(page)
+
+    income_total = sum(parse_amount(row["收入合计（元）"]) for row in results)
+    tax_total = sum(parse_amount(row["应补/退税额（元）"]) for row in results)
+    log(f"核对表抓取完成：行数={len(results)}，收入合计={income_total:.2f}，税额合计={tax_total:.2f}")
+    return results
+
+
+def _header_index(headers: list[str], aliases: tuple[str, ...]) -> int | None:
+    for index, header in enumerate(headers):
+        if any(alias in header for alias in aliases):
+            return index
+    return None
 
 
 def extract_restricted_share_summary(page: Page) -> list[dict[str, str]]:
-    rows = page.locator(".el-table__body-wrapper tbody tr, .el-table__row").filter(visible=True)
+    wait_for_declaration_table(page)
+    tables = page.locator(".el-table").filter(visible=True)
     person_count = 0
     income_total = 0.0
     tax_total = 0.0
-    for i in range(rows.count()):
-        cells = [cell.strip() for cell in rows.nth(i).locator("td").all_inner_texts()]
-        if not cells or any("暂无数据" in cell for cell in cells):
+    for table_index in range(tables.count()):
+        table = tables.nth(table_index)
+        headers = [
+            cell.inner_text(timeout=1000).strip()
+            for cell in table.locator(".el-table__header-wrapper th, thead th").filter(visible=True).all()
+        ]
+        income_index = _header_index(headers, ("应纳税所得额", "收入合计", "收入额", "收入"))
+        tax_index = _header_index(headers, ("应补/退税额", "应纳税额", "应扣缴税额", "税额"))
+        rows = table.locator("tbody tr, .el-table__row").filter(visible=True)
+        if rows.count() == 0:
             continue
-        person_count += 1
-        if len(cells) >= 18:
-            income_total += parse_amount(cells[10])
-            tax_total += parse_amount(cells[-1])
+        for i in range(rows.count()):
+            cells = [cell.strip() for cell in rows.nth(i).locator("td").all_inner_texts()]
+            if not cells or any("暂无数据" in cell for cell in cells):
+                continue
+            person_count += 1
+            if income_index is not None and income_index < len(cells):
+                income_total += parse_amount(cells[income_index])
+            elif len(cells) >= 18:
+                income_total += parse_amount(cells[10])
+            if tax_index is not None and tax_index < len(cells):
+                tax_total += parse_amount(cells[tax_index])
+            elif len(cells) >= 18:
+                tax_total += parse_amount(cells[-1])
+        if person_count:
+            break
     if person_count == 0:
-        log("限售股所得申报无明细数据，本次不写入核对表")
+        log("限售股所得申报无明细，已跳过")
         return []
+    log(f"限售股核对抓取完成：行数={person_count}，收入合计={income_total:.2f}，税额合计={tax_total:.2f}")
     return [
         {
             "所得项目": "限售股转让所得",
@@ -345,7 +591,7 @@ def collect_declaration_check(page: Page, menu: str, target_month: str) -> list[
     enter_declaration_page(page, menu, None, target_month, needs_month=True)
     page.wait_for_timeout(1200)
     if menu == "限售股所得申报":
-        rows = extract_summary_table(page)
+        rows = extract_summary_table(page, allow_missing=True)
         if rows:
             return rows
         return extract_restricted_share_summary(page)
@@ -440,8 +686,10 @@ def write_declaration_check_excel(target_month: str, org: TaxOrg, sections: list
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[chr(64 + index)].width = width
 
-    workbook.save(path)
+    temp_path = path.with_name(f".{path.stem}.tmp-{dt.datetime.now():%Y%m%d%H%M%S%f}{path.suffix}")
+    workbook.save(temp_path)
     workbook.close()
+    temp_path.replace(path)
     log(f"申报导入后核对结果已保存：{path}")
     return path
 
@@ -483,6 +731,7 @@ def build_tasks(org_code: str) -> list[ImportTask]:
             org_file_patterns(org_code, ["人员信息采集_员工*.xls", "人员信息采集_员工*.xlsx"]),
             "人员信息采集-员工",
             needs_month=False,
+            clear_before_import=False,
         ),
         ImportTask(
             "人员信息采集",
@@ -490,18 +739,35 @@ def build_tasks(org_code: str) -> list[ImportTask]:
             org_file_patterns(org_code, ["人员信息采集_客户*.xls", "人员信息采集_客户*.xlsx"]),
             "人员信息采集-客户",
             needs_month=False,
+            clear_before_import=False,
+        ),
+        ImportTask(
+            "人员信息采集",
+            None,
+            org_file_patterns(org_code, ["人员信息采集_实习生*.xls", "人员信息采集_实习生*.xlsx"]),
+            "人员信息采集-实习生",
+            needs_month=False,
+            clear_before_import=False,
         ),
         ImportTask(
             "综合所得申报",
             "正常工资薪金所得",
             org_file_patterns(org_code, ["个税申报表*.xls", "个税申报表*.xlsx"]),
             "综合所得申报-正常工资薪金所得",
+            exclude_patterns=["*实习生*"],
         ),
         ImportTask(
             "综合所得申报",
             "劳务报酬",
             org_file_patterns(org_code, ["个税申报_经纪人*.xls", "个税申报_经纪人*.xlsx"]),
             "综合所得申报-劳务报酬（适用累计预扣法）",
+        ),
+        ImportTask(
+            "综合所得申报",
+            "劳务报酬",
+            org_file_patterns(org_code, ["个税申报表_实习生*.xls", "个税申报表_实习生*.xlsx"]),
+            "综合所得申报-劳务报酬（实习生）",
+            clear_before_import=False,
         ),
         ImportTask(
             "综合所得申报",
@@ -526,21 +792,39 @@ def build_tasks(org_code: str) -> list[ImportTask]:
             None,
             org_file_patterns(org_code, ["限售股转让所得*.xls", "限售股转让所得*.xlsx"]),
             "限售股所得申报",
+            clear_before_import=False,
         ),
     ]
 
 
-def process_org(page: Page, org: TaxOrg, target_month: str, input_root: Path, max_wait_seconds: int) -> Page:
+def process_org(
+    page: Page,
+    org: TaxOrg,
+    target_month: str,
+    input_root: Path,
+    max_wait_seconds: int,
+    *,
+    progress: dict | None = None,
+    resume: bool = False,
+) -> Page:
+    check_cancelled()
+    set_popup_context(org, target_month)
     log("=" * 70)
     log(f"开始处理申报导入：{org.name}（{org.code}）")
     input_dirs = input_dirs_for_org(input_root, target_month, org.code)
     log(f"申报表读取目录：{', '.join(str(path) for path in input_dirs)}")
 
+    progress = progress if progress is not None else {"month": target_month, "completed": {}}
+    completed_ids = completed_task_ids(progress, org) if resume else set()
     task_files: list[tuple[ImportTask, Path]] = []
     for task in build_tasks(org.code):
+        check_cancelled()
+        if task.task_id in completed_ids:
+            log(f"续跑跳过已完成任务：{task.label}")
+            continue
         file_path = None
         for input_dir in input_dirs:
-            file_path = find_one_file(input_dir, task.patterns)
+            file_path = find_one_file(input_dir, task.patterns, task.exclude_patterns)
             if file_path is not None:
                 break
         if file_path is None:
@@ -556,9 +840,21 @@ def process_org(page: Page, org: TaxOrg, target_month: str, input_root: Path, ma
     switch_org(page, org)
     page = ensure_withholding_page(page)
 
+    cleared_scopes: set[tuple[str, str | None]] = set()
+    completed_scopes = {
+        (task.menu, task.item)
+        for task in build_tasks(org.code)
+        if task.task_id in completed_ids
+    }
     for task, file_path in task_files:
+        check_cancelled()
         enter_declaration_page(page, task.menu, task.item, target_month, needs_month=task.needs_month)
+        scope = (task.menu, task.item)
+        if scope not in cleared_scopes and scope not in completed_scopes:
+            clear_existing_data(page, task)
+            cleared_scopes.add(scope)
         upload_and_verify(page, file_path, label=task.label, max_wait_seconds=max_wait_seconds)
+        mark_task_completed(target_month, org, task, progress)
 
     run_post_import_check(page, org, target_month)
     log(f"机构申报导入完成：{org.name}（{org.code}）")
@@ -657,7 +953,16 @@ def main() -> int:
             wait_for_user("请确认浏览器已登录自然人电子税务局，并停留在可办理个税业务的页面。", skip=args.yes)
 
             for org in orgs:
-                page = process_org(page, org, args.month, input_root, args.max_wait)
+                check_cancelled()
+                page = process_org(
+                    page,
+                    org,
+                    args.month,
+                    input_root,
+                    args.max_wait,
+                    progress=progress,
+                    resume=args.resume,
+                )
                 mark_org_completed(args.month, org, progress)
 
             log("=" * 70)

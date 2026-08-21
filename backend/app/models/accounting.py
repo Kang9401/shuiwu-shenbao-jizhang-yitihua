@@ -166,6 +166,7 @@ class OrganizationMapping(Base):
     active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     rpa_enabled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rpa_org_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    rpa_search_result_index: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     parent_branch: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

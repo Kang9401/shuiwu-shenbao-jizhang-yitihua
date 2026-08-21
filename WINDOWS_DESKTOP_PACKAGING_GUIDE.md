@@ -1,6 +1,8 @@
 # Windows 桌面版打包指南
 
-本文记录 TaxWorkbench Windows 桌面版的实际打包流程、关键实现和已验证的故障处理方法。目标是让后续发布可直接复用，避免重复排查 Python 3.12、PyInstaller、WebView2 和 RPA 资源问题。
+本文记录“智能税务平台”Windows 桌面版的实际打包流程、关键实现和已验证的故障处理方法。目标是让后续发布可直接复用，避免重复排查 Python 3.12、PyInstaller、WebView2 和 RPA 资源问题。
+
+产品显示名称为“智能税务平台”；`TaxWorkbench` 仍作为内部 slug、EXE/ZIP 文件名和 `%LOCALAPPDATA%` 数据目录名使用，以保证旧版本升级时数据路径兼容。
 
 ## 1. 当前打包方案
 
@@ -12,6 +14,8 @@
 - RPA 助手：PyInstaller `onefile` 模式，每个脚本生成一个独立 EXE
 - 发布形式：便携目录 + ZIP + SHA256 文件
 - 用户数据：默认保存在 `%LOCALAPPDATA%\TaxWorkbench`，不放在程序目录内
+
+产品显示名称为“智能税务平台”；`TaxWorkbench` 仍作为内部 slug、EXE/ZIP 文件名和 `%LOCALAPPDATA%\TaxWorkbench` 数据目录名使用，以保证旧版本升级时数据路径兼容。
 
 主要文件：
 
@@ -69,6 +73,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_release.
 10. 自检全部成功后，原子替换 `release/<版本号>`。
 
 正式发布建议不要使用 `-SkipTests` 或 `-ReuseDesktopBuild`。
+
+压缩阶段使用 Windows 内置 `tar.exe -a` 创建 ZIP。PowerShell `Compress-Archive` 在新 EXE 被 Defender 扫描时可能出现文件占用错误，`tar.exe` 可避免该竞态。
 
 ## 4. 节省时间的重试方法
 
