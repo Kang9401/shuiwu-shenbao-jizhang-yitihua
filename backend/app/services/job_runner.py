@@ -24,7 +24,7 @@ def run_job(db: Session, job: Job, operation: str = "generate") -> Job:
             .order_by(UploadedFile.id)
             .all()
         )
-        if job.workflow_code == "restricted_stock_interest_tax":
+        if job.workflow_code in {"restricted_stock_interest_tax", "part_time_tax"}:
             result = workflow.run(db, job.id, job.period_id, files, operation=operation)
         else:
             result = workflow.run(db, job.id, job.period_id, files)

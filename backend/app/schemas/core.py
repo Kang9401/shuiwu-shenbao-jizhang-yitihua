@@ -37,7 +37,7 @@ class JobCreate(BaseModel):
     workflow_code: str
     period_id: Optional[int] = None
     input_file_ids: List[int]
-    operation: Literal["generate", "reconcile"] = "generate"
+    operation: Literal["generate", "reconcile", "initial", "recheck"] = "generate"
 
 
 class JobRead(ORMModel):

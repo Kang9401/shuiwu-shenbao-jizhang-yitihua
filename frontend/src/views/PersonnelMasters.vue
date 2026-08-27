@@ -18,6 +18,7 @@
             <select v-model="personType" class="period-native-select">
               <option value="employee">员工</option>
               <option value="broker">经纪人</option>
+              <option value="part_time">非全日制用工</option>
             </select>
           </label>
           <label>
@@ -125,6 +126,7 @@ const errorText = ref('')
 const personTypeLabel = computed(() => ({
   employee: '员工',
   broker: '经纪人',
+  part_time: '非全日制用工',
 }[personType.value]))
 
 const canImport = computed(() =>

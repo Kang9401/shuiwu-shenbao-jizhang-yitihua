@@ -68,10 +68,10 @@ $env:FINANCE_AI_MODEL="your-model-name"
 
 ```powershell
 pip install -r backend\requirements-desktop.txt
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Version 0.9.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -Version 0.9.1
 ```
 
-产物位于 `release/0.9.0/`。桌面版业务数据默认存放在 `%LOCALAPPDATA%\TaxWorkbench`，替换程序目录不会覆盖用户数据。
+产物位于 `release/0.9.1/`。桌面版业务数据默认存放在 `%LOCALAPPDATA%\TaxWorkbench`，替换程序目录不会覆盖用户数据。
 
 ## 质量检查
 

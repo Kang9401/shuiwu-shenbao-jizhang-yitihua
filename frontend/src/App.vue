@@ -257,6 +257,7 @@ type ViewKey =
   | 'etax_rpa'
   | 'annual_bonus_tax'
   | 'broker_tax'
+  | 'part_time_tax'
   | 'intern_tax'
   | 'restricted_stock_interest_tax'
   | 'reconciliation_imports'
@@ -293,6 +294,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
       { key: 'etax_rpa', label: '个税 RPA', icon: Monitor, kicker: 'Etax automation', description: '自然人电子税务局批量自动化。' },
       { key: 'annual_bonus_tax', label: '年终奖申报', icon: Wallet, workflowCode: 'annual_bonus_tax', kicker: 'Annual bonus', description: '全年一次性奖金个税申报数据处理。' },
       { key: 'broker_tax', label: '经纪人申报', icon: TrendCharts, workflowCode: 'broker_tax', kicker: 'Broker tax', description: '证券经纪人佣金收入个税申报。' },
+      { key: 'part_time_tax', label: '非全日制用工申报', icon: User, workflowCode: 'part_time_tax', kicker: 'Part-time tax', description: '非全日制用工人员信息、劳务报酬和人员变化申报。' },
       { key: 'intern_tax', label: '实习生申报', icon: User, workflowCode: 'intern_tax', kicker: 'Intern tax', description: '实习生补贴个税申报与人员采集。' },
       { key: 'restricted_stock_interest_tax', label: '限售股/利息税', icon: Coin, workflowCode: 'restricted_stock_interest_tax', kicker: 'Restricted stock', description: '限售股、债券利息及客户类个人所得申报。' },
       { key: 'reconciliation_imports', label: '核对数据导入', icon: Files, kicker: 'Reconciliation imports', description: '银行流水、申报结果和账务数据结构化入库。' },

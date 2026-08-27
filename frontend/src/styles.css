@@ -648,6 +648,12 @@ input:focus-visible {
   font-size: 13px;
 }
 
+.source-note {
+  color: var(--success);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
 .workflow-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

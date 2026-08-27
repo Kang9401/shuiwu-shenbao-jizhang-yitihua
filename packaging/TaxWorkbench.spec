@@ -35,6 +35,7 @@ a = Analysis(
         (str(RPA_VENDOR), "backend/vendor/etax_rpa"),
         (str(RPA_EXTENSIONS), "app/rpa/extensions"),
         (str(RPA_HELPERS), "rpa_helpers"),
+        (str(BACKEND / "resources"), "backend/resources"),
         *copy_metadata("pywebview"),
     ],
     hiddenimports=hiddenimports,

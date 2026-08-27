@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import create_app
+from app.core.version import APP_VERSION
 
 
 def test_production_app_serves_frontend_and_keeps_api_routes(tmp_path, monkeypatch):
@@ -18,5 +19,5 @@ def test_production_app_serves_frontend_and_keeps_api_routes(tmp_path, monkeypat
     assert root.status_code == 200
     assert "TaxWorkbench" in root.text
     assert system.status_code == 200
-    assert system.json()["app_version"] == "0.9.0"
+    assert system.json()["app_version"] == APP_VERSION
 

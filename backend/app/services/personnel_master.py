@@ -16,7 +16,7 @@ from app.services.excel import read_excel, write_workbook
 from app.services.storage import save_upload
 
 
-PERSON_TYPES = {"employee", "intern", "broker", "customer"}
+PERSON_TYPES = {"employee", "intern", "broker", "customer", "part_time"}
 SCOPE_TYPES = {"month", "org", "branch"}
 ORG_CODE_ALIASES = ["机构代码", "分支机构代码", "单位编号"]
 

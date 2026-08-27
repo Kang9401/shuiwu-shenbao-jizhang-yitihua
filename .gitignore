@@ -28,6 +28,8 @@ backend/vendor/etax_rpa/机构信息表.xlsx
 *.db
 *.xls
 *.xlsx
+!backend/resources/
+!backend/resources/*.xlsx
 /database/
 /databases/
 /backend/database/

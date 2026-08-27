@@ -96,7 +96,7 @@ export interface Job {
   id: number
   workflow_code: string
   period_id: number | null
-  operation: 'generate' | 'reconcile'
+  operation: 'generate' | 'reconcile' | 'initial' | 'recheck'
   app_version: string
   ruleset_version: string
   status: string
@@ -202,7 +202,7 @@ export interface RpaStatus {
   can_resume: boolean
 }
 
-export type PersonType = 'employee' | 'broker'
+export type PersonType = 'employee' | 'broker' | 'part_time'
 export type PersonnelScopeType = 'month' | 'org' | 'branch'
 export type ReconciliationImportType = 'bank_statement' | 'declaration_result' | 'accounting_ledger' | 'balance_sheet'
 
@@ -426,7 +426,7 @@ export const workflowApi = {
       params: { period_id: periodId || undefined, workflow_code: workflowCode || undefined },
     }),
 
-  latestJob: (workflowCode: string, periodId: number, operation?: 'generate' | 'reconcile') =>
+  latestJob: (workflowCode: string, periodId: number, operation?: 'generate' | 'reconcile' | 'initial' | 'recheck') =>
     api.get<Job>('/jobs/latest', {
       params: { workflow_code: workflowCode, period_id: periodId, operation },
     }),

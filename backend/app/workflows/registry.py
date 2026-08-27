@@ -9,7 +9,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.accounting import ReconciliationImportBatch
-from app.models.core import Period, UploadedFile
+from app.models.core import Job, Period, UploadedFile
 from app.services.excel import write_workbook
 from app.services.formulas import (
     annual_bonus_transform,
@@ -31,6 +31,12 @@ from app.services.personnel_update import (
     PersonnelUpdateValidationError,
     apply_staff_info_update,
     build_personnel_collection_files,
+)
+from app.services.part_time_tax import (
+    materialize_previous_part_time_master,
+    process_part_time,
+    save_part_time_master,
+    write_part_time_artifacts,
 )
 from app.services.storage import artifact_path
 from app.workflows.base import WorkflowInfo, WorkflowResult
@@ -625,6 +631,65 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
         return [("personnel_collection", path) for path in collection_files]
 
 
+class PartTimeTaxWorkflow(ExcelWorkflow):
+    info = WorkflowInfo(
+        code="part_time_tax",
+        name="非全日制用工个税申报",
+        domain="个税申报",
+        description="按姓名匹配非全日制人员，滚动维护人员主数据并生成劳务报酬申报文件。",
+        required_file_roles=["payroll"],
+    )
+
+    def run(
+        self,
+        db: Session,
+        job_id: int,
+        period_id: Optional[int],
+        files: list[UploadedFile],
+        operation: str = "initial",
+    ) -> WorkflowResult:
+        year, month = _period_year_month(db, period_id)
+        payroll_files = [file for file in files if file.file_role == "payroll"]
+        change_files = [file for file in files if file.file_role == "personnel_changes"]
+        if db is not None and period_id is not None and operation == "recheck" and not payroll_files:
+            initial_job = (
+                db.query(Job)
+                .filter(Job.workflow_code == self.info.code, Job.period_id == period_id, Job.operation == "initial")
+                .order_by(Job.created_at.desc(), Job.id.desc())
+                .first()
+            )
+            if initial_job:
+                payroll_files = db.query(UploadedFile).filter(
+                    UploadedFile.id.in_(initial_job.input_file_ids)
+                ).filter(UploadedFile.file_role == "payroll").all()
+        payroll = pd.concat([pd.read_excel(file.stored_path, dtype=str) for file in payroll_files], ignore_index=True, sort=False) if payroll_files else pd.DataFrame()
+        changes = pd.concat([pd.read_excel(file.stored_path, dtype=str) for file in change_files], ignore_index=True, sort=False) if change_files else None
+        if db is None or period_id is None:
+            result = {"master": pd.DataFrame(), "rows": pd.DataFrame(), "issues": [{"issue_type": "missing_period", "message": "非全日制申报必须选择所属期间"}], "blocking": [{"issue_type": "missing_period"}], "pending": pd.DataFrame(), "matching": pd.DataFrame(), "changes": pd.DataFrame(), "summary": {}}
+        else:
+            master_source = materialize_previous_part_time_master(db, period_id)
+            result = process_part_time(db, payroll, changes, period_id=period_id, stage=operation)
+            result["summary"]["master_source_materialized"] = bool(master_source.get("materialized"))
+            result["summary"]["master_source_target_file"] = Path(master_source.get("target_path", "")).name if master_source.get("target_path") else ""
+        artifacts: list[tuple[str, str]] = []
+        finalized = operation == "recheck" and not result["blocking"]
+        if period_id is not None and db is not None and finalized:
+            save_part_time_master(db, period_id, result["master"])
+        if period_id is not None:
+            period = db.query(Period).filter(Period.id == period_id).first()
+            artifacts = write_part_time_artifacts(job_id, period, result, finalized=finalized) if period else []
+        summary = {
+            "input_files": len(files), "rows": int(len(result["rows"])), "summary_rows": int(len(result["matching"])),
+            "issues": int(len(result["issues"])), "issue_details": result["issues"], "operation": operation,
+            **result["summary"], "part_time_blocked": bool(result["blocking"]), "part_time_finalized": finalized,
+        }
+        return WorkflowResult(
+            status="needs_review" if result["blocking"] else "success",
+            summary=summary,
+            artifact_paths=artifacts,
+        )
+
+
 class InternTaxWorkflow(TaxTransformWorkflow):
     info = WorkflowInfo(
         code="intern_tax",
@@ -802,6 +867,7 @@ _WORKFLOWS = {
         AnnualBonusTaxWorkflow(),
         RestrictedStockInterestTaxWorkflow(),
         InternTaxWorkflow(),
+        PartTimeTaxWorkflow(),
         BrokerTaxWorkflow(),
         InvoiceBookingWorkflow(),
         VatDeductionWorkflow(),

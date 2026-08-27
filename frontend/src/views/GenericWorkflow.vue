@@ -16,7 +16,7 @@
             <p>本流程自动使用当前所属期间维护的人员主数据；需要调整时请到“人员主数据”页面更新。</p>
           </div>
           <div
-            v-for="role in roleEntries"
+            v-for="role in displayRoleEntries"
             :key="role"
             class="upload-item workflow-upload-item"
             :class="{ 'has-file': selectedFiles[role] }"
@@ -46,6 +46,11 @@
           <span class="tag" :class="restrictedStep >= 3 ? 'tag-success' : 'tag-info'">3 批量下载</span>
         </div>
 
+        <div v-if="isPartTime" class="workflow-stepbar">
+          <span class="tag" :class="partTimeStep >= 1 ? 'tag-success' : 'tag-info'">1 工资单核对</span>
+          <span class="tag" :class="partTimeStep >= 2 ? 'tag-success' : 'tag-info'">2 上传变更并生成</span>
+        </div>
+
         <div v-if="isRestrictedStockInterest && restrictedStep === 2" class="workflow-grid">
           <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFiles.balance_sheet }">
             <label>{{ roleLabel('balance_sheet') }}</label>
@@ -60,6 +65,7 @@
         <div class="action-bar">
           <div class="action-hint">
             <span v-if="isRestrictedStockInterest">{{ restrictedActionHint }}</span>
+            <span v-else-if="isPartTime">{{ partTimeStep === 1 ? '上传工资单后执行人员核对。' : '首轮工资单已复用，请上传人员信息变更表后生成申报文件。' }}</span>
             <span v-else-if="missingRequired.length">缺少：{{ missingRequired.map(roleLabel).join('、') }}</span>
             <span v-else>文件已就绪，可以运行迁移后的处理流程。</span>
           </div>
@@ -113,10 +119,17 @@
             <el-icon><Download /></el-icon>
             下载导入模板
           </a>
-          <button v-if="!isRestrictedStockInterest && !isAutoGenerateWorkflow" class="btn btn-primary btn-lg" :disabled="running || missingRequired.length > 0" @click="runWorkflow()">
+          <button v-if="!isRestrictedStockInterest && !isAutoGenerateWorkflow && !isPartTime" class="btn btn-primary btn-lg" :disabled="running || missingRequired.length > 0" @click="runWorkflow()">
             <span v-if="running" class="spinner"></span>
             <el-icon v-else><VideoPlay /></el-icon>
             运行
+          </button>
+          <button v-if="isPartTime && partTimeStep === 1" class="btn btn-primary btn-lg" :disabled="running || !selectedFiles.payroll" @click="runPartTimeInitial">
+            <span v-if="running" class="spinner"></span><el-icon v-else><VideoPlay /></el-icon>执行工资单核对
+          </button>
+          <button v-if="isPartTime && partTimeStep === 2" class="btn btn-outline btn-lg" :disabled="running" @click="partTimeStep = 1">上一步</button>
+          <button v-if="isPartTime && partTimeStep === 2" class="btn btn-primary btn-lg" :disabled="running || !selectedFiles.personnel_changes" @click="runPartTimeRecheck">
+            <span v-if="running" class="spinner"></span><el-icon v-else><VideoPlay /></el-icon>重新执行并生成申报
           </button>
         </div>
       </div>
@@ -188,6 +201,28 @@
                 <small>{{ artifactTypeLabel(artifact.artifact_type) }}</small>
               </span>
             </a>
+          </div>
+        </template>
+
+        <template v-else-if="isPartTime">
+          <div v-if="job.error_message" class="personnel-error-panel"><strong>处理失败</strong><p>{{ job.error_message }}</p></div>
+          <div class="workflow-summary-grid">
+            <div><span>主数据来源</span><strong>{{ autoMetrics.master_source_period_label || '未找到' }}</strong></div>
+            <div><span>工资人数</span><strong>{{ autoMetrics.payroll_count || 0 }}</strong></div>
+            <div><span>正常匹配</span><strong>{{ autoMetrics.matched_count || 0 }}</strong></div>
+            <div><span>新增人员</span><strong>{{ autoMetrics.new_count || 0 }}</strong></div>
+            <div><span>重新任职</span><strong>{{ autoMetrics.rehire_count || 0 }}</strong></div>
+            <div><span>自动离职</span><strong>{{ autoMetrics.leaver_count || 0 }}</strong></div>
+            <div><span>资料修改</span><strong>{{ autoMetrics.modified_count || 0 }}</strong></div>
+            <div><span>同名冲突</span><strong>{{ autoMetrics.same_name_conflict_count || 0 }}</strong></div>
+            <div><span>收入合计</span><strong>{{ formatAmount(autoMetrics.income_total) }}</strong></div>
+            <div><span>机构数量</span><strong>{{ autoMetrics.org_count || 0 }}</strong></div>
+          </div>
+          <div v-if="autoMetrics.master_source_materialized" class="source-note">已将上月非全日制人员主数据复制为本月基准。</div>
+          <div v-if="!autoMetrics.part_time_finalized" class="restricted-warning">工资单核对完成。请下载待补充人员变更表，补齐后上传并重新执行生成申报文件。</div>
+          <div v-if="issueDetails.length" class="restricted-warning-list"><strong>核对问题</strong><div v-for="(issue, index) in issueDetails" :key="index" class="restricted-warning">{{ issue.message }}</div></div>
+          <div v-if="job.artifacts?.length" class="download-grid workflow-downloads">
+            <a v-for="artifact in job.artifacts" :key="artifact.id" class="download-item" :href="workflowApi.artifactDownloadUrl(artifact.id)" target="_blank"><el-icon><Download /></el-icon><span class="download-text"><strong>{{ artifact.file_name }}</strong><small>{{ artifactTypeLabel(artifact.artifact_type) }}</small></span></a>
           </div>
         </template>
 
@@ -272,6 +307,7 @@ const job = ref<Job | null>(null)
 const running = ref(false)
 const folderInput = ref<HTMLInputElement | null>(null)
 const restrictedStep = ref(1)
+const partTimeStep = ref(1)
 const generationJob = ref<Job | null>(null)
 const reconciliationJob = ref<Job | null>(null)
 const restrictedUploadIds = reactive<Record<string, number>>({})
@@ -286,6 +322,7 @@ const sharedStaffWorkflows = new Set([
 
 const optionalRolesByWorkflow: Record<string, string[]> = {
   staff_info_update: ['staff_info'],
+  part_time_tax: ['personnel_changes'],
   restricted_stock_interest_tax: ['tax_sheet', 'interest_tax', 'balance_sheet'],
 }
 
@@ -299,6 +336,8 @@ const roleLabels: Record<string, string> = {
   balance_sheet: '余额表',
   intern_salary: '实习生补贴表',
   broker_income: '经纪人收入表',
+  payroll: '非全日制用工工资表',
+  personnel_changes: '人员信息变更表（选传）',
   invoice_detail: '电子发票明细',
   certification_sheet: '认证抵扣表',
   booking_sheet: '入账台账',
@@ -312,6 +351,10 @@ const roleEntries = computed(() => {
   }
   return roles
 })
+const displayRoleEntries = computed(() => {
+  if (!isPartTime.value) return roleEntries.value
+  return partTimeStep.value === 1 ? ['payroll'] : ['personnel_changes']
+})
 
 const effectiveRequiredRoles = computed(() =>
   props.workflow.required_file_roles.filter((role) => !(role === 'staff_info' && sharedStaffWorkflows.has(props.workflow.code)))
@@ -322,6 +365,7 @@ const isRestrictedStockInterest = computed(() => props.workflow.code === 'restri
 const isIntern = computed(() => props.workflow.code === 'intern_tax')
 const isBroker = computed(() => props.workflow.code === 'broker_tax')
 const isAnnualBonus = computed(() => props.workflow.code === 'annual_bonus_tax')
+const isPartTime = computed(() => props.workflow.code === 'part_time_tax')
 const isAutoGenerateWorkflow = computed(() => isIntern.value || isBroker.value)
 const hasRestrictedSource = computed(() => Boolean(selectedFiles.tax_sheet || selectedFiles.interest_tax))
 const restrictedActionHint = computed(() => {
@@ -379,6 +423,7 @@ watch(
     Object.keys(selectedFiles).forEach((key) => delete selectedFiles[key])
     job.value = null
     restrictedStep.value = 1
+    partTimeStep.value = 1
     generationJob.value = null
     reconciliationJob.value = null
     Object.keys(restrictedUploadIds).forEach((key) => delete restrictedUploadIds[key])
@@ -402,6 +447,15 @@ async function restoreLatestJobs() {
       job.value = reconciliation || generation
       if (reconciliation?.status === 'success') restrictedStep.value = 3
       else if (generation) restrictedStep.value = 2
+      return
+    }
+    if (isPartTime.value) {
+      const [initial, recheck] = await Promise.all([
+        workflowApi.latestJob(props.workflow.code, props.periodId, 'initial').then(({ data }) => data).catch((error) => error?.response?.status === 404 ? null : Promise.reject(error)),
+        workflowApi.latestJob(props.workflow.code, props.periodId, 'recheck').then(({ data }) => data).catch((error) => error?.response?.status === 404 ? null : Promise.reject(error)),
+      ])
+      job.value = recheck || initial
+      if (initial) partTimeStep.value = 2
       return
     }
     const { data } = await workflowApi.latestJob(props.workflow.code, props.periodId, 'generate')
@@ -523,6 +577,39 @@ async function runRestrictedGeneration() {
   }
 }
 
+async function runPartTimeInitial() {
+  const payroll = selectedFiles.payroll
+  if (!payroll) return
+  await runPartTimeWorkflow('initial', [['payroll', payroll]])
+  if (job.value) partTimeStep.value = 2
+}
+
+async function runPartTimeRecheck() {
+  const changes = selectedFiles.personnel_changes
+  if (!changes) return
+  await runPartTimeWorkflow('recheck', [['personnel_changes', changes]])
+}
+
+async function runPartTimeWorkflow(operation: 'initial' | 'recheck', files: Array<[string, File]>) {
+  running.value = true
+  try {
+    const inputIds: number[] = []
+    for (const [role, file] of files) {
+      const { data } = await workflowApi.uploadFile(file, role, props.periodId)
+      inputIds.push(data.id)
+    }
+    const { data } = await workflowApi.createJob(props.workflow.code, inputIds, props.periodId, operation)
+    job.value = data
+    if (data.status === 'failed') ElMessage.error('流程运行失败')
+    else if (data.status === 'needs_review') ElMessage.warning(operation === 'initial' ? '核对完成，请处理问题后上传人员变更表' : '变更表仍有问题，请修正后重试')
+    else ElMessage.success('申报文件生成完成')
+  } catch {
+    ElMessage.error('流程运行失败，请检查上传文件或后端服务')
+  } finally {
+    running.value = false
+  }
+}
+
 async function runRestrictedWorkflow(operation: 'generate' | 'reconcile') {
   const sourceIds = ['tax_sheet', 'interest_tax']
     .map((role) => restrictedUploadIds[role])
@@ -585,6 +672,9 @@ function artifactTypeLabel(type: string) {
     restricted_stock_interest_result: '限售股利息税结果',
     intern_tax_result: '实习生结果',
     broker_tax_result: '经纪人结果',
+    part_time_master: '本月非全日制人员信息表',
+    part_time_pending_changes: '待补充人员信息变更表',
+    part_time_workpaper: '非全日制用工处理底稿',
     invoice_ledger: '发票台账',
     certification_ledger: '认证核对',
     voucher_draft: '凭证草稿',
