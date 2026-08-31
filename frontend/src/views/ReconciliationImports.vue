@@ -24,6 +24,8 @@
             <select v-model="importType" class="period-native-select">
               <option value="bank_statement">银行流水</option>
               <option value="declaration_result">申报结果</option>
+              <option value="pit_declaration">个税申报 Excel</option>
+              <option value="tax_certificate">完税证明 PDF</option>
               <option value="accounting_ledger">账务数据</option>
               <option value="balance_sheet">余额表</option>
             </select>
@@ -32,7 +34,7 @@
 
         <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFile }">
           <label>{{ importTypeLabel }}</label>
-          <input type="file" accept=".xls,.xlsx,.csv" @change="onFilePicked" />
+          <input type="file" :accept="importType === 'tax_certificate' ? '.pdf' : '.xls,.xlsx,.csv'" @change="onFilePicked" />
           <span class="upload-status" :class="selectedFile ? 'ready' : 'empty'">
             {{ selectedFile?.name || '未选择' }}
           </span>
@@ -118,6 +120,8 @@ function typeLabel(type: ReconciliationImportType) {
     declaration_result: '申报结果',
     accounting_ledger: '账务数据',
     balance_sheet: '余额表',
+    pit_declaration: '个税申报 Excel',
+    tax_certificate: '完税证明 PDF',
   }[type]
 }
 

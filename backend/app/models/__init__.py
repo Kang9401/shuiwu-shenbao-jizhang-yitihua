@@ -10,6 +10,10 @@ from app.models.accounting import (
 )
 from app.models.core import Artifact, Company, Job, Period, UploadedFile
 from app.models.tax import TaxMonthlyArtifact, VerificationRound, VerificationSession
+from app.models.pit_reconciliation import (
+    PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck, PitReconciliationDifferenceDetail,
+    PitReconciliationOrgSummary, PitReconciliationSource, PitReconciliationWorkpaper, PitTaxAmountCheck,
+)
 
 
 COMPANY_SCOPED_MODELS = (
@@ -28,6 +32,14 @@ COMPANY_SCOPED_MODELS = (
     VerificationSession,
     VerificationRound,
     TaxMonthlyArtifact,
+    PitReconciliationWorkpaper,
+    PitReconciliationSource,
+    PitDeclarationSummary,
+    PitTaxAmountCheck,
+    PitOccurrenceCheck,
+    PitReconciliationOrgSummary,
+    PitReconciliationDifferenceDetail,
+    PitBankTaxMatch,
 )
 
 __all__ = [model.__name__ for model in (*COMPANY_SCOPED_MODELS, Company)]

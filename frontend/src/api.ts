@@ -204,7 +204,7 @@ export interface RpaStatus {
 
 export type PersonType = 'employee' | 'broker' | 'part_time'
 export type PersonnelScopeType = 'month' | 'org' | 'branch'
-export type ReconciliationImportType = 'bank_statement' | 'declaration_result' | 'accounting_ledger' | 'balance_sheet'
+export type ReconciliationImportType = 'bank_statement' | 'declaration_result' | 'accounting_ledger' | 'balance_sheet' | 'pit_declaration' | 'tax_certificate'
 
 export interface PersonnelMasterArtifact {
   id: number
@@ -508,9 +508,11 @@ export const reconciliationImportApi = {
       declaration_result: '/reconciliation-imports/declaration-result',
       accounting_ledger: '/reconciliation-imports/accounting-ledger',
       balance_sheet: '/reconciliation-imports/balance-sheet',
+      pit_declaration: '/reconciliation-imports/pit-declaration',
+      tax_certificate: '/reconciliation-imports/tax-certificates',
     }
     const form = new FormData()
-    form.append('file', file)
+    form.append(importType === 'tax_certificate' ? 'files' : 'file', file)
     return api.post<ReconciliationImportBatch>(pathByType[importType], form, {
       params: { period_id: periodId },
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -522,6 +524,19 @@ export const reconciliationImportApi = {
     api.get<ReconciliationImportBatch[]>('/reconciliation-imports', {
       params: { period_id: periodId, import_type: importType || undefined },
     }),
+}
+
+export const pitReconciliationApi = {
+  overview: (periodId: number) => api.get<any>('/pit-reconciliations/overview', { params: { period_id: periodId } }),
+  readiness: (periodId: number) => api.get<any[]>('/pit-reconciliations/readiness', { params: { period_id: periodId } }),
+  recalculate: (periodId: number) => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId }, timeout: 120000 }),
+  summaries: (periodId: number) => api.get<any[]>('/pit-reconciliations/org-summaries', { params: { period_id: periodId } }),
+  taxChecks: (periodId: number) => api.get<any[]>('/pit-reconciliations/tax-amount-checks', { params: { period_id: periodId } }),
+  occurrenceChecks: (periodId: number) => api.get<any[]>('/pit-reconciliations/occurrence-checks', { params: { period_id: periodId } }),
+  declarationSummaries: (periodId: number) => api.get<any[]>('/pit-reconciliations/declaration-summaries', { params: { period_id: periodId } }),
+  details: (periodId: number) => api.get<any[]>('/pit-reconciliations/difference-details', { params: { period_id: periodId } }),
+  bankMatches: (periodId: number) => api.get<any[]>('/pit-reconciliations/bank-matches', { params: { period_id: periodId } }),
+  patch: (kind: string, id: number, payload: { manual_reason?: string; remark?: string }) => api.patch(`/pit-reconciliations/${kind === 'detail' ? 'difference-details' : kind === 'summary' ? 'org-summaries' : kind}/${id}`, payload),
 }
 
 export const financeAIApi = {

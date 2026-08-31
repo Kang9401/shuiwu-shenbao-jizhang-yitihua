@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.db.session import Base, engine
-from app.models import accounting, core, tax
+from app.models import accounting, core, pit_reconciliation, tax
 from app.db.migrations import run_migrations
 from app.services.company_migration import migrate_legacy_company_storage
 

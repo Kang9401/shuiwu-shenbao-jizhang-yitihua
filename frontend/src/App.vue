@@ -145,6 +145,8 @@
           :period-label="selectedPeriodLabel"
         />
 
+        <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :period-id="selectedPeriodId" />
+
         <GenericWorkflow
           v-else-if="activeWorkflow"
           :workflow="activeWorkflow"
@@ -241,6 +243,7 @@ import GenericWorkflow from './views/GenericWorkflow.vue'
 import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
+import PitReconciliation from './views/PitReconciliation.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
 import FinanceSkill from './views/FinanceSkill.vue'
 import TaskCenter from './views/TaskCenter.vue'
@@ -261,6 +264,7 @@ type ViewKey =
   | 'intern_tax'
   | 'restricted_stock_interest_tax'
   | 'reconciliation_imports'
+  | 'pit_reconciliation'
   | 'vat_deduction'
   | 'invoice_booking'
   | 'voucher_draft'
@@ -298,6 +302,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
       { key: 'intern_tax', label: '实习生申报', icon: User, workflowCode: 'intern_tax', kicker: 'Intern tax', description: '实习生补贴个税申报与人员采集。' },
       { key: 'restricted_stock_interest_tax', label: '限售股/利息税', icon: Coin, workflowCode: 'restricted_stock_interest_tax', kicker: 'Restricted stock', description: '限售股、债券利息及客户类个人所得申报。' },
       { key: 'reconciliation_imports', label: '核对数据导入', icon: Files, kicker: 'Reconciliation imports', description: '银行流水、申报结果和账务数据结构化入库。' },
+      { key: 'pit_reconciliation', label: '个税核对底稿', icon: DocumentChecked, kicker: 'PIT reconciliation', description: '以数据库保存的月度个税申报、账务、完税与银行核对底稿。' },
     ],
   },
   {

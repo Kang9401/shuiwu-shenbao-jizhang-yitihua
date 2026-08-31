@@ -34,6 +34,11 @@ def test_migrations_upgrade_legacy_jobs_table(tmp_path):
     assert {"operation", "app_version", "ruleset_version"}.issubset(columns)
     assert row[0] == "generate"
     assert current_schema_version(engine) == SCHEMA_VERSION
+    with sqlite3.connect(database) as connection:
+        pit_tables = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'pit_%'")
+        }
+    assert {"pit_reconciliation_workpapers", "pit_reconciliation_sources", "pit_declaration_summaries", "pit_tax_amount_checks", "pit_occurrence_checks", "pit_reconciliation_org_summaries", "pit_reconciliation_difference_details", "pit_bank_tax_matches"}.issubset(pit_tables)
 
 
 def test_migrations_add_rpa_fields_to_organization_mappings(tmp_path):

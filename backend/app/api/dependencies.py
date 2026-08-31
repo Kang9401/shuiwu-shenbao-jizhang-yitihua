@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.core.company_context import reset_company_id, set_company_id
+from app.core.company_context import current_company_id, reset_company_id, set_company_id
 from app.db.session import get_db
 from app.models.core import Company, Period
 
@@ -30,7 +30,7 @@ async def require_company(
 
 
 def require_period(db: Session, period_id: int) -> Period:
-    period = db.query(Period).filter(Period.id == period_id).first()
+    period = db.query(Period).filter(Period.id == period_id, Period.company_id == current_company_id()).first()
     if period is None:
         raise HTTPException(status_code=404, detail="所属期间不存在")
     return period
