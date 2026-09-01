@@ -526,17 +526,30 @@ export const reconciliationImportApi = {
     }),
 }
 
+export interface PitOverviewResponse { exists: boolean; period_id?: number; workpaper?: Record<string, unknown> & { data_status?: string; stage?: string; last_calculated_at?: string | null }; counts?: Record<string, number> }
+export interface PitReadinessItem { source_type: string; source_status: string; required: boolean; row_count: number | null; source_kind?: string | null; source_id?: number | null; source_ref?: string | null; issues_json?: Array<{ message?: string }> | null }
+export interface PitOrgSummary { id: number; public_id: string; org_code: string; org_name: string; org_full_name?: string | null; declared_tax_amount: number | null; balance_tax_amount: number | null; difference_1: number | null; difference_1_manual_reason: string | null; scoped_declared_tax_amount: number | null; payroll_business_tax_amount: number | null; difference_2: number | null; difference_2_manual_reason: string | null; taxable_income_difference: number | null; difference_3_manual_reason: string | null; certificate_tax_amount: number | null; difference_4: number | null; difference_4_manual_reason: string | null; bank_tax_amount: number | null; difference_5: number | null; difference_5_manual_reason: string | null; broker_occurrence_difference: number | null; difference_6_manual_reason: string | null; other_income_difference: number | null; difference_7_manual_reason: string | null; remark: string | null; check_status: string }
+export interface PitTaxAmountCheck { id: number; org_code: string; org_name: string; subject_code: string; subject_name: string; opening_balance: number | null; debit_amount: number | null; credit_amount: number | null; closing_balance: number | null; business_tax_amount: number | null; declared_tax_amount: number | null; current_difference: number | null; current_manual_reason: string | null; cumulative_difference: number | null; cumulative_manual_reason: string | null; scoped_declared_tax_amount: number | null; business_declared_difference: number | null; business_declared_manual_reason: string | null; remark: string | null; check_status: string }
+export interface PitOccurrenceCheck { id: number; org_code: string; org_name: string; subject_code: string; subject_name: string; income_type: string; opening_balance: number | null; debit_amount: number | null; credit_amount: number | null; closing_balance: number | null; occurrence_amount: number | null; broker_payroll_amount: number | null; broker_occurrence_difference: number | null; broker_occurrence_manual_reason: string | null; expected_declared_income: number | null; expected_income_description: string | null; actual_declared_income: number | null; declared_income_difference: number | null; declared_income_manual_reason: string | null; remark: string | null; check_status: string }
+export interface PitDeclarationSummary { id: number; org_code: string; org_name: string; declaration_type: string; income_item: string; person_count: number; income_amount: number | null; tax_amount: number | null }
+export interface PitDifferenceDetail { id: number; detail_type: string; org_code: string; org_name: string; subject_code?: string | null; identity_key: string; person_or_customer_name: string; id_number?: string | null; source_amount: number | null; target_amount: number | null; difference: number | null; auto_reason?: string | null; manual_reason?: string | null; remark?: string | null; detail_json: Record<string, unknown> | null }
+export interface PitBankTaxMatch { id: number; org_code: string; org_full_name: string; bank_account?: string | null; transaction_time?: string | null; transaction_summary?: string | null; debit_amount: number | null }
+export type PitListParams = { org_code?: string; subject_code?: string; only_differences?: boolean; detail_type?: string; search?: string }
+
 export const pitReconciliationApi = {
-  overview: (periodId: number) => api.get<any>('/pit-reconciliations/overview', { params: { period_id: periodId } }),
-  readiness: (periodId: number) => api.get<any[]>('/pit-reconciliations/readiness', { params: { period_id: periodId } }),
+  getOverview: (periodId: number) => api.get<PitOverviewResponse>('/pit-reconciliations/overview', { params: { period_id: periodId } }),
+  getReadiness: (periodId: number) => api.get<PitReadinessItem[]>('/pit-reconciliations/readiness', { params: { period_id: periodId } }),
   recalculate: (periodId: number) => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId }, timeout: 120000 }),
-  summaries: (periodId: number) => api.get<any[]>('/pit-reconciliations/org-summaries', { params: { period_id: periodId } }),
-  taxChecks: (periodId: number) => api.get<any[]>('/pit-reconciliations/tax-amount-checks', { params: { period_id: periodId } }),
-  occurrenceChecks: (periodId: number) => api.get<any[]>('/pit-reconciliations/occurrence-checks', { params: { period_id: periodId } }),
-  declarationSummaries: (periodId: number) => api.get<any[]>('/pit-reconciliations/declaration-summaries', { params: { period_id: periodId } }),
-  details: (periodId: number) => api.get<any[]>('/pit-reconciliations/difference-details', { params: { period_id: periodId } }),
-  bankMatches: (periodId: number) => api.get<any[]>('/pit-reconciliations/bank-matches', { params: { period_id: periodId } }),
-  patch: (kind: string, id: number, payload: { manual_reason?: string; remark?: string }) => api.patch(`/pit-reconciliations/${kind === 'detail' ? 'difference-details' : kind === 'summary' ? 'org-summaries' : kind}/${id}`, payload),
+  getSummary: (periodId: number) => api.get<PitOrgSummary[]>('/pit-reconciliations/org-summaries', { params: { period_id: periodId } }),
+  getTaxAmountChecks: (periodId: number, params: PitListParams = {}) => api.get<PitTaxAmountCheck[]>('/pit-reconciliations/tax-amount-checks', { params: { period_id: periodId, ...params } }),
+  getOccurrenceChecks: (periodId: number, params: PitListParams = {}) => api.get<PitOccurrenceCheck[]>('/pit-reconciliations/occurrence-checks', { params: { period_id: periodId, ...params } }),
+  getDeclarationSummary: (periodId: number) => api.get<PitDeclarationSummary[]>('/pit-reconciliations/declaration-summaries', { params: { period_id: periodId } }),
+  getDifferences: (periodId: number, params: PitListParams) => api.get<PitDifferenceDetail[]>('/pit-reconciliations/difference-details', { params: { period_id: periodId, ...params } }),
+  getBankMatches: (periodId: number, params: PitListParams = {}) => api.get<PitBankTaxMatch[]>('/pit-reconciliations/bank-matches', { params: { period_id: periodId, ...params } }),
+  updateSummary: (id: number, payload: Partial<Pick<PitOrgSummary, 'difference_1_manual_reason' | 'difference_2_manual_reason' | 'difference_3_manual_reason' | 'difference_4_manual_reason' | 'difference_5_manual_reason' | 'difference_6_manual_reason' | 'difference_7_manual_reason' | 'remark'>>) => api.patch<PitOrgSummary>(`/pit-reconciliations/org-summaries/${id}`, payload),
+  updateTaxAmountCheck: (id: number, payload: Partial<Pick<PitTaxAmountCheck, 'current_manual_reason' | 'cumulative_manual_reason' | 'business_declared_manual_reason' | 'remark'>>) => api.patch<PitTaxAmountCheck>(`/pit-reconciliations/tax-amount-checks/${id}`, payload),
+  updateOccurrenceCheck: (id: number, payload: Partial<Pick<PitOccurrenceCheck, 'broker_occurrence_manual_reason' | 'declared_income_manual_reason' | 'remark'>>) => api.patch<PitOccurrenceCheck>(`/pit-reconciliations/occurrence-checks/${id}`, payload),
+  updateDifference: (id: number, payload: { manual_reason?: string; remark?: string }) => api.patch<PitDifferenceDetail>(`/pit-reconciliations/difference-details/${id}`, payload),
 }
 
 export const financeAIApi = {

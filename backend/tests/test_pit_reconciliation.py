@@ -7,10 +7,15 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import Base
 from app.models.core import Company, Period
 from app.models.pit_reconciliation import PitReconciliationWorkpaper, PitTaxAmountCheck
-from app.services.pit_reconciliation.domain import (BalanceRow, DeclarationRow, OrganizationRow, PitSourceBundle, SalaryRow, SourceResult)
+from app.services.pit_reconciliation.domain import (BalanceRow, BankRow, BondInterestRow, BrokerRow, DeclarationRow, OrganizationRow, PitSourceBundle, RestrictedStockRow, SalaryRow, SourceResult, TaxCertificateRow)
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.money import money_or_none
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
+from app.services.pit_reconciliation.rules.occurrence import calc_vat
+from app.services.pit_reconciliation.rules.bond_interest import bond_interest_details
+from app.services.pit_reconciliation.rules.restricted_stock import restricted_stock_details
+from app.services.pit_reconciliation.rules.salary_tax import salary_tax_details
+from app.services.pit_reconciliation.rules.salary_taxable_income import salary_taxable_income_details
 
 
 def _db():
@@ -56,3 +61,65 @@ def test_missing_salary_does_not_become_zero():
     tax=next(row for row in result["tax_checks"] if row["subject_code"]=="21510006")
     assert tax["business_tax_amount"] is None
     assert tax["business_declared_difference"] is None
+
+
+def test_vat_boundaries_match_legacy_threshold():
+    assert [calc_vat(Decimal(value)) for value in ("0", "1000", "1009.99", "1010", "1010.01", "10000")] == [
+        Decimal("0.00"), Decimal("0.00"), Decimal("0.00"), Decimal("10.00"), Decimal("10.00"), Decimal("99.01"),
+    ]
+
+
+def test_a2_same_name_exact_income_pairing_is_preserved():
+    salary = [
+        SalaryRow("10001", "李四", id_number="A", employee_no="1", cumulative_taxable_income=Decimal("100")),
+        SalaryRow("10001", "李四", id_number="B", employee_no="2", cumulative_taxable_income=Decimal("200")),
+    ]
+    declarations = [
+        DeclarationRow("10001", "综合所得", person_name="李四", id_number="X", income_item="正常工资薪金", cumulative_taxable_income=Decimal("250")),
+        DeclarationRow("10001", "综合所得", person_name="李四", id_number="Y", income_item="正常工资薪金", cumulative_taxable_income=Decimal("100")),
+    ]
+    details = salary_taxable_income_details(salary, declarations)
+    assert len(details) == 2
+    assert {row["id_number"] for row in details} == {"B", "X"}
+    assert all(row["id_number"] != "A" for row in details)
+    assert {row["difference"] for row in details} == {Decimal("200"), Decimal("-250")}
+
+
+def test_engine_emits_all_tax_and_occurrence_subjects():
+    bundle = _bundle()
+    bundle.balance.rows.extend([
+        BalanceRow("10001", code, code, debit_amount=Decimal("200"), credit_amount=Decimal("100"), closing_balance=Decimal("100"))
+        for code in ("21510008", "21510009", "21510016", "21131042", "45019006", "21210037", "21210038", "21210012")
+    ])
+    bundle.broker = SourceResult("broker", "ready", [BrokerRow("10001", pit_tax=Decimal("10"), gross_before_topup=Decimal("200"), vat_amount=Decimal("2"))])
+    bundle.bond_interest = SourceResult("bond_interest", "ready", [BondInterestRow("10001", "王五", withheld_tax=Decimal("8"), interest_amount=Decimal("40"))])
+    bundle.restricted_stock = SourceResult("restricted_stock", "ready", [RestrictedStockRow("10001", "赵六", withheld_tax=Decimal("9"), sale_amount=Decimal("90"))])
+    result = PitReconciliationEngine().calculate(bundle)
+    assert {row["subject_code"] for row in result["tax_checks"]} == {"21510006", "21510008", "21510009", "21510016"}
+    assert {row["subject_code"] for row in result["occurrence_checks"]} == {"21131042", "45019006", "21210037", "21210038", "21210012"}
+
+
+def test_detail_json_contains_a1_a2_a3_a4_display_values():
+    declarations = [
+        DeclarationRow("10001", "综合所得", person_name="张三", income_item="正常工资薪金", tax_amount=Decimal("60"), cumulative_taxable_income=Decimal("120")),
+        DeclarationRow("10001", "分类所得", person_name="王五", income_item="其他利息、股息、红利所得", tax_amount=Decimal("12")),
+        DeclarationRow("10001", "限售股所得", person_name="赵六", income_item="限售股转让所得", tax_amount=Decimal("15")),
+    ]
+    salary = SalaryRow("10001", "张三", pit_tax=Decimal("50"), cumulative_taxable_income=Decimal("100"))
+    a1 = salary_tax_details([salary], declarations)[0]["detail_json"]
+    a2 = salary_taxable_income_details([salary], declarations)[0]["detail_json"]
+    a3 = bond_interest_details([BondInterestRow("10001", "王五", id_number="I1", interest_amount=Decimal("100"), withheld_tax=Decimal("10"))], declarations)[0]["detail_json"]
+    a4 = restricted_stock_details([RestrictedStockRow("10001", "赵六", id_number="I2", security_name="证券A", sale_amount=Decimal("300"), withheld_tax=Decimal("12"))], declarations)[0]["detail_json"]
+    assert {"payroll_tax_amount", "declared_tax_amount", "comparison_items"}.issubset(a1)
+    assert len(a1["comparison_items"]) == 10
+    assert {"payroll_taxable_income", "declared_taxable_income", "specific_deduction_difference", "tax_difference"}.issubset(a2)
+    assert {"interest_amount", "business_tax_amount", "declared_tax_amount", "id_numbers", "same_name_merged"}.issubset(a3)
+    assert {"security_names", "sale_amount", "business_tax_amount", "declared_tax_amount"}.issubset(a4)
+
+
+def test_bank_prefers_tax_summary_pool_without_all_transaction_fallback():
+    bundle = _bundle()
+    bundle.certificates = SourceResult("tax_certificate", "ready", [TaxCertificateRow("10001", tax_type="个人所得税", amount=Decimal("100"))], required=False)
+    bundle.bank = SourceResult("bank_statement", "ready", [BankRow(org_code="10001", summary="服务费", debit_amount=Decimal("100")), BankRow(org_code="10001", summary="缴纳个税", debit_amount=Decimal("100"))], required=False)
+    result = PitReconciliationEngine().calculate(bundle)
+    assert [row["transaction_summary"] for row in result["bank_matches"]] == ["缴纳个税"]
