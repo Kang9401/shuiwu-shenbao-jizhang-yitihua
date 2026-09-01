@@ -26,6 +26,7 @@ backend/vendor/etax_rpa/机构信息表.xlsx
 *.sqlite3
 *.sqlite
 *.db
+*.diff
 *.xls
 *.xlsx
 !backend/resources/
