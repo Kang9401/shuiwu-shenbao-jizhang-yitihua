@@ -250,6 +250,8 @@ export interface RpaPopupRule {
   id: string
   keyword: string
   task: RpaPopupTask
+  step: 'all' | 'switch_org' | 'switch_month' | 'enter_menu' | 'clear_data' | 'import_file' | 'idle' | 'workflow'
+  trigger: string
   action: RpaPopupAction
   button_text: string
   delay_ms: number
@@ -262,6 +264,8 @@ export interface RpaPopupEvent {
   org_code: string
   month: string
   task: string
+  step?: string
+  trigger?: string
   url: string
   content: string
   close_action: string

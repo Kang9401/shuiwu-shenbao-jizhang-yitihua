@@ -30,6 +30,7 @@ from etax_batch_export import (
     month_label,
     read_orgs_from_excel,
     set_popup_context,
+    set_popup_step,
     set_tax_month,
     switch_org,
     wait_for_user,
@@ -87,29 +88,6 @@ def close_import_dialog(page: Page) -> None:
         pass
 
 
-def handle_confirm_dialogs(page: Page, *, seconds: int = 8) -> None:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        box = page.locator(".el-message-box__wrapper:visible, .el-dialog:visible").filter(
-            has_text="确定"
-        )
-        if box.count() == 0:
-            page.wait_for_timeout(300)
-            continue
-        text = box.first.inner_text(timeout=1000)
-        if "文件导入" in text or "导入结果" in text:
-            return
-        for name in ["确定", "确认", "继续", "是"]:
-            button = box.first.get_by_role("button", name=name, exact=True).filter(visible=True)
-            if button.count() > 0:
-                log(f"处理确认弹框：{text[:80].replace(chr(10), ' ')}")
-                button.first.click()
-                page.wait_for_timeout(800)
-                break
-        else:
-            return
-
-
 def ensure_withholding_menu_open(page: Page) -> None:
     submenu = page.locator(".el-submenu").filter(has_text="扣缴申报").first.locator("ul.el-menu--inline").first
     try:
@@ -148,7 +126,9 @@ def click_left_menu(page: Page, text: str) -> None:
 
 def enter_declaration_page(page: Page, menu: str, item: str | None, target_month: str, *, needs_month: bool) -> None:
     click_left_menu(page, "扣缴申报")
+    set_popup_step("enter_menu", menu)
     click_left_menu(page, menu)
+    set_popup_step("workflow")
     if needs_month:
         set_tax_month(page, target_month)
     if item:
@@ -216,6 +196,7 @@ def clear_existing_data(page: Page, task: ImportTask) -> None:
             raise RuntimeError(
                 f"未找到清空数据菜单：{task.label}；路由={page.url}；已见菜单项={visible_menu_items or ['无']}"
             )
+        set_popup_step("clear_data", "click_clear_data")
         clear_item.click()
         dialogs = page.locator(
             ".el-message-box__wrapper:visible, .el-dialog:visible, [role='dialog']:visible"
@@ -248,6 +229,7 @@ def clear_existing_data(page: Page, task: ImportTask) -> None:
         confirmation.wait_for(state="hidden", timeout=CLEAR_CONFIRMATION_WAIT_SECONDS * 1000)
         page.wait_for_timeout(1200)
         close_common_popups(page)
+        set_popup_step("workflow")
     except Exception as exc:
         log(f"clear_data_failed：{task.label}；原因：{exc}")
         raise
@@ -404,7 +386,6 @@ def upload_and_verify(page: Page, file_path: Path, *, label: str, max_wait_secon
     choose_input_file(dialog, file_path)
     log(f"已选择文件：{file_path}")
     page.wait_for_timeout(1500)
-    handle_confirm_dialogs(page)
     wait_import_success(page, file_path.name, max_wait_seconds=max_wait_seconds)
     close_import_dialog(page)
 

@@ -52,14 +52,22 @@ class PitReconciliationEngine:
             actual_by_item=defaultdict(lambda:Decimal("0.00"))
             for declaration in bundle.declarations.rows:
                 if declaration.org_code==org_code: actual_by_item[declaration.income_item]+=declaration.income_amount or Decimal("0.00")
+            expected_by_subject={}
+            occurrence_context={}
             for subject in OCCURRENCE_SUBJECT_CODES:
                 item=balance[org_code].get(subject); occurrence=item.debit_amount if item else (None if bundle.balance.status in {"missing","invalid"} else Decimal("0.00")); income_type=OCCURRENCE_INCOME_TYPES[subject]
                 broker_value=(broker_gross if subject=="45019006" else Decimal("0.00")) if bundle.broker.status not in {"missing","invalid"} else None
                 broker_diff=subtract_nullable(broker_value,occurrence) if subject=="45019006" else Decimal("0.00")
                 expected=occurrence if subject in {"21131042","21210012"} else subtract_nullable(broker_gross,broker_vat) if subject=="45019006" and broker_value is not None else subtract_nullable(occurrence,calc_vat(occurrence))
+                expected_by_subject[subject]=expected
+                occurrence_context[subject]=(item,occurrence,income_type,broker_value,broker_diff)
+            broker_expected_total=sum((expected_by_subject.get(subject) or Decimal("0.00") for subject in {"21131042","45019006"}),Decimal("0.00"))
+            for subject in OCCURRENCE_SUBJECT_CODES:
+                item,occurrence,income_type,broker_value,broker_diff=occurrence_context[subject]
+                expected=expected_by_subject[subject]
                 actual=None if bundle.declarations.status in {"missing","invalid"} else actual_by_item[income_type]
                 # Legacy repeats the broker declaration amount on both component rows.
-                difference=subtract_nullable(actual,expected)
+                difference=subtract_nullable(actual,broker_expected_total if subject in {"21131042","45019006"} else expected)
                 status="invalid_source" if bundle.balance.status=="invalid" or bundle.declarations.status=="invalid" or (subject=="45019006" and bundle.broker.status=="invalid") else "missing_source" if bundle.balance.status=="missing" or bundle.declarations.status=="missing" or (subject=="45019006" and bundle.broker.status=="missing") else "difference" if has_difference(broker_diff) or has_difference(difference) else "ok"
                 occurrence_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":subject,"income_type":income_type,"opening_balance":item.opening_balance if item else None,"debit_amount":item.debit_amount if item else None,"credit_amount":item.credit_amount if item else None,"closing_balance":item.closing_balance if item else None,"occurrence_amount":occurrence,"broker_payroll_amount":broker_value,"broker_occurrence_difference":broker_diff,"expected_declared_income":expected,"expected_income_description":income_type,"actual_declared_income":actual,"declared_income_difference":difference,"check_status":status})
         details=[]

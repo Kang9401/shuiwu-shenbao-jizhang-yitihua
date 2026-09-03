@@ -40,12 +40,23 @@ PROTECTED_MARKERS = (
     "删除数据",
     "其他窗口进行了单位切换",
 )
-_CONTEXT = {"org_code": "", "month": "", "task": ""}
+GENERIC_REMINDER_KEYWORDS = {"温馨提示", "温 馨 提 示"}
+_CONTEXT = {"org_code": "", "month": "", "task": "", "step": "workflow", "trigger": ""}
 _TASK_BY_SCRIPT = {
     "etax_batch_export.py": "special_deduction",
     "etax_batch_import.py": "import",
     "etax_tax_certificate_download.py": "tax_certificate_or_income_report",
     "etax_extra_income_reports.py": "extra_income_reports",
+}
+_BUILTIN_RULE_CONTEXT = {
+    "unregistered-app": ("switch_org", "select_org"),
+    "natural-person-invoice": ("switch_org", "select_org"),
+    "previous-period-unfiled": ("switch_month", "select_tax_month"),
+    "previous-tax-period-unfiled": ("switch_month", "select_tax_month"),
+    "prior-period-unfiled": ("switch_month", "select_tax_month"),
+    "annual-settlement-tax": ("enter_menu", "综合所得申报"),
+    "annual-settlement-incomplete": ("enter_menu", "综合所得申报"),
+    "annual-settlement-not-finished": ("enter_menu", "综合所得申报"),
 }
 
 
@@ -54,7 +65,24 @@ def _load_popup_rules() -> list[dict[str, Any]]:
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         rules = payload.get("popup_rules", [])
-        return [rule for rule in rules if isinstance(rule, dict) and rule.get("enabled", True)]
+        result = []
+        for rule in rules:
+            if not isinstance(rule, dict) or not rule.get("enabled", True):
+                continue
+            keyword = re.sub(r"\s+", "", str(rule.get("keyword") or ""))
+            # Runtime may be carrying an older config written before workflow
+            # protection was enforced. Never allow it back into the guard.
+            if not keyword or keyword in {re.sub(r"\s+", "", value) for value in GENERIC_REMINDER_KEYWORDS}:
+                continue
+            if any(re.sub(r"\s+", "", marker) in keyword or keyword in re.sub(r"\s+", "", marker) for marker in PROTECTED_MARKERS):
+                continue
+            default_step, default_trigger = _BUILTIN_RULE_CONTEXT.get(str(rule.get("id") or ""), ("all", "all"))
+            result.append({
+                **rule,
+                "step": rule.get("step", default_step),
+                "trigger": rule.get("trigger", default_trigger),
+            })
+        return result
     except (OSError, json.JSONDecodeError, AttributeError):
         return []
 
@@ -70,13 +98,28 @@ def _task_from_runtime() -> str:
     return _TASK_BY_SCRIPT.get(script_name, Path(sys.argv[0]).stem)
 
 
-def set_popup_guard_context(*, org_code: str | None = None, month: str | None = None, task: str | None = None) -> None:
+def set_popup_guard_context(
+    *,
+    org_code: str | None = None,
+    month: str | None = None,
+    task: str | None = None,
+    step: str | None = None,
+    trigger: str | None = None,
+) -> None:
     if org_code is not None:
         _CONTEXT["org_code"] = org_code
     if month is not None:
         _CONTEXT["month"] = month
     if task is not None:
         _CONTEXT["task"] = task
+    if step is not None:
+        _CONTEXT["step"] = step
+    if trigger is not None:
+        _CONTEXT["trigger"] = trigger
+
+
+def set_popup_step(step: str, trigger: str = "") -> None:
+    set_popup_guard_context(step=step, trigger=trigger)
 
 
 def _compact(value: Any, limit: int = 1000) -> str:
@@ -115,6 +158,8 @@ def _record(
         "org_code": _CONTEXT["org_code"],
         "month": _CONTEXT["month"],
         "task": _CONTEXT["task"],
+        "step": _CONTEXT["step"],
+        "trigger": _CONTEXT["trigger"],
         "url": _safe_url(page),
         "content": _compact(text),
         "close_action": close_action,
@@ -150,11 +195,18 @@ def _rule_matches(rule: dict[str, Any], text: str) -> bool:
         return False
     task = str(rule.get("task") or "all")
     current = _CONTEXT["task"]
-    if task == "all" or task == current:
-        return True
-    if task == "declaration_reports" and current in {"income_report", "extra_income_reports", "tax_certificate_or_income_report"}:
-        return True
-    return False
+    if task != "all" and task != current and not (
+        task == "declaration_reports"
+        and current in {"income_report", "extra_income_reports", "tax_certificate_or_income_report"}
+    ):
+        return False
+    step = str(rule.get("step") or "all")
+    if step != "all" and step != _CONTEXT["step"]:
+        return False
+    trigger = str(rule.get("trigger") or "all")
+    if trigger != "all" and trigger != _CONTEXT["trigger"]:
+        return False
+    return True
 
 
 def _matching_rule(rules: Iterable[dict[str, Any]], text: str) -> dict[str, Any] | None:
@@ -240,6 +292,7 @@ def handle_configured_popups(
         log(
             "popup_rule_applied："
             f"规则={selected_rule.get('keyword')}；动作={close_action}；"
+            f"步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
             f"机构代码={payload['org_code'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
         handled += 1
@@ -290,19 +343,18 @@ def drain_unexpected_popups(
         if _is_protected_popup(candidate, candidate_text, protected_markers):
             continue
 
-        payload = _record(page, candidate_text, "unconfigured_close", record_dir=record_dir, popup_type="dom")
+        payload = _record(page, candidate_text, "unconfigured_block", record_dir=record_dir, popup_type="dom")
         log(
-            "popup_unconfigured_closed："
-            f"类型=页面弹窗；机构代码={payload['org_code'] or '未知'}；"
+            "popup_unconfigured_blocked："
+            f"类型=页面弹窗；步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
+            f"机构代码={payload['org_code'] or '未知'}；"
             f"税款所属期={payload['month'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
-        close_button = candidate.locator(CLOSE_SELECTOR).filter(visible=True)
-        if close_button.count() > 0:
-            close_button.first.click(force=True, timeout=3000)
-        else:
-            candidate.get_by_role("button").first.click(force=True, timeout=3000)
-        handled += 1
-        page.wait_for_timeout(300)
+        # Unknown dialogs are never safe to dismiss: the first button may be
+        # a destructive business action such as submit, delete, or clear.
+        raise RuntimeError(
+            f"检测到未配置弹窗，RPA 已停止，避免误操作：{candidate_text[:200]}"
+        )
     return handled
 
 
@@ -341,13 +393,18 @@ def install_popup_guard(
                 extra={"rule_id": rule.get("id"), "keyword": rule.get("keyword")},
             )
             dialog.accept() if action == "accept" else dialog.dismiss()
-            log(f"popup_rule_applied：规则={rule.get('keyword')}；动作={action}；内容={payload['content'] or '<空>'}")
+            log(
+                f"popup_rule_applied：规则={rule.get('keyword')}；动作={action}；"
+                f"步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
+                f"内容={payload['content'] or '<空>'}"
+            )
             return
         time.sleep(4)
         payload = _record(page, text, "unconfigured_pause", record_dir=record_dir, popup_type="browser")
         log(
             "popup_unconfigured_paused："
-            f"类型=浏览器弹窗；机构代码={payload['org_code'] or '未知'}；"
+            f"类型=浏览器弹窗；步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
+            f"机构代码={payload['org_code'] or '未知'}；"
             f"税款所属期={payload['month'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
         dialog.dismiss()

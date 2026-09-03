@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 try:
     from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait
-    from etax_popup_guard import handle_configured_popups, install_popup_guard, set_popup_guard_context
+    from etax_popup_guard import handle_configured_popups, install_popup_guard, set_popup_guard_context, set_popup_step
 except ImportError:  # Source-tree execution before runtime synchronization.
     extension_dir = Path(__file__).parents[2] / "app" / "rpa" / "extensions"
     if str(extension_dir) not in sys.path:
@@ -26,6 +26,7 @@ except ImportError:  # Source-tree execution before runtime synchronization.
         install_popup_guard,
         handle_configured_popups,
         set_popup_guard_context,
+        set_popup_step,
     )
 
 
@@ -34,6 +35,7 @@ WORK_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False
 OUTPUT_DIR = WORK_DIR / "output"
 PROFILE_DIR = WORK_DIR / ".chrome-etax-profile"
 DEFAULT_ORG_EXCEL = WORK_DIR / "机构信息表.xlsx"
+SECURITY_DIALOG_SETTLE_MS = 2000
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ def set_popup_context(org: TaxOrg | None = None, target_month: str | None = None
     set_popup_guard_context(
         org_code=org.code if org is not None else None,
         month=target_month,
+        step="workflow",
+        trigger="",
     )
 
 
@@ -384,6 +388,7 @@ def switch_org(page: Page, org: TaxOrg) -> None:
         raise RuntimeError(
             f"机构 {org.name}（{org.code}）配置选择第 {org.search_result_index} 条搜索结果，但税局只返回 {count} 条"
         )
+    set_popup_step("switch_org", "select_org")
     results.nth(org.search_result_index - 1).click()
     log(f"已选择搜索结果第 {org.search_result_index} 条（共 {count} 条）")
 
@@ -394,6 +399,7 @@ def switch_org(page: Page, org: TaxOrg) -> None:
     # 新版提醒可能在扣缴端首页完成渲染后延迟出现。
     page.wait_for_timeout(1000)
     close_common_popups(page)
+    set_popup_step("workflow")
 
 
 def set_tax_month(page: Page, target_month: str) -> None:
@@ -411,6 +417,7 @@ def set_tax_month(page: Page, target_month: str) -> None:
     month_input.click()
     picker = page.locator(".el-picker-panel:visible").first
     picker.wait_for(state="visible", timeout=8000)
+    set_popup_step("switch_month", "select_tax_month")
     picker.locator(".el-month-table td", has_text=target_month_text).filter(visible=True).first.click()
     # The previous-period reminder is rendered asynchronously after the month
     # picker closes. Check once during the initial refresh and once more after
@@ -424,6 +431,7 @@ def set_tax_month(page: Page, target_month: str) -> None:
     if actual_value != target_label:
         raise RuntimeError(f"税款所属月份切换失败，当前值：{actual_value}，目标值：{target_label}")
     log(f"税款所属月份已切换为：{target_label}")
+    set_popup_step("workflow")
 
 
 def enter_salary_page(page: Page, target_month: str) -> None:
@@ -435,8 +443,11 @@ def enter_salary_page(page: Page, target_month: str) -> None:
 
     click_text(page, "扣缴申报", exact=False)
     page.wait_for_timeout(500)
+    set_popup_step("enter_menu", "综合所得申报")
     click_text(page, "综合所得申报", exact=False)
     page.wait_for_timeout(1500)
+    close_common_popups(page)
+    set_popup_step("workflow")
     set_tax_month(page, target_month)
     click_text(page, "正常工资薪金所得", exact=False)
     page.wait_for_load_state("domcontentloaded", timeout=20000)
@@ -505,6 +516,8 @@ def open_export_all_people(page: Page) -> None:
     item = page.locator(".el-dropdown-menu:visible .el-dropdown-menu__item", has_text="全部人员").first
     item.wait_for(state="visible", timeout=8000)
     item.click()
+    # The tax site renders the slider asynchronously after selecting export.
+    page.wait_for_timeout(SECURITY_DIALOG_SETTLE_MS)
 
 
 def close_security_dialog(page: Page) -> None:

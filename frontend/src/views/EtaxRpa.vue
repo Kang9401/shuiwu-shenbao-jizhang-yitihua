@@ -125,6 +125,8 @@
               <el-table-column label="启用" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" :disabled="running" /></template></el-table-column>
               <el-table-column label="匹配关键字" min-width="210"><template #default="{ row }"><el-input v-model="row.keyword" :disabled="running" placeholder="弹窗标题或正文中的稳定文字" /></template></el-table-column>
               <el-table-column label="适用任务" width="155"><template #default="{ row }"><el-select v-model="row.task" :disabled="running"><el-option v-for="item in popupTaskOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+              <el-table-column label="触发步骤" width="135"><template #default="{ row }"><el-select v-model="row.step" :disabled="running"><el-option v-for="item in popupStepOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+              <el-table-column label="触发动作" width="165"><template #default="{ row }"><el-select v-model="row.trigger" :disabled="running" filterable allow-create><el-option v-for="item in popupTriggerOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
               <el-table-column label="动作" width="145"><template #default="{ row }"><el-select v-model="row.action" :disabled="running"><el-option v-for="item in popupActionOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
               <el-table-column label="按钮文字" width="145"><template #default="{ row }"><el-input v-model="row.button_text" :disabled="running || row.action !== 'click'" placeholder="如：我知道了" /></template></el-table-column>
               <el-table-column label="延迟（毫秒）" width="155"><template #default="{ row }"><el-input-number v-model="row.delay_ms" :disabled="running" :min="0" :max="10000" :step="500" controls-position="right" /></template></el-table-column>
@@ -142,6 +144,8 @@
             <el-table-column prop="captured_at" label="时间" min-width="175" />
             <el-table-column prop="org_code" label="机构" width="95" />
             <el-table-column label="任务" width="130"><template #default="{ row }">{{ popupTaskLabel(row.task) }}</template></el-table-column>
+            <el-table-column prop="step" label="步骤" width="110" />
+            <el-table-column prop="trigger" label="触发" width="145" />
             <el-table-column prop="content" label="弹窗内容" min-width="360" show-overflow-tooltip />
             <el-table-column prop="close_action" label="处理结果" width="145" />
             <el-table-column label="操作" width="105" fixed="right"><template #default="{ row }"><el-button size="small" :disabled="running" @click="addPopupRule(row)">新增规则</el-button></template></el-table-column>
@@ -228,6 +232,28 @@ const popupTaskOptions: Array<{ value: RpaPopupTask; label: string }> = [
   { value: 'extra_income_reports', label: '分类/限售股申报' },
   { value: 'tax_certificate_or_income_report', label: '完税及申报下载' },
 ]
+const popupStepOptions = [
+  { value: 'all', label: '全部步骤' },
+  { value: 'switch_org', label: '切换单位' },
+  { value: 'switch_month', label: '切换月份' },
+  { value: 'enter_menu', label: '进入申报菜单' },
+  { value: 'clear_data', label: '清空数据' },
+  { value: 'import_file', label: '导入文件' },
+  { value: 'workflow', label: '业务流程' },
+  { value: 'idle', label: '空闲' },
+]
+const popupTriggerOptions = [
+  { value: '', label: '无触发动作' },
+  { value: 'all', label: '全部动作' },
+  { value: 'select_org', label: '选择单位后' },
+  { value: 'click_switch_org', label: '点击切换单位' },
+  { value: 'select_tax_month', label: '选择月份后' },
+  { value: 'click_declaration_menu', label: '点击申报菜单' },
+  { value: '综合所得申报', label: '综合所得申报' },
+  { value: '分类所得申报', label: '分类所得申报' },
+  { value: '限售股所得申报', label: '限售股所得申报' },
+  { value: 'click_clear_data', label: '点击清空数据' },
+]
 const popupActionOptions = [
   { value: 'keep', label: '保留（不处理）' },
   { value: 'close', label: '关闭弹窗' },
@@ -259,10 +285,13 @@ async function loadPopupEvents() { try { popupEvents.value = (await rpaApi.getPo
 async function openPopupDrawer() { popupDrawerVisible.value = true; await Promise.all([loadPopupRules(), loadPopupEvents()]) }
 function addPopupRule(event?: RpaPopupEvent) {
   const eventTask = popupTaskOptions.some((item) => item.value === event?.task) ? event?.task as RpaPopupTask : 'all'
+  const eventStep = popupStepOptions.some((item) => item.value === event?.step) ? event?.step as RpaPopupRule['step'] : 'all'
   popupRules.value.push({
     id: `popup-${Date.now()}-${popupRules.value.length + 1}`,
     keyword: String(event?.content || '').slice(0, 120),
     task: eventTask,
+    step: eventStep,
+    trigger: String(event?.trigger || ''),
     action: 'close',
     button_text: '',
     delay_ms: 4000,

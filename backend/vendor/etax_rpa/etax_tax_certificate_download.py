@@ -53,6 +53,7 @@ except ImportError:  # Source-tree execution before runtime synchronization.
 
 
 CDP_URL = "http://127.0.0.1:9222"
+SECURITY_DIALOG_SETTLE_MS = 2000
 
 
 def safe_filename_part(value: str) -> str:
@@ -437,6 +438,8 @@ def open_withholding_report_export(page: Page) -> bool:
     item = page.locator(".el-dropdown-menu:visible .el-dropdown-menu__item", has_text="个人所得税扣缴申报表").first
     item.wait_for(state="visible", timeout=10000)
     item.click()
+    # Allow the security dialog and slider iframe to finish rendering.
+    page.wait_for_timeout(SECURITY_DIALOG_SETTLE_MS)
     return True
 
 
