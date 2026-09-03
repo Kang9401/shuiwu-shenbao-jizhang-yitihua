@@ -81,6 +81,22 @@ def test_company_crud_and_business_data_are_isolated(tmp_path, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_company_switch_lists_all_active_companies_with_current_header(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    try:
+        first = client.post("/api/companies", json={"name": "第一分公司", "code": "C01", "operator_name": "张三", "notes": ""}).json()
+        second = client.post("/api/companies", json={"name": "第二分公司", "code": "C02", "operator_name": "李四", "notes": ""}).json()
+        headers = {"X-Company-ID": str(first["id"])}
+        listed = client.get("/api/companies", headers=headers)
+        assert listed.status_code == 200
+        assert {item["id"] for item in listed.json()} == {first["id"], second["id"]}
+        selected = client.post(f"/api/companies/{second['id']}/select", headers=headers)
+        assert selected.status_code == 200
+        assert selected.json()["id"] == second["id"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_cross_company_artifact_download_returns_not_found(tmp_path, monkeypatch):
     client, session_local = _client(tmp_path, monkeypatch)
     try:

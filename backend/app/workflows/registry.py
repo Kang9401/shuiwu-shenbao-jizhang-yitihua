@@ -634,9 +634,9 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
 class PartTimeTaxWorkflow(ExcelWorkflow):
     info = WorkflowInfo(
         code="part_time_tax",
-        name="非全日制用工个税申报",
+        name="劳务报酬申报",
         domain="个税申报",
-        description="按姓名匹配非全日制人员，滚动维护人员主数据并生成劳务报酬申报文件。",
+        description="按姓名匹配劳务报酬人员，滚动维护人员主数据并生成劳务报酬申报文件。",
         required_file_roles=["payroll"],
     )
 

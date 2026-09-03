@@ -78,6 +78,7 @@ GENERAL_TAX_TEMPLATE_COLUMNS = [
     "公务交通费用",
     "通讯费用",
     "律师办案费用",
+    "住房公积金调整",
     "西藏附加减除费用",
     "其他",
     "准予扣除的捐赠额",
@@ -326,7 +327,7 @@ def normalize_general_salary_frame(role: str, df: pd.DataFrame) -> pd.DataFrame:
     for target, candidates in deduction_cols.items():
         source[target] = number_series(source, candidates)
 
-    for column in ["税延养老保险", "公务交通费用", "通讯费用", "律师办案费用", "西藏附加减除费用", "其他", "准予扣除的捐赠额", "减免税额", "协定减免"]:
+    for column in ["税延养老保险", "公务交通费用", "通讯费用", "律师办案费用", "住房公积金调整", "西藏附加减除费用", "其他", "准予扣除的捐赠额", "减免税额", "协定减免"]:
         source[column] = number_series(source, [column])
     source["备注"] = text_series(source, ["备注"])
     source["工号"] = source["员工编号"]
@@ -475,6 +476,7 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             "block_declarations": True,
         }
     broker["员工编号"] = broker[employee_id_col].fillna("").astype(str).str.strip().map(normalize_emp_id)
+    broker["姓名_业绩表"] = text_series(broker, ["*姓名", "姓名", "员工姓名", "经纪人姓名"])
     # 平台导出文件首行是汇总，不属于经纪人申报明细。
     broker = broker[broker["员工编号"].map(_clean_cell) != ""].copy()
     duplicate_payroll_ids = broker.loc[broker["员工编号"].duplicated(keep=False), "员工编号"].unique()
@@ -521,22 +523,40 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             {"issue_type": "经纪人主数据重复", "message": f"经纪人人员主数据员工编号重复：{employee_id}"}
             for employee_id in duplicate_ids if _clean_cell(employee_id)
         )
-        staff_lookup = staff.drop_duplicates(subset=["员工编号"], keep="first")
-        broker_ids = {employee_id for employee_id in broker["员工编号"] if _clean_cell(employee_id)}
-        staff_ids = {employee_id for employee_id in staff_lookup["员工编号"] if _clean_cell(employee_id)}
-        issues.extend(
-            {"issue_type": "经纪人新增待维护", "severity": "warning", "message": f"经纪人工资表存在但人员主数据缺失，将跳过申报：{employee_id}"}
-            for employee_id in sorted(broker_ids - staff_ids)
-        )
-        issues.extend(
-            {"issue_type": "经纪人无本月收入提醒", "severity": "warning", "message": f"经纪人人员主数据存在但本月业绩表缺失：{employee_id}"}
-            for employee_id in sorted(staff_ids - broker_ids)
-        )
-        detail = broker.merge(
-            staff_lookup[["员工编号", "分支机构代码", "*姓名", "*证件类型", "*证件号码"]],
-            on="员工编号",
-            how="left",
-        )
+        staff["姓名_匹配键"] = staff["*姓名"].map(lambda value: "".join(_clean_cell(value).split()))
+        staff_with_id = staff[staff["员工编号"].map(_clean_cell) != ""]
+        staff_with_name = staff[staff["姓名_匹配键"].map(_clean_cell) != ""]
+        id_groups = {employee_id: list(indexes) for employee_id, indexes in staff_with_id.groupby("员工编号").groups.items()}
+        name_groups = {name: list(indexes) for name, indexes in staff_with_name.groupby("姓名_匹配键").groups.items()}
+        matched_staff_indexes: set[Any] = set()
+        detail = broker.copy()
+        for column in ("分支机构代码", "*姓名", "*证件类型", "*证件号码"):
+            detail[column] = ""
+        for idx, row in detail.iterrows():
+            employee_id = _clean_cell(row.get("员工编号"))
+            name = "".join(_clean_cell(row.get("姓名_业绩表")).split())
+            matches = id_groups.get(employee_id, []) if employee_id else []
+            match_method = "员工编号"
+            if len(matches) != 1 and name:
+                matches = name_groups.get(name, [])
+                match_method = "姓名"
+            if len(matches) != 1:
+                identifier = _clean_cell(row.get("姓名_业绩表")) or employee_id
+                reason = "姓名在人员主数据中重复" if name and len(name_groups.get(name, [])) > 1 else "人员主数据缺失"
+                issues.append({"issue_type": "经纪人新增待维护", "severity": "warning", "message": f"经纪人业绩表记录无法唯一匹配人员主数据，将跳过申报：{identifier}（{reason}）"})
+                continue
+            staff_index = matches[0]
+            matched_staff_indexes.add(staff_index)
+            for column in ("分支机构代码", "*姓名", "*证件类型", "*证件号码"):
+                detail.at[idx, column] = staff.at[staff_index, column]
+            if match_method == "姓名" and employee_id:
+                issues.append({"issue_type": "经纪人姓名匹配", "severity": "warning", "message": f"员工编号 {employee_id} 未在人员主数据中找到，已按唯一姓名匹配：{detail.at[idx, '*姓名']}"})
+        for staff_index, staff_row in staff.iterrows():
+            if staff_index in matched_staff_indexes:
+                continue
+            identifier = _clean_cell(staff_row.get("员工编号")) or _clean_cell(staff_row.get("*姓名"))
+            if identifier:
+                issues.append({"issue_type": "经纪人无本月收入提醒", "severity": "warning", "message": f"经纪人人员主数据存在但本月业绩表缺失：{identifier}"})
 
     for column in BROKER_DECLARATION_COLUMNS:
         if column not in detail.columns:

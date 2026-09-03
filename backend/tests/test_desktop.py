@@ -3,6 +3,7 @@ from __future__ import annotations
 import desktop
 import httpx
 from fastapi import FastAPI
+import pytest
 
 
 class FakeWindow:
@@ -65,3 +66,16 @@ def test_main_window_close_destroys_hidden_monitor(monkeypatch):
     assert desktop._desktop_exiting is True
     assert window.calls == ["destroy"]
     assert desktop._hide_monitor_on_close(desktop.DesktopWindowManager()) is True
+
+
+def test_frontend_validation_rejects_missing_asset(tmp_path):
+    (tmp_path / "index.html").write_text('<div id="app"></div><script src="assets/app.js"></script>', encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        desktop._validate_frontend_dist(tmp_path)
+
+
+def test_frontend_validation_accepts_complete_dist(tmp_path):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "app.js").write_text("", encoding="utf-8")
+    (tmp_path / "index.html").write_text('<div id="app"></div><script src="assets/app.js"></script>', encoding="utf-8")
+    assert desktop._validate_frontend_dist(tmp_path).name == "index.html"

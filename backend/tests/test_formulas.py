@@ -1,6 +1,8 @@
 import pandas as pd
 
+from app.services.verification import DECLARATION_COLUMNS
 from app.services.formulas import (
+    GENERAL_TAX_TEMPLATE_COLUMNS,
     annual_bonus_transform,
     broker_tax_transform,
     general_salary_tax_transform,
@@ -11,6 +13,13 @@ from app.services.formulas import (
     restricted_stock_interest_transform,
     staff_change_analysis,
 )
+
+
+def test_general_salary_template_has_housing_fund_adjustment_in_required_position():
+    for columns in (GENERAL_TAX_TEMPLATE_COLUMNS, DECLARATION_COLUMNS):
+        index = columns.index("住房公积金调整")
+        assert columns[index - 1] == "律师办案费用"
+        assert columns[index + 1] == "西藏附加减除费用"
 
 
 def test_normalize_org_code_matches_legacy_mapping():
@@ -60,6 +69,7 @@ def test_general_salary_tax_keeps_legacy_split_salary_role_compatible():
     assert len(result["detail"]) == 1
     assert result["detail"].loc[0, "本期收入"] == 10000
     assert result["detail"].loc[0, "工资单类型"] == "营销工资单"
+    assert result["detail"].loc[0, "住房公积金调整"] == 0
 
 
 def test_general_salary_tax_normalizes_headquarters_salary_sheet():
@@ -169,6 +179,39 @@ def test_broker_tax_warns_when_personnel_master_has_unmatched_broker():
     assert result["block_declarations"] is False
     assert {item["issue_type"] for item in result["issues"]} == {"经纪人新增待维护", "经纪人无本月收入提醒"}
     assert all(item["severity"] == "warning" for item in result["issues"])
+
+
+def test_broker_tax_falls_back_to_unique_name_when_master_has_no_employee_id():
+    broker = pd.DataFrame([{
+        "员工编号": "2001", "姓名": "张三", "应发工资(补足前)": 1200,
+        "增值税": 200, "个人所得税(经纪人)": 100,
+    }])
+    staff = pd.DataFrame([{
+        "分支机构代码": "10301", "*姓名": "张三",
+        "*证件类型": "居民身份证", "*证件号码": "110101199001010011",
+    }])
+
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+
+    row = result["detail"].iloc[0]
+    assert row["分支机构代码"] == "10301"
+    assert row["*证件号码"] == "110101199001010011"
+    assert result["metrics"]["broker_declared_records"] == 1
+    assert {item["issue_type"] for item in result["issues"]} == {"经纪人姓名匹配"}
+
+
+def test_broker_tax_does_not_name_match_ambiguous_personnel_master():
+    broker = pd.DataFrame([{"员工编号": "2001", "姓名": "张三", "应发工资(补足前)": 1200}])
+    staff = pd.DataFrame([
+        {"分支机构代码": "10301", "*姓名": "张三", "*证件号码": "A"},
+        {"分支机构代码": "10302", "*姓名": "张三", "*证件号码": "B"},
+    ])
+
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+
+    assert result["metrics"]["broker_declared_records"] == 0
+    assert result["detail"].iloc[0]["分支机构代码"] == ""
+    assert any("姓名在人员主数据中重复" in item["message"] for item in result["issues"])
 
 
 def test_intern_tax_builds_legacy_personnel_and_declaration_data():

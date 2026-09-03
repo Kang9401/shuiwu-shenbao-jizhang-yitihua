@@ -24,6 +24,7 @@ from etax_batch_export import (
     make_context,
     month_label,
     read_orgs_from_excel,
+    set_popup_context,
     switch_org,
     wait_for_user,
 )
@@ -542,6 +543,7 @@ def download_comprehensive_income_report(page: Page, org: TaxOrg, target_month: 
 
 def process_org(page: Page, org: TaxOrg, target_month: str, task: str = "all") -> tuple[Page, list[Path]]:
     check_cancelled()
+    set_popup_context(org, target_month)
     log("=" * 70)
     if task in {"all", "tax_certificate"}:
         log(f"开始下载完税证明：{org.name}（{org.code}）")

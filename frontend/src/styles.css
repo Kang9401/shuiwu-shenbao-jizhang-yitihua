@@ -38,6 +38,7 @@ body {
     linear-gradient(180deg, #f7f9fc 0%, var(--page) 360px),
     var(--page);
   color: var(--ink);
+  overflow-x: hidden;
 }
 
 button,
@@ -220,6 +221,7 @@ input:focus-visible {
   min-height: 100vh;
   flex: 1;
   margin-left: var(--sidebar-width);
+  overflow-x: hidden;
 }
 
 .topbar {

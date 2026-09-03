@@ -4,6 +4,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -19,6 +20,7 @@ import uvicorn
 
 from app.core.config import settings
 from app.core.version import APP_SLUG, PRODUCT_NAME
+from app.core.paths import resource_root
 from app.main import app
 
 
@@ -74,6 +76,28 @@ def _find_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def resource_path(relative: str | os.PathLike[str]) -> Path:
+    """Resolve a bundled resource in both source and frozen execution."""
+    return resource_root() / Path(relative)
+
+
+def _validate_frontend_dist(frontend_dir: Path | None = None) -> Path:
+    root = (frontend_dir or settings.frontend_dist_dir).resolve()
+    index_file = root / "index.html"
+    if not index_file.is_file():
+        raise FileNotFoundError(f"前端首页不存在：{index_file}")
+    text = index_file.read_text(encoding="utf-8", errors="replace")
+    if '<div id="app"></div>' not in text:
+        raise RuntimeError("前端首页缺少应用挂载节点")
+    for asset in re.findall(r"(?:src|href)=\"([^\"]+)\"", text):
+        if asset.startswith(("http://", "https://", "data:", "#")):
+            continue
+        asset_path = (root / asset.lstrip("/")).resolve()
+        if not asset_path.is_file() or not str(asset_path).lower().startswith(str(root).lower()):
+            raise FileNotFoundError(f"前端静态资源不存在：{asset}")
+    return index_file
 
 
 def _prepare_runtime() -> None:
@@ -149,6 +173,7 @@ def _close_monitor_on_main_close() -> bool:
 
 
 def _verify_frontend(url: str) -> None:
+    _validate_frontend_dist()
     response = httpx.get(url, timeout=5.0, follow_redirects=True)
     response.raise_for_status()
     if '<div id="app"></div>' not in response.text:
@@ -168,6 +193,7 @@ def main() -> int:
         server = None
         thread = None
         try:
+            logging.getLogger(__name__).info("Desktop self-test starting; resource_root=%s frontend=%s", resource_root(), settings.frontend_dist_dir)
             _prepare_runtime()
             from app.db.init_db import init_db
             from app.rpa.runtime import ensure_runtime_app
@@ -182,9 +208,7 @@ def main() -> int:
             missing_helpers = [name for name in expected_helpers if not (rpa_runtime / name).is_file()]
             if missing_helpers:
                 raise FileNotFoundError(f"RPA helper executables are missing: {', '.join(missing_helpers)}")
-            index_file = settings.frontend_dist_dir / "index.html"
-            if not index_file.is_file():
-                raise FileNotFoundError(f"前端资源不存在：{index_file}")
+            index_file = _validate_frontend_dist()
             server, thread, url = _start_server()
             _verify_frontend(url)
             _verify_webview_backend()
@@ -210,6 +234,7 @@ def main() -> int:
         global _monitor_window, _desktop_exiting
         _desktop_exiting = False
         _prepare_runtime()
+        logging.getLogger(__name__).info("Desktop startup: resource_root=%s frontend=%s log_dir=%s", resource_root(), settings.frontend_dist_dir, settings.log_dir)
         server, thread, url = _start_server()
         try:
             import webview

@@ -11,7 +11,7 @@ from app.api.dependencies import require_company
 from app.models.core import Company
 from app.rpa.service import rpa_service
 from app.services.personnel_master import PersonnelMasterValidationError
-from app.schemas.rpa import RpaChromeStart, RpaConfigUpdate, RpaDeleteFilesRequest, RpaOrgPreviewRequest, RpaPreparePeriodRequest, RpaTaskStartRequest
+from app.schemas.rpa import RpaChromeStart, RpaConfigUpdate, RpaDeleteFilesRequest, RpaOrgPreviewRequest, RpaPopupRulesUpdate, RpaPreparePeriodRequest, RpaTaskStartRequest
 
 def activate_rpa_company(company: Company = Depends(require_company)) -> None:
     try:
@@ -56,6 +56,32 @@ def save_config(request: RpaConfigUpdate):
         return rpa_service.save_config(request.chrome_path, request.input_path, request.output_path)
     except Exception as exc:
         return bad_request(exc)
+
+
+@router.get("/popup-rules")
+def popup_rules():
+    return rpa_service.get_popup_rules()
+
+
+@router.put("/popup-rules")
+def save_popup_rules(request: RpaPopupRulesUpdate):
+    try:
+        return rpa_service.save_popup_rules([rule.model_dump() for rule in request.rules])
+    except Exception as exc:
+        return bad_request(exc)
+
+
+@router.post("/popup-rules/reset")
+def reset_popup_rules():
+    try:
+        return rpa_service.reset_popup_rules()
+    except Exception as exc:
+        return bad_request(exc)
+
+
+@router.get("/popup-events")
+def popup_events(limit: int = Query(default=100, ge=1, le=500)):
+    return rpa_service.popup_events(limit)
 
 
 @router.post("/org-excel")

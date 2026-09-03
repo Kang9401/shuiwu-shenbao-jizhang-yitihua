@@ -276,6 +276,7 @@ def _download_one(
     def download_export() -> Path:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         _download_matching_record(page, org, month, spec, target, config)
+        helpers["close_export_record"](page)
         valid, reason = validate_report_xlsx(target, spec, month, org.code, org.name)
         if not valid:
             quarantine_invalid(target, reason)
@@ -328,6 +329,7 @@ def main() -> int:
     from etax_batch_export import (  # type: ignore[import-not-found]
         close_duplicate_etax_tabs,
         close_common_popups,
+        close_export_record_dialog,
         ensure_withholding_page,
         make_context,
         read_orgs_from_excel,
@@ -339,11 +341,13 @@ def main() -> int:
         has_visible_confirm_export,
     )
     from playwright.sync_api import sync_playwright
+    from etax_popup_guard import set_popup_guard_context
 
     orgs = resolve_orgs(read_orgs_from_excel(Path(args.org_excel).resolve()), args.org_code, args.org_name, args.start_org_code)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     helpers = {
         "close_popups": close_common_popups,
+        "close_export_record": close_export_record_dialog,
         "set_tax_month": set_tax_month,
         "confirm_export": confirm_report_export,
         "export_ready": has_visible_confirm_export,
@@ -359,6 +363,7 @@ def main() -> int:
             page = ensure_withholding_page(page)
             for org in orgs:
                 check_cancelled()
+                set_popup_guard_context(org_code=org.code, month=args.month, task="extra_income_reports")
                 log(f"开始下载扩展申报表：{org.name}（{org.code}）")
                 try:
                     switch_org(page, org)

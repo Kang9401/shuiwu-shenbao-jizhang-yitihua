@@ -24,10 +24,12 @@ class PitReconciliationEngine:
         # Source adapters name their workflow internally; normalize public source names.
         source_map["broker"] = bundle.broker; source_map["bond_interest"] = bundle.bond_interest; source_map["restricted_stock"] = bundle.restricted_stock
         orgs={row.org_code: row for row in bundle.organizations.rows}
+        allowed_org_codes = set(orgs)
         for source in (bundle.salary,bundle.declarations,bundle.balance,bundle.broker,bundle.bond_interest,bundle.restricted_stock):
             for row in source.rows:
                 code=getattr(row,"org_code","")
-                if code and code not in orgs: orgs[code]=type("Org",(),{"org_code":code,"org_name":"","full_name":""})()
+                if code and code not in allowed_org_codes:
+                    continue
         balance=defaultdict(dict)
         for row in bundle.balance.rows: balance[row.org_code][row.subject_code]=row
         tax_rows=[]; occurrence_rows=[]
@@ -43,7 +45,7 @@ class PitReconciliationEngine:
             for subject in TAX_SUBJECT_CODES:
                 item=balance[org_code].get(subject); source=source_map[required[subject]]; declared_missing=bundle.declarations.status in {"missing","invalid"}; business_value=None if source.status in {"missing","invalid"} else business[subject]; declared_value=None if declared_missing else declared[subject]; scoped_value=None if declared_missing else scoped[subject]
                 status="invalid_source" if source.status=="invalid" or bundle.declarations.status=="invalid" or bundle.balance.status=="invalid" else "missing_source" if source.status=="missing" or bundle.declarations.status=="missing" or bundle.balance.status=="missing" else "ok"
-                current=subtract_nullable(declared_value,item.credit_amount if item else Decimal("0.00")); cumulative=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); business_diff=subtract_nullable(scoped_value,business_value)
+                current=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); cumulative=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); business_diff=subtract_nullable(scoped_value,business_value)
                 if status=="ok" and any(has_difference(value) for value in (current,cumulative,business_diff)): status="difference"
                 tax_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":TAX_SUBJECT_NAMES[subject],"opening_balance":item.opening_balance if item else Decimal("0.00"),"debit_amount":item.debit_amount if item else Decimal("0.00"),"credit_amount":item.credit_amount if item else Decimal("0.00"),"closing_balance":item.closing_balance if item else Decimal("0.00"),"business_tax_amount":business_value,"declared_tax_amount":declared_value,"current_difference":current,"cumulative_difference":cumulative,"scoped_declared_tax_amount":scoped_value,"business_declared_difference":business_diff,"check_status":status})
             broker_gross=sum((item.gross_before_topup or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00")); broker_vat=sum((item.vat_amount or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00"))
@@ -71,23 +73,28 @@ class PitReconciliationEngine:
         if bundle.certificates.status in {"ready","ready_empty"}:
             for row in bundle.certificates.rows:
                 if "个人所得税" in row.tax_type: certificate_by_org[row.org_code]+=row.amount or Decimal("0.00")
-        used=set()
         bank_by_org=defaultdict(lambda:Decimal("0.00"))
         if bundle.bank.status in {"ready","ready_empty"}:
-            candidates=[row for row in bundle.bank.rows if "税" in row.summary]
-            candidates=candidates or bundle.bank.rows
+            # Match within each resolved organization. A global candidate pool
+            # can silently apply one branch's payment to another branch.
+            bank_rows_by_org=defaultdict(list)
+            for row in bundle.bank.rows:
+                if row.org_code in orgs and (row.debit_amount or Decimal("0.00")) > 0:
+                    bank_rows_by_org[row.org_code].append(row)
             for org_code,target in certificate_by_org.items():
+                org_rows=bank_rows_by_org.get(org_code, [])
+                candidates=[row for row in org_rows if "税" in row.summary] or org_rows
                 indexes=find_subset_sum([abs(row.debit_amount or Decimal("0.00")) for row in candidates],target)
                 if indexes:
                     for index in indexes:
-                        if index in used: continue
-                        used.add(index); row=candidates[index]; bank_by_org[org_code]+=abs(row.debit_amount or Decimal("0.00")); bank_matches.append({"org_code":org_code,"org_full_name":orgs.get(org_code).full_name if org_code in orgs else "","bank_account":row.bank_account,"transaction_time":row.transaction_time,"transaction_summary":row.summary,"debit_amount":abs(row.debit_amount or Decimal("0.00")),"source_batch_id":row.source_batch_id,"source_row_id":row.source_row_id})
+                        row=candidates[index]; bank_by_org[org_code]+=abs(row.debit_amount or Decimal("0.00")); bank_matches.append({"org_code":org_code,"org_full_name":orgs.get(org_code).full_name if org_code in orgs else "","bank_account":row.bank_account,"transaction_time":row.transaction_time,"transaction_summary":row.summary,"debit_amount":abs(row.debit_amount or Decimal("0.00")),"source_batch_id":row.source_batch_id,"source_row_id":row.source_row_id})
         for org_code,org in sorted(orgs.items()):
             checks=[row for row in tax_rows if row["org_code"]==org_code]; occurrences=[row for row in occurrence_rows if row["org_code"]==org_code]
             declared_total=sum((row["declared_tax_amount"] or Decimal("0.00") for row in checks),Decimal("0.00")) if bundle.declarations.status not in {"missing","invalid"} else None
-            balance_total=sum((row["credit_amount"] or Decimal("0.00") for row in checks),Decimal("0.00")) if bundle.balance.status not in {"missing","invalid"} else None
+            balance_total=sum((row["closing_balance"] or Decimal("0.00") for row in checks),Decimal("0.00")) if bundle.balance.status not in {"missing","invalid"} else None
             scoped_total=sum((row["scoped_declared_tax_amount"] or Decimal("0.00") for row in checks),Decimal("0.00")) if bundle.declarations.status not in {"missing","invalid"} else None
-            business_total=sum((row["business_tax_amount"] or Decimal("0.00") for row in checks),Decimal("0.00")) if all(row["business_tax_amount"] is not None for row in checks) else None
+            known_business = [row["business_tax_amount"] for row in checks if row["business_tax_amount"] is not None]
+            business_total=sum(known_business, Decimal("0.00")) if known_business else None
             certificate=None if bundle.certificates.status in {"missing","invalid"} else certificate_by_org[org_code]
             bank=None if bundle.bank.status in {"missing","invalid"} else bank_by_org[org_code]
             diff6=sum((row["broker_occurrence_difference"] or Decimal("0.00") for row in occurrences),Decimal("0.00")) if bundle.broker.status not in {"missing","invalid"} else None; diff7=sum((row["declared_income_difference"] or Decimal("0.00") for row in occurrences),Decimal("0.00")) if bundle.declarations.status not in {"missing","invalid"} else None

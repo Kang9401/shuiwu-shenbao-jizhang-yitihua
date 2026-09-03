@@ -60,3 +60,17 @@ class RpaDeleteFilesRequest(BaseModel):
 class RpaPreparePeriodRequest(BaseModel):
     period_id: int = Field(gt=0)
     overwrite: bool = False
+
+
+class RpaPopupRule(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    keyword: str = Field(min_length=1, max_length=300)
+    task: Literal["all", "special_deduction", "import", "tax_certificate", "income_report", "extra_income_reports", "declaration_reports", "tax_certificate_or_income_report"] = "all"
+    action: Literal["keep", "close", "click"]
+    button_text: str = Field(default="", max_length=80)
+    delay_ms: int = Field(default=0, ge=0, le=10000)
+    enabled: bool = True
+
+
+class RpaPopupRulesUpdate(BaseModel):
+    rules: List[RpaPopupRule] = Field(max_length=100)

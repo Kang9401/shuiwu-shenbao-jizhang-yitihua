@@ -17,13 +17,14 @@ class PitReconciliationRepository:
         for row in self.db.query(model).filter_by(workpaper_id=workpaper_id): result[tuple(getattr(row,key) for key in keys)]={field:getattr(row,field) for field in fields}
         return result
     def replace(self, workpaper, result):
-        manual={PitTaxAmountCheck:self._manual(PitTaxAmountCheck,("org_code","subject_code"),("current_manual_reason","cumulative_manual_reason","business_declared_manual_reason","remark"),workpaper.id),PitOccurrenceCheck:self._manual(PitOccurrenceCheck,("org_code","subject_code"),("broker_occurrence_manual_reason","declared_income_manual_reason","remark"),workpaper.id),PitReconciliationOrgSummary:self._manual(PitReconciliationOrgSummary,("org_code",),("difference_1_manual_reason","difference_2_manual_reason","difference_3_manual_reason","difference_4_manual_reason","difference_5_manual_reason","difference_6_manual_reason","difference_7_manual_reason","remark"),workpaper.id),PitReconciliationDifferenceDetail:self._manual(PitReconciliationDifferenceDetail,("detail_type","org_code","identity_key"),("manual_reason","remark"),workpaper.id)}
-        for model in (PitReconciliationSource,PitDeclarationSummary,PitTaxAmountCheck,PitOccurrenceCheck,PitReconciliationOrgSummary,PitReconciliationDifferenceDetail,PitBankTaxMatch): self.db.query(model).filter_by(workpaper_id=workpaper.id).delete(synchronize_session=False)
+        workpaper_id = workpaper.id
+        manual={PitTaxAmountCheck:self._manual(PitTaxAmountCheck,("org_code","subject_code"),("current_manual_reason","cumulative_manual_reason","business_declared_manual_reason","remark"),workpaper_id),PitOccurrenceCheck:self._manual(PitOccurrenceCheck,("org_code","subject_code"),("broker_occurrence_manual_reason","declared_income_manual_reason","remark"),workpaper_id),PitReconciliationOrgSummary:self._manual(PitReconciliationOrgSummary,("org_code",),("difference_1_manual_reason","difference_2_manual_reason","difference_3_manual_reason","difference_4_manual_reason","difference_5_manual_reason","difference_6_manual_reason","difference_7_manual_reason","remark"),workpaper_id),PitReconciliationDifferenceDetail:self._manual(PitReconciliationDifferenceDetail,("detail_type","org_code","identity_key"),("manual_reason","remark"),workpaper_id)}
+        for model in (PitReconciliationSource,PitDeclarationSummary,PitTaxAmountCheck,PitOccurrenceCheck,PitReconciliationOrgSummary,PitReconciliationDifferenceDetail,PitBankTaxMatch): self.db.query(model).filter_by(workpaper_id=workpaper_id).delete(synchronize_session=False)
         self.db.flush()
         # Bulk replacement may reuse SQLite row ids.  Clear stale ORM identities before
         # inserting the recomputed rows, while the manual values are already cached.
         self.db.expunge_all()
-        workpaper = self.db.get(PitReconciliationWorkpaper, workpaper.id)
+        workpaper = self.db.get(PitReconciliationWorkpaper, workpaper_id)
         mapping=((PitReconciliationSource,"sources",("source_type",)),(PitDeclarationSummary,"declaration_summaries",("org_code","declaration_type","income_item")),(PitTaxAmountCheck,"tax_checks",("org_code","subject_code")),(PitOccurrenceCheck,"occurrence_checks",("org_code","subject_code")),(PitReconciliationOrgSummary,"org_summaries",("org_code",)),(PitReconciliationDifferenceDetail,"details",("detail_type","org_code","identity_key")),(PitBankTaxMatch,"bank_matches",None))
         for model,key,natural_key in mapping:
             for row in result[key]:

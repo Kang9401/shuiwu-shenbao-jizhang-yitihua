@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.rpa.paths import state_dir
+from app.rpa.popup_rules import default_popup_rules
 
 
 def default_state() -> dict:
@@ -18,6 +19,7 @@ def default_state() -> dict:
         "current_run": {"run_id": None, "task_key": None, "subtask_key": None, "subtask_index": None, "subtask_count": None, "display_name": None, "period_id": None, "declaration_month": None, "month": None, "backend_month": None, "month_manually_overridden": False, "all_orgs": True, "org_codes": [], "org_code": None, "current_org_code": None, "current_org_name": None, "status": "idle", "pid": None, "started_at": None, "finished_at": None, "exit_code": None, "error_message": None, "log_path": None},
         "results": {}, "history": [],
         "last_failure": {"task_key": None, "org_code": None, "month": None},
+        "popup_rules": default_popup_rules(),
     }
 
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from app.services.verification import (
     RetirementWelfareColumnSelectionError,
@@ -13,6 +14,8 @@ from app.services.verification import (
     check_personnel_changes,
     verify,
     load_retirement_welfare,
+    load_employee_payroll,
+    PayrollHeaderValidationError,
 )
 
 
@@ -25,6 +28,68 @@ def _retirement_welfare_file(path: Path, headers: list[str], rows: list[list[obj
     ]
     pd.DataFrame(values).to_excel(path, index=False, header=False)
     return path
+
+
+def _write_rank_payroll(path: Path, rows: list[dict]) -> None:
+    normalized = []
+    for row in rows:
+        normalized.append({"累计预扣预缴应纳税所得额": 0, **row})
+    pd.DataFrame(normalized).to_excel(path, index=False)
+
+
+def test_real_five_and_seven_digit_payroll_headers_map_appendix_a2_fields(tmp_path: Path):
+    source_row = {
+        "员工编号": "10001",
+        "姓名": "张三",
+        "机构代码": "13248",
+        "个人所得税": 88.66,
+        "累计预扣预缴应纳税所得额": 123456.78,
+        "累计减除费用": 35000,
+        "累计养老保险金的员工部分": 100,
+        "累计医疗保险金的员工部分": 200,
+        "累计失业保险金的员工部分": 30,
+        "累计住房公积金的员工部分": 400,
+        "累计企业年金的员工部分": 50,
+        "累计商业保险扣除": 20,
+        "累计当月子女教育附加扣除": 1000,
+        "累计当月继续教育附加扣除": 2000,
+        "累计当月住房贷款利息附加扣除": 3000,
+        "累计当月住房租金附加扣除": 4000,
+        "累计当月赡养老人附加扣除": 5000,
+        "累计当月婴幼儿照护费用附加扣除": 6000,
+        "累计个人养老金": 700,
+    }
+    for role, employee_no in (("rank_salary", "10001"), ("marketing_salary", "1000001")):
+        path = tmp_path / f"{role}.xlsx"
+        pd.DataFrame([{**source_row, "员工编号": employee_no}]).to_excel(path, index=False)
+
+        result = load_employee_payroll(str(path), payroll_role=role)
+
+        row = result.iloc[0]
+        assert row["工资表_累计应纳税所得额"] == pytest.approx(123456.78)
+        assert row["工资表_累计减除费用"] == pytest.approx(35000)
+        assert row["工资表_累计养老保险金员工部分"] == pytest.approx(100)
+        assert row["工资表_累计医疗保险金员工部分"] == pytest.approx(200)
+        assert row["工资表_累计失业保险金员工部分"] == pytest.approx(30)
+        assert row["工资表_累计住房公积金员工部分"] == pytest.approx(400)
+        assert row["工资单_累计子女教育扣除"] == pytest.approx(1000)
+        assert row["工资单_累计婴幼儿照护扣除"] == pytest.approx(6000)
+        assert row["个人所得税 SUM"] == pytest.approx(88.66)
+
+
+def test_missing_payroll_taxable_income_header_reports_all_actual_headers(tmp_path: Path):
+    path = tmp_path / "缺字段的5位工资表.xlsx"
+    pd.DataFrame([{"员工编号": "10001", "姓名": "张三", "个人所得税": 10}]).to_excel(path, index=False)
+
+    with pytest.raises(PayrollHeaderValidationError) as captured:
+        load_employee_payroll(str(path), payroll_role="rank_salary")
+
+    message = str(captured.value)
+    assert "工资表_累计应纳税所得额" in message
+    assert "员工编号" in message
+    assert "姓名" in message
+    assert "个人所得税" in message
+    assert captured.value.headers == ["员工编号", "姓名", "个人所得税"]
 
 
 def test_retirement_welfare_detects_variable_header_and_requires_choice_for_multiple_columns(tmp_path: Path):
@@ -50,9 +115,9 @@ def test_retirement_welfare_detects_variable_header_and_requires_choice_for_mult
 
 def test_retirement_welfare_existing_payroll_only_reconciles(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([
+    _write_rank_payroll(payroll_path, [
         {"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000, "福利费": 2000, "调增应纳税所得额": 1000},
-    ]).to_excel(payroll_path, index=False)
+    ])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
@@ -78,7 +143,7 @@ def test_retirement_welfare_existing_payroll_only_reconciles(tmp_path: Path):
 
 def test_retirement_welfare_existing_payroll_does_not_block_on_ambiguous_staff(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "李四", "机构代码": "13248", "应发工资": 10000, "福利费": 0, "调增应纳税所得额": 2000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "李四", "机构代码": "13248", "应发工资": 10000, "福利费": 0, "调增应纳税所得额": 2000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "1001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常"},
@@ -104,7 +169,7 @@ def test_retirement_welfare_existing_payroll_does_not_block_on_ambiguous_staff(t
 
 def test_retirement_welfare_normal_staff_without_payroll_is_added_without_departure(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
@@ -133,7 +198,7 @@ def test_retirement_welfare_normal_staff_without_payroll_is_added_without_depart
 
 def test_retirement_welfare_non_normal_staff_without_payroll_is_new_hire(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011"},
@@ -158,7 +223,7 @@ def test_retirement_welfare_non_normal_staff_without_payroll_is_new_hire(tmp_pat
 
 def test_retirement_welfare_missing_staff_is_new_hire_with_required_data(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([{"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"}]).to_excel(staff_path, index=False)
     welfare_path = _retirement_welfare_file(
@@ -183,7 +248,7 @@ def test_retirement_welfare_missing_staff_is_new_hire_with_required_data(tmp_pat
 
 def test_retirement_welfare_duplicate_history_requires_manual_confirmation(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "2001", "*姓名": "李四", "机构代码": "13248", "人员状态": "非正常"},
@@ -208,7 +273,7 @@ def test_retirement_welfare_duplicate_history_requires_manual_confirmation(tmp_p
 
 def test_retirement_welfare_duplicate_rows_use_id_number_for_precise_matching(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([
         {"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"},
@@ -235,7 +300,7 @@ def test_retirement_welfare_duplicate_rows_use_id_number_for_precise_matching(tm
 
 def test_retirement_welfare_duplicate_rows_with_same_or_missing_id_require_confirmation(tmp_path: Path):
     payroll_path = tmp_path / "职级工资.xlsx"
-    pd.DataFrame([{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}]).to_excel(payroll_path, index=False)
+    _write_rank_payroll(payroll_path, [{"员工编号": "1001", "姓名": "张三", "机构代码": "13248", "应发工资": 10000}])
     staff_path = tmp_path / "人员信息.xlsx"
     pd.DataFrame([{"员工编号": "1001", "*姓名": "张三", "机构代码": "13248", "人员状态": "正常"}]).to_excel(staff_path, index=False)
     welfare_path = _retirement_welfare_file(

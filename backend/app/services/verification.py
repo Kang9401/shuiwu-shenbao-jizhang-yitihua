@@ -33,7 +33,7 @@ DECLARATION_COLUMNS = [
     "累计子女教育", "累计继续教育", "累计住房贷款利息", "累计住房租金",
     "累计赡养老人", "累计3岁以下婴幼儿照护", "累计个人养老金",
     "企业(职业)年金", "商业健康保险", "税延养老保险",
-    "公务交通费用", "通讯费用", "律师办案费用", "西藏附加减除费用",
+    "公务交通费用", "通讯费用", "律师办案费用", "住房公积金调整", "西藏附加减除费用",
     "其他", "准予扣除的捐赠额", "减免税额", "协定减免", "备注",
 ]
 
@@ -54,6 +54,34 @@ PAYROLL_RECONCILIATION_FIELDS = {
     "工资单_累计商业保险扣除": ("累计商业保险扣除",),
     "工资单_累计个人养老金": ("累计个人养老金",),
 }
+
+# Appendix A2 uses cumulative values from the payroll exports, not the tax
+# declaration workbook. Keep the source-header mapping at the payroll import
+# boundary so the monthly working sheet has one stable schema.
+PAYROLL_A2_HEADER_MAPS = {
+    "rank_salary": {
+        "工资表_累计应纳税所得额": ("累计预扣预缴应纳税所得额",),
+        "工资表_累计减除费用": ("累计减除费用",),
+        "工资表_累计养老保险金员工部分": ("累计养老保险金的员工部分",),
+        "工资表_累计医疗保险金员工部分": ("累计医疗保险金的员工部分",),
+        "工资表_累计失业保险金员工部分": ("累计失业保险金的员工部分",),
+        "工资表_累计住房公积金员工部分": ("累计住房公积金的员工部分",),
+        "工资表_累计企业年金员工部分": ("累计企业年金的员工部分",),
+        "工资表_累计商业保险扣除": ("累计商业保险扣除",),
+    },
+    "marketing_salary": {
+        "工资表_累计应纳税所得额": ("累计预扣预缴应纳税所得额",),
+        "工资表_累计减除费用": ("累计减除费用",),
+        "工资表_累计养老保险金员工部分": ("累计养老保险金的员工部分",),
+        "工资表_累计医疗保险金员工部分": ("累计医疗保险金的员工部分",),
+        "工资表_累计失业保险金员工部分": ("累计失业保险金的员工部分",),
+        "工资表_累计住房公积金员工部分": ("累计住房公积金的员工部分",),
+        "工资表_累计企业年金员工部分": ("累计企业年金的员工部分",),
+        "工资表_累计商业保险扣除": ("累计商业保险扣除",),
+    },
+}
+
+PAYROLL_A2_REQUIRED_FIELDS = ("工资表_累计应纳税所得额",)
 
 PAYROLL_ROLE_LABELS = {
     "rank_salary": "职级工资单",
@@ -118,6 +146,21 @@ class RetirementWelfareColumnSelectionError(ValueError):
     def __init__(self, columns: list[str]):
         self.columns = columns
         super().__init__("退休福利表存在多个慰问金额列，请选择本次导入列")
+
+
+class PayrollHeaderValidationError(ValueError):
+    """Raised when a 5/7-digit payroll lacks a mandatory Appendix A2 field."""
+
+    def __init__(self, role: str, file_path: str, missing_fields: list[str], headers: list[str]):
+        self.role = role
+        self.file_path = file_path
+        self.missing_fields = missing_fields
+        self.headers = headers
+        role_label = PAYROLL_ROLE_LABELS.get(role, role or "未知工资表")
+        super().__init__(
+            f"{role_label}缺少附A2必填字段：{'、'.join(missing_fields)}；"
+            f"文件：{Path(file_path).name}；实际工资表表头：{headers}"
+        )
 
 PAYROLL_DEDUCTION_ALIASES = {
     "累计子女教育": ("累计子女教育", "累计当月子女教育附加扣除", "累计子女教育附加扣除"),
@@ -211,7 +254,30 @@ def _copy_payroll_reconciliation_fields(result: pd.DataFrame, source: pd.DataFra
     columns = source.columns.tolist()
     for normalized, aliases in PAYROLL_RECONCILIATION_FIELDS.items():
         column = _first_col(columns, *aliases)
-        result[normalized] = _to_numeric(source[column]) if column else 0
+        result[normalized] = _to_numeric(source[column]) if column else pd.NA
+
+
+def _copy_payroll_a2_fields(
+    result: pd.DataFrame,
+    source: pd.DataFrame,
+    role: str,
+    file_path: str,
+) -> None:
+    mapping = PAYROLL_A2_HEADER_MAPS.get(role)
+    if mapping is None:
+        return
+    headers = [str(column).strip() for column in source.columns]
+    resolved = {
+        target: _first_col(headers, *aliases)
+        for target, aliases in mapping.items()
+    }
+    missing = [target for target in PAYROLL_A2_REQUIRED_FIELDS if not resolved.get(target)]
+    if missing:
+        raise PayrollHeaderValidationError(role, file_path, missing, headers)
+    for target, source_column in resolved.items():
+        # Optional cumulative components stay blank when genuinely absent. They
+        # must not be silently converted to zero and treated as valid payroll.
+        result[target] = _to_numeric(source[source_column]) if source_column else pd.NA
 
 
 def _clean_text(value: Any) -> str:
@@ -342,6 +408,7 @@ def load_employee_payroll(
     file_path: str,
     taxpayer_org_map: dict[str, str] | None = None,
     duplicate_taxpayer_ids: set[str] | None = None,
+    payroll_role: str = "",
 ) -> pd.DataFrame:
     """统一读取职级、营销及分支工资表，保留工资表专项扣除明细。"""
     source = _read_employee_payroll(file_path)
@@ -364,6 +431,7 @@ def load_employee_payroll(
     annual_col = _first_col(columns, "年累计专项附加扣除金额", "年累计专项附加扣除")
     result["年累计专项附加扣除"] = _to_numeric(source[annual_col]) if annual_col else 0
     _copy_payroll_reconciliation_fields(result, source)
+    _copy_payroll_a2_fields(result, source, payroll_role, file_path)
     return result.reset_index(drop=True)
 
 
@@ -792,7 +860,9 @@ def build_working_sheet(
         if role == "headquarters_salary":
             df = load_headquarters_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
         else:
-            df = load_employee_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
+            df = load_employee_payroll(
+                path, taxpayer_org_map, duplicate_taxpayer_ids, payroll_role=role
+            )
         if not df.empty:
             df["工资单类型"] = PAYROLL_ROLE_LABELS.get(role, role)
             all_frames.append(df)

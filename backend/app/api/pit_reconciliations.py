@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from typing import Literal
+from urllib.parse import quote
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_company, require_period
@@ -13,6 +16,7 @@ from app.schemas.pit_reconciliation import PitManualUpdate, PitOccurrenceCheckUp
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService
+from app.services.pit_reconciliation.exporter import SHEET_NAMES, build_pit_workpaper_sheets, build_pit_workpaper_xlsx
 
 router=APIRouter(prefix="/pit-reconciliations",tags=["pit-reconciliations"],dependencies=[Depends(require_company)])
 
@@ -44,11 +48,20 @@ def readiness(period_id:int=Query(...),db:Session=Depends(get_db)):
     return [_payload(item) for item in db.query(PitReconciliationSource).filter_by(workpaper_id=row.id).order_by(PitReconciliationSource.source_type).all()]
 
 @router.post("/recalculate")
-def recalculate(period_id:int=Query(...),db:Session=Depends(get_db)):
+def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"] = Query("pre_payment"),db:Session=Depends(get_db)):
     require_period(db,period_id); repository=PitReconciliationRepository(db,current_company_id(),period_id); workpaper=repository.get_or_create_workpaper(); workpaper.calculation_status="running"; db.commit()
     try:
-        result=PitReconciliationEngine().calculate(PitSourceService(db,current_company_id(),period_id).load_bundle())
-        repository.replace(workpaper,result); db.commit(); db.refresh(workpaper); return {"workpaper":_payload(workpaper),"message":"已覆盖更新同一份月度个税核对底稿"}
+        bundle = PitSourceService(db,current_company_id(),period_id).load_bundle()
+        if bundle.salary.status == "invalid":
+            messages = [str(issue.get("message", "")) for issue in bundle.salary.issues if issue.get("message")]
+            raise ValueError("；".join(messages) or "工资底稿字段无效")
+        if stage == "post_payment" and bundle.certificates.status in {"missing", "invalid"}:
+            raise ValueError("扣款后核对需要先导入完税凭证")
+        if stage == "post_payment" and bundle.bank.status in {"missing", "invalid"}:
+            raise ValueError("扣款后核对需要先导入银行流水")
+        result=PitReconciliationEngine().calculate(bundle)
+        result["stage"] = stage
+        workpaper=repository.replace(workpaper,result); db.commit(); db.refresh(workpaper); return {"workpaper":_payload(workpaper),"message":"已覆盖更新同一份月度个税核对底稿"}
     except Exception as exc:
         db.rollback(); workpaper=repository.get_or_create_workpaper(); workpaper.calculation_status="failed"; workpaper.last_error=str(exc); db.commit(); raise HTTPException(status_code=400,detail=f"个税底稿计算失败：{exc}") from exc
 
@@ -88,18 +101,43 @@ def difference_details(period_id:int=Query(...),detail_type:str|None=Query(None)
 @router.get("/bank-matches")
 def bank_matches(period_id:int=Query(...),db:Session=Depends(get_db)): return _list(PitBankTaxMatch,period_id,db)
 
-def _patch(model,record_id:int,values,db:Session,manual_field:str|None=None):
-    row=db.query(model).filter_by(id=record_id,company_id=current_company_id()).first()
+@router.get("/sheet-data")
+def sheet_data(
+    period_id: int = Query(...),
+    sheet_name: str = Query(...),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    workpaper = _workpaper(db, period_id)
+    if sheet_name not in SHEET_NAMES:
+        raise HTTPException(status_code=404, detail="底稿工作表不存在")
+    frame = build_pit_workpaper_sheets(db, current_company_id(), period_id, workpaper)[sheet_name]
+    total = len(frame)
+    start = (page - 1) * page_size
+    rows = json.loads(frame.iloc[start:start + page_size].to_json(orient="records", date_format="iso", force_ascii=False))
+    return {"sheet_name": sheet_name, "columns": list(frame.columns), "rows": rows, "total": total, "page": page, "page_size": page_size}
+
+@router.get("/export")
+def export_workpaper(period_id: int = Query(...), db: Session = Depends(get_db)):
+    workpaper = _workpaper(db, period_id)
+    content = build_pit_workpaper_xlsx(db, current_company_id(), period_id, workpaper)
+    filename = f"个税核对底稿_{period_id}.xlsx"
+    return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+
+def _patch(model,record_id:int,period_id:int,values,db:Session,manual_field:str|None=None):
+    workpaper = _workpaper(db, period_id)
+    row=db.query(model).filter_by(id=record_id,company_id=current_company_id(),period_id=period_id,workpaper_id=workpaper.id).first()
     if row is None:raise HTTPException(status_code=404,detail="核对记录不存在")
     data=values.model_dump(exclude_none=True)
     if manual_field and "manual_reason" in data:setattr(row,manual_field,data.pop("manual_reason"))
     for field,value in data.items():setattr(row,field,value)
     db.commit();db.refresh(row);return _payload(row)
 @router.patch("/tax-amount-checks/{record_id}")
-def patch_tax(record_id:int,values:PitTaxAmountCheckUpdate,db:Session=Depends(get_db)): return _patch(PitTaxAmountCheck,record_id,values,db)
+def patch_tax(record_id:int,values:PitTaxAmountCheckUpdate,period_id:int=Query(...),db:Session=Depends(get_db)): return _patch(PitTaxAmountCheck,record_id,period_id,values,db)
 @router.patch("/occurrence-checks/{record_id}")
-def patch_occurrence(record_id:int,values:PitOccurrenceCheckUpdate,db:Session=Depends(get_db)): return _patch(PitOccurrenceCheck,record_id,values,db)
+def patch_occurrence(record_id:int,values:PitOccurrenceCheckUpdate,period_id:int=Query(...),db:Session=Depends(get_db)): return _patch(PitOccurrenceCheck,record_id,period_id,values,db)
 @router.patch("/org-summaries/{record_id}")
-def patch_summary(record_id:int,values:PitSummaryUpdate,db:Session=Depends(get_db)): return _patch(PitReconciliationOrgSummary,record_id,values,db)
+def patch_summary(record_id:int,values:PitSummaryUpdate,period_id:int=Query(...),db:Session=Depends(get_db)): return _patch(PitReconciliationOrgSummary,record_id,period_id,values,db)
 @router.patch("/difference-details/{record_id}")
-def patch_detail(record_id:int,values:PitManualUpdate,db:Session=Depends(get_db)): return _patch(PitReconciliationDifferenceDetail,record_id,values,db,"manual_reason")
+def patch_detail(record_id:int,values:PitManualUpdate,period_id:int=Query(...),db:Session=Depends(get_db)): return _patch(PitReconciliationDifferenceDetail,record_id,period_id,values,db,"manual_reason")

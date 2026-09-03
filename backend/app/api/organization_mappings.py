@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+from collections import OrderedDict
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.api.dependencies import require_company
 from app.models.accounting import OrganizationMapping
+from app.core.company_context import current_company_id
 
 
 router = APIRouter(prefix="/organization-mappings", tags=["organization-mappings"], dependencies=[Depends(require_company)])
@@ -26,6 +28,7 @@ class MappingPayload(BaseModel):
     rpa_org_name: str = ""
     rpa_search_result_index: int = 1
     parent_branch: str = ""
+    bank_subaccount: str = ""
 
 
 def _validate(
@@ -61,7 +64,7 @@ def _validate_taxpayer_id_conflict(
 ) -> None:
     if not taxpayer_id:
         return
-    query = db.query(OrganizationMapping).filter(OrganizationMapping.taxpayer_id == taxpayer_id)
+    query = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.taxpayer_id == taxpayer_id)
     if exclude_id is not None:
         query = query.filter(OrganizationMapping.id != exclude_id)
     if query.first():
@@ -69,7 +72,7 @@ def _validate_taxpayer_id_conflict(
 
 
 def _validate_org_code_conflict(db: Session, org_code: str, exclude_id: int | None = None) -> None:
-    query = db.query(OrganizationMapping).filter(OrganizationMapping.org_code == org_code)
+    query = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.org_code == org_code)
     if exclude_id is not None:
         query = query.filter(OrganizationMapping.id != exclude_id)
     if query.first():
@@ -86,7 +89,7 @@ def _validate_rpa_conflicts(
 ) -> None:
     if not rpa_enabled:
         return
-    query = db.query(OrganizationMapping).filter(OrganizationMapping.rpa_enabled == 1)
+    query = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.rpa_enabled == 1)
     if exclude_id is not None:
         query = query.filter(OrganizationMapping.id != exclude_id)
     if query.filter(OrganizationMapping.org_code == org_code).first():
@@ -106,13 +109,14 @@ def _payload(item: OrganizationMapping) -> dict:
         "rpa_org_name": item.rpa_org_name,
         "rpa_search_result_index": item.rpa_search_result_index,
         "parent_branch": item.parent_branch,
+        "bank_subaccount": item.bank_subaccount,
         "updated_at": item.updated_at,
     }
 
 
 @router.get("")
 def list_mappings(db: Session = Depends(get_db)) -> list[dict]:
-    return [_payload(item) for item in db.query(OrganizationMapping).order_by(OrganizationMapping.org_code, OrganizationMapping.branch_name).all()]
+    return [_payload(item) for item in db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id()).order_by(OrganizationMapping.org_code, OrganizationMapping.branch_name).all()]
 
 
 @router.post("")
@@ -121,7 +125,7 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
         payload.branch_name, payload.org_code, payload.taxpayer_id,
         payload.rpa_enabled, payload.rpa_org_name, payload.rpa_search_result_index, payload.parent_branch
     )
-    if db.query(OrganizationMapping).filter(OrganizationMapping.branch_name == name).first():
+    if db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.branch_name == name).first():
         raise HTTPException(status_code=409, detail="该营业部名称已存在")
     _validate_org_code_conflict(db, code)
     _validate_rpa_conflicts(db, org_code=code, rpa_org_name=full_name, rpa_enabled=payload.rpa_enabled)
@@ -135,6 +139,7 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
         rpa_org_name=full_name,
         rpa_search_result_index=result_index,
         parent_branch=parent,
+        bank_subaccount=payload.bank_subaccount.strip(),
     )
     db.add(item)
     db.commit()
@@ -145,13 +150,13 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
 @router.put("/{mapping_id}")
 def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depends(get_db)) -> dict:
     item = db.query(OrganizationMapping).filter(OrganizationMapping.id == mapping_id).first()
-    if not item:
+    if not item or item.company_id != current_company_id():
         raise HTTPException(status_code=404, detail="机构映射不存在")
     name, code, taxpayer_id, full_name, result_index, parent = _validate(
         payload.branch_name, payload.org_code, payload.taxpayer_id,
         payload.rpa_enabled, payload.rpa_org_name, payload.rpa_search_result_index, payload.parent_branch
     )
-    duplicate = db.query(OrganizationMapping).filter(OrganizationMapping.branch_name == name, OrganizationMapping.id != mapping_id).first()
+    duplicate = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.branch_name == name, OrganizationMapping.id != mapping_id).first()
     if duplicate:
         raise HTTPException(status_code=409, detail="该营业部名称已存在")
     _validate_org_code_conflict(db, code, exclude_id=mapping_id)
@@ -171,10 +176,24 @@ def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depen
     item.rpa_org_name = full_name
     item.rpa_search_result_index = result_index
     item.parent_branch = parent
+    item.bank_subaccount = payload.bank_subaccount.strip()
     db.add(item)
     db.commit()
     db.refresh(item)
     return _payload(item)
+
+
+@router.delete("/{mapping_id}")
+def delete_mapping(mapping_id: int, db: Session = Depends(get_db)) -> dict:
+    item = db.query(OrganizationMapping).filter(
+        OrganizationMapping.id == mapping_id,
+        OrganizationMapping.company_id == current_company_id(),
+    ).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="机构映射不存在")
+    db.delete(item)
+    db.commit()
+    return {"deleted": mapping_id}
 
 
 @router.post("/import")
@@ -183,63 +202,83 @@ def import_mappings(file: UploadFile = File(...), db: Session = Depends(get_db))
     required = {"营业部名称", "机构代码"}
     if not required.issubset(frame.columns):
         raise HTTPException(status_code=400, detail="机构名称维护表必须包含：营业部名称、机构代码")
-    count = 0
-    for _, row in frame.iterrows():
+    prepared: OrderedDict[str, dict] = OrderedDict()
+    for row_index, row in frame.iterrows():
         raw_code = str(row["机构代码"]).strip()
-        item = db.query(OrganizationMapping).filter(OrganizationMapping.org_code == raw_code).first()
-        if item is None:
-            raw_name = str(row["营业部名称"]).strip()
-            item = db.query(OrganizationMapping).filter(OrganizationMapping.branch_name == raw_name).first()
+        if raw_code.endswith(".0"):
+            raw_code = raw_code[:-2]
+        raw_name = str(row["营业部名称"]).strip()
+        if not raw_code and not raw_name:
+            continue
         enabled_text = str(row.get("是否启用RPA", "")).strip()
-        rpa_enabled = (
-            enabled_text.lower() in {"是", "启用", "true", "1", "yes", "y"}
-            if "是否启用RPA" in frame.columns
-            else bool(item.rpa_enabled) if item is not None else False
-        )
-        raw_result_index = row.get("RPA搜索结果序号", item.rpa_search_result_index if item is not None else 1)
+        rpa_enabled = enabled_text.lower() in {"是", "启用", "true", "1", "yes", "y"}
+        active_text = str(row.get("启用", "是")).strip().lower()
+        active = active_text not in {"否", "停用", "false", "0", "no", "n"}
+        raw_result_index = row.get("RPA搜索结果序号", 1)
         try:
             result_index = int(float(str(raw_result_index).strip() or "1"))
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail=f"机构代码 {raw_code} 的 RPA搜索结果序号必须为正整数") from None
         name, code, taxpayer_id, full_name, result_index, parent = _validate(
             str(row["营业部名称"]),
-            str(row["机构代码"]),
-            str(row.get("机构纳税人识别号", item.taxpayer_id if item is not None else "")),
+            raw_code,
+            str(row.get("机构纳税人识别号", "")),
             rpa_enabled,
-            str(row.get("营业部全称", item.rpa_org_name if item is not None else "")),
+            str(row.get("营业部全称", "")),
             result_index,
-            str(row.get("所属分公司", item.parent_branch if item is not None else "")),
+            str(row.get("所属分公司", "")),
         )
-        if item is None:
-            item = OrganizationMapping(branch_name=name)
-        else:
-            branch_conflict = db.query(OrganizationMapping).filter(
-                OrganizationMapping.branch_name == name,
-                OrganizationMapping.id != item.id,
-            ).first()
-            if branch_conflict:
-                raise HTTPException(status_code=409, detail=f"营业部名称已被机构代码 {branch_conflict.org_code} 使用：{name}")
-        _validate_rpa_conflicts(
-            db,
-            org_code=code,
-            rpa_org_name=full_name,
-            rpa_enabled=rpa_enabled,
-            exclude_id=item.id,
-        )
-        _validate_taxpayer_id_conflict(db, taxpayer_id, exclude_id=item.id)
-        item.org_code = code
-        item.branch_name = name
-        item.taxpayer_id = taxpayer_id
-        item.active = 1
-        item.rpa_enabled = int(rpa_enabled)
-        item.rpa_org_name = full_name
-        item.rpa_search_result_index = result_index
-        item.parent_branch = parent
-        db.add(item)
-        db.flush()
-        count += 1
-    db.commit()
-    return {"updated": count}
+        prepared[code] = {
+            "branch_name": name,
+            "org_code": code,
+            "taxpayer_id": taxpayer_id,
+            "active": int(active),
+            "rpa_enabled": int(rpa_enabled),
+            "rpa_org_name": full_name,
+            "rpa_search_result_index": result_index,
+            "parent_branch": parent,
+            "bank_subaccount": str(row.get("银行子目", "")).strip(),
+            "row_number": int(row_index) + 2,
+        }
+
+    def ensure_unique(rows, field: str, label: str, *, populated_only: bool = False) -> None:
+        seen: dict[str, tuple[str, int]] = {}
+        for code, values in rows:
+            value = str(values[field])
+            if populated_only and not value:
+                continue
+            if value in seen:
+                other_code, other_row = seen[value]
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"第 {values['row_number']} 行与第 {other_row} 行的{label}重复：{value}（机构代码 {other_code}、{code}）",
+                )
+            seen[value] = (code, values["row_number"])
+
+    ensure_unique(prepared.items(), "branch_name", "营业部名称")
+    ensure_unique(prepared.items(), "taxpayer_id", "机构纳税人识别号", populated_only=True)
+    ensure_unique(
+        ((code, values) for code, values in prepared.items() if values["rpa_enabled"]),
+        "rpa_org_name",
+        "RPA营业部全称",
+        populated_only=True,
+    )
+
+    existing = db.query(OrganizationMapping).filter(
+        OrganizationMapping.company_id == current_company_id()
+    ).count()
+    try:
+        db.query(OrganizationMapping).filter(
+            OrganizationMapping.company_id == current_company_id()
+        ).delete(synchronize_session=False)
+        for values in prepared.values():
+            values = {key: value for key, value in values.items() if key != "row_number"}
+            db.add(OrganizationMapping(**values))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {"updated": len(prepared), "deleted": existing}
 
 
 @router.get("/export")
@@ -254,8 +293,9 @@ def export_mappings(db: Session = Depends(get_db)) -> Response:
             "营业部全称": item.rpa_org_name,
             "RPA搜索结果序号": item.rpa_search_result_index,
             "所属分公司": item.parent_branch,
+            "银行子目": item.bank_subaccount,
         }
-        for item in db.query(OrganizationMapping).order_by(OrganizationMapping.org_code).all()
+        for item in db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id()).order_by(OrganizationMapping.org_code).all()
     ]
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:

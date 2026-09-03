@@ -141,3 +141,21 @@ def test_migration_8_backfills_monthly_artifact_content(tmp_path):
     assert content == source.read_bytes()
     assert len(digest) == 64
 
+
+def test_migration_9_to_latest_adds_bank_subaccount_and_file_results(tmp_path):
+    database = tmp_path / "v9.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE organization_mappings (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, branch_name TEXT NOT NULL, org_code TEXT NOT NULL, taxpayer_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, rpa_enabled INTEGER NOT NULL DEFAULT 0, rpa_org_name TEXT NOT NULL DEFAULT '', rpa_search_result_index INTEGER NOT NULL DEFAULT 1, parent_branch TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)")
+        connection.execute("INSERT INTO organization_mappings VALUES (1, 1, '保留机构', '10001', '', 1, 0, '', 1, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+        connection.execute("CREATE TABLE reconciliation_import_batches (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, period_id INTEGER NOT NULL, import_type TEXT NOT NULL, original_name TEXT NOT NULL, stored_path TEXT NOT NULL, row_count INTEGER NOT NULL DEFAULT 0, validation_issues JSON, created_at DATETIME NOT NULL)")
+        connection.execute("CREATE TABLE app_schema_version (id INTEGER PRIMARY KEY, version INTEGER, app_version TEXT, updated_at DATETIME)")
+        connection.execute("INSERT INTO app_schema_version VALUES (1, 9, '0.9.1', CURRENT_TIMESTAMP)")
+    engine = create_engine(f"sqlite:///{database.as_posix()}")
+    assert run_migrations(engine) == SCHEMA_VERSION
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(organization_mappings)")}
+        batch_columns = {row[1] for row in connection.execute("PRAGMA table_info(reconciliation_import_batches)")}
+        assert "bank_subaccount" in columns
+        assert "file_results" in batch_columns
+        assert connection.execute("SELECT branch_name FROM organization_mappings WHERE id = 1").fetchone() == ("保留机构",)
+

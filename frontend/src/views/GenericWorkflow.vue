@@ -218,8 +218,8 @@
             <div><span>收入合计</span><strong>{{ formatAmount(autoMetrics.income_total) }}</strong></div>
             <div><span>机构数量</span><strong>{{ autoMetrics.org_count || 0 }}</strong></div>
           </div>
-          <div v-if="autoMetrics.master_source_materialized" class="source-note">已将上月非全日制人员主数据复制为本月基准。</div>
-          <div v-if="!autoMetrics.part_time_finalized" class="restricted-warning">工资单核对完成。请下载待补充人员变更表，补齐后上传并重新执行生成申报文件。</div>
+          <div v-if="autoMetrics.master_source_materialized" class="source-note">已将上月劳务报酬人员主数据复制为本月基准。</div>
+          <div v-if="!autoMetrics.part_time_finalized" class="restricted-warning">收入核对完成。请下载待补充人员变更表，补齐后上传并重新执行生成申报文件。</div>
           <div v-if="issueDetails.length" class="restricted-warning-list"><strong>核对问题</strong><div v-for="(issue, index) in issueDetails" :key="index" class="restricted-warning">{{ issue.message }}</div></div>
           <div v-if="job.artifacts?.length" class="download-grid workflow-downloads">
             <a v-for="artifact in job.artifacts" :key="artifact.id" class="download-item" :href="workflowApi.artifactDownloadUrl(artifact.id)" target="_blank"><el-icon><Download /></el-icon><span class="download-text"><strong>{{ artifact.file_name }}</strong><small>{{ artifactTypeLabel(artifact.artifact_type) }}</small></span></a>
@@ -336,7 +336,7 @@ const roleLabels: Record<string, string> = {
   balance_sheet: '余额表',
   intern_salary: '实习生补贴表',
   broker_income: '经纪人收入表',
-  payroll: '非全日制用工工资表',
+  payroll: '劳务报酬收入表',
   personnel_changes: '人员信息变更表（选传）',
   invoice_detail: '电子发票明细',
   certification_sheet: '认证抵扣表',
@@ -672,9 +672,9 @@ function artifactTypeLabel(type: string) {
     restricted_stock_interest_result: '限售股利息税结果',
     intern_tax_result: '实习生结果',
     broker_tax_result: '经纪人结果',
-    part_time_master: '本月非全日制人员信息表',
+    part_time_master: '本月劳务报酬人员信息表',
     part_time_pending_changes: '待补充人员信息变更表',
-    part_time_workpaper: '非全日制用工处理底稿',
+    part_time_workpaper: '劳务报酬申报处理底稿',
     invoice_ledger: '发票台账',
     certification_ledger: '认证核对',
     voucher_draft: '凭证草稿',

@@ -317,6 +317,7 @@ def test_employee_id_update_after_staff_change_removes_old_id_departure(tmp_path
         "*姓名": "温玉玲",
         "机构代码": "12106",
         "应发工资": 1000,
+        "累计预扣预缴应纳税所得额": 0,
         "本期应预扣预缴税额SUM": 0,
         "个人所得税 SUM": 0,
     }])

@@ -23,6 +23,7 @@ from app.rpa.commands import build_chrome_command, build_task_command
 from app.rpa.log_parser import parse_log_line
 from app.rpa.paths import company_rpa_root, state_dir, uploads_dir
 from app.rpa.process_manager import ProcessManager
+from app.rpa.popup_rules import default_popup_rules, normalize_popup_rules
 from app.rpa.runtime import ensure_runtime_app, sha256_file
 from app.rpa.state_store import StateStore, result_cell
 from app.services.personnel_master import list_rpa_organizations
@@ -114,10 +115,15 @@ class RpaService:
 
     def _write_runtime_config(self) -> None:
         data = self.store.read()
+        stored_rules = data.get("popup_rules")
         config = {
             "chrome_path": str(data.get("config", {}).get("chrome_path") or ""),
             "input_path": str(self._input_root()),
             "output_path": str(self._output_root()),
+            "popup_rules": normalize_popup_rules(
+                default_popup_rules() if stored_rules is None else stored_rules,
+                drop_protected=True,
+            ),
         }
         path = ensure_runtime_app() / "etax_config.json"
         temp = path.with_suffix(".tmp")
@@ -292,6 +298,50 @@ class RpaService:
         self._write_runtime_config()
         return self.store.read()["config"]
 
+    def get_popup_rules(self) -> list[dict]:
+        stored_rules = self.store.read().get("popup_rules")
+        return normalize_popup_rules(
+            default_popup_rules() if stored_rules is None else stored_rules,
+            drop_protected=True,
+        )
+
+    def save_popup_rules(self, rules: list[dict]) -> list[dict]:
+        if self.manager.running:
+            raise RuntimeError("RPA 任务运行中，不能修改弹窗规则")
+        normalized = normalize_popup_rules(rules)
+        self.store.update(lambda data: data.__setitem__("popup_rules", normalized))
+        self._write_runtime_config()
+        return normalized
+
+    def reset_popup_rules(self) -> list[dict]:
+        return self.save_popup_rules(default_popup_rules())
+
+    def popup_events(self, limit: int = 100) -> list[dict]:
+        paths = [ensure_runtime_app() / "output" / "popup_events.jsonl"]
+        configured = self._output_root() / "popup_events.jsonl"
+        if configured.resolve() != paths[0].resolve():
+            paths.append(configured)
+        events: list[dict] = []
+        seen: set[str] = set()
+        for path in paths:
+            if not path.is_file():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines[-limit:]:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                identity = json.dumps(event, ensure_ascii=False, sort_keys=True)
+                if identity not in seen:
+                    seen.add(identity)
+                    events.append(event)
+        events.sort(key=lambda item: str(item.get("captured_at") or ""), reverse=True)
+        return events[:limit]
+
     def upload_org_excel(self, filename: str, content: bytes) -> dict:
         name = safe_name(filename)
         if Path(name).suffix.lower() != ".xlsx":
@@ -374,9 +424,22 @@ class RpaService:
             return {"message": "可接管的 Chrome 已在运行"}
         app_dir = ensure_runtime_app()
         command = build_chrome_command(app_dir, chrome_path)
-        subprocess.Popen(command, cwd=str(app_dir), shell=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        (app_dir / ".chrome-debug-profile").mkdir(parents=True, exist_ok=True)
+        try:
+            process = subprocess.Popen(command, cwd=str(app_dir), shell=False)
+        except OSError as exc:
+            raise RuntimeError(f"Chrome 启动失败：{exc}") from exc
         self.store.update(lambda data: data["chrome"].update(status="starting", message="正在启动可接管的 Chrome"))
-        return {"message": "已启动可接管的 Chrome。请在该窗口手工登录自然人电子税务局，登录完成后回到本页面执行任务。"}
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            status = self.chrome_status()
+            if status["status"] == "ready":
+                return {"message": "已启动可接管的 Chrome。请在该窗口手工登录自然人电子税务局，登录完成后回到本页面执行任务。"}
+            time.sleep(0.25)
+        exit_code = process.poll()
+        detail = f"Chrome 进程退出码 {exit_code}" if exit_code is not None else "Chrome 已启动但调试端口 9222 未就绪"
+        self.store.update(lambda data: data["chrome"].update(status="unavailable", message=detail))
+        raise RuntimeError(f"Chrome 初始化失败：{detail}。请关闭已有的 RPA Chrome 后重试。")
 
     def start_task(self, task_key: str, month: str, all_orgs: bool, org_code: str | None, resume_mode: str | None = None, start_org_code: str | None = None) -> dict:
         if self.manager.running:

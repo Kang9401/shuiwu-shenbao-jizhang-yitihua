@@ -74,7 +74,7 @@ def _column_map(import_type: str, df: pd.DataFrame) -> dict[str, Optional[str]]:
             "transaction_date": _first_existing(columns, ["交易日期", "交易时间", "记账日期", "发生日期", "日期"]),
             "summary": _first_existing(columns, ["摘要", "用途", "交易摘要", "备注"]),
             "counterparty": _first_existing(columns, ["对方户名", "对方账户名称", "对方名称", "付款方", "收款方"]),
-            "amount": _first_existing(columns, ["金额", "交易金额", "发生额", "收入", "支出"]),
+            "amount": _first_existing(columns, ["借方金额", "金额", "交易金额", "发生额", "收入", "支出"]),
             "serial_no": _first_existing(columns, ["流水号", "交易流水号", "银行流水号", "凭证号"]),
         }
     if import_type == "declaration_result":
@@ -181,14 +181,44 @@ def import_reconciliation_file(
 def import_pit_declaration_file(db: Session, *, period_id: int, file: UploadFile) -> ReconciliationImportBatch:
     """Import official PIT declaration exports with their multi-row headers preserved."""
     from app.services.pit_reconciliation.parsers.declaration_parser import parse_declaration_file
+    _validate_file_suffix(file, {".xls", ".xlsx"}, "申报表必须为 Excel 文件（.xls 或 .xlsx）")
     source_path, _ = save_upload(file, period_id, "pit_declaration")
     records, issues = parse_declaration_file(source_path)
     if issues and not records:
         raise ReconciliationImportValidationError(issues)
-    batch = ReconciliationImportBatch(period_id=period_id, import_type="pit_declaration", original_name=file.filename or "pit_declaration.xlsx", stored_path=str(source_path), row_count=len(records), validation_issues=issues)
+    batch = ReconciliationImportBatch(period_id=period_id, import_type="pit_declaration", original_name=file.filename or "pit_declaration.xlsx", stored_path=str(source_path), row_count=len(records), validation_issues=issues, file_results=[{"file_name": file.filename or "pit_declaration.xlsx", "status": "success", "error": ";".join(issue.get("message", "") for issue in issues) if issues else None}])
     db.add(batch); db.flush()
     for number, raw in enumerate(records, start=1):
         db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(raw.get("纳税人姓名") or raw.get("姓名")), income_amount=_to_decimal(raw.get("收入额") or raw.get("本期收入") or raw.get("收入")), tax_amount=_to_decimal(raw.get("应补退税额") or raw.get("扣缴税额") or raw.get("税额")), tax_period=_clean(raw.get("tax_period")), raw_data=raw))
+    db.commit(); db.refresh(batch); return batch
+
+
+def import_pit_declaration_files(db: Session, *, period_id: int, files: list[UploadFile]) -> ReconciliationImportBatch:
+    if not files:
+        raise ReconciliationImportValidationError([{"issue_type": "missing_file", "message": "请至少上传一份申报表 Excel"}])
+    batch = ReconciliationImportBatch(period_id=period_id, import_type="pit_declaration", original_name=";".join(file.filename or "pit_declaration.xlsx" for file in files), stored_path="", row_count=0, validation_issues=[], file_results=[])
+    db.add(batch); db.flush()
+    all_issues: list[dict[str, Any]] = []; paths: list[str] = []; row_number = 0; file_results: list[dict[str, Any]] = []
+    from app.services.pit_reconciliation.parsers.declaration_parser import parse_declaration_file
+    for file in files:
+        file_name = file.filename or "pit_declaration.xlsx"
+        try:
+            _validate_file_suffix(file, {".xls", ".xlsx"}, "申报表必须为 Excel 文件（.xls 或 .xlsx）")
+            path, _ = save_upload(file, period_id, "pit_declaration"); paths.append(str(path))
+            records, issues = parse_declaration_file(path)
+            file_issues = [{**issue, "file_name": file_name} for issue in issues]
+            all_issues.extend(file_issues)
+            for raw in records:
+                row_number += 1
+                db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=row_number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(raw.get("纳税人姓名") or raw.get("姓名")), income_amount=_to_decimal(raw.get("收入额") or raw.get("本期收入") or raw.get("收入")), tax_amount=_to_decimal(raw.get("应补退税额") or raw.get("扣缴税额") or raw.get("税额")), tax_period=_clean(raw.get("tax_period")), raw_data={**raw, "file_name": file_name}))
+            file_results.append({"file_name": file_name, "status": "success" if records or not issues else "failed", "period": next((issue.get("tax_period", "") for issue in records if issue.get("tax_period")), ""), "error": ";".join(issue.get("message", "") for issue in issues) if issues else None})
+        except Exception as exc:
+            issue = {"issue_type": "file_import_error", "message": str(exc), "file_name": file_name}
+            all_issues.append(issue); file_results.append({"file_name": file_name, "status": "failed", "error": str(exc)})
+    batch.stored_path = ";".join(paths); batch.row_count = row_number; batch.validation_issues = all_issues; batch.file_results = file_results
+    if not paths and all_issues:
+        db.rollback()
+        raise ReconciliationImportValidationError(all_issues)
     db.commit(); db.refresh(batch); return batch
 
 
@@ -196,16 +226,31 @@ def import_tax_certificate_files(db: Session, *, period_id: int, files: list[Upl
     from app.services.pit_reconciliation.parsers.tax_certificate_parser import parse_tax_certificate_pdf
     if not files:
         raise ReconciliationImportValidationError([{"issue_type": "missing_file", "message": "请至少上传一份完税证明 PDF"}])
-    batch = ReconciliationImportBatch(period_id=period_id, import_type="tax_certificate", original_name="完税证明批量导入", stored_path="", row_count=0, validation_issues=[])
+    batch = ReconciliationImportBatch(period_id=period_id, import_type="tax_certificate", original_name="完税证明批量导入", stored_path="", row_count=0, validation_issues=[], file_results=[])
     db.add(batch); db.flush(); all_issues=[]; count=0; paths=[]
+    file_results: list[dict[str, Any]] = []
     for file in files:
+        file_name = file.filename or "tax_certificate.pdf"
+        try:
+            _validate_file_suffix(file, {".pdf"}, "完税凭证必须为 PDF 文件（.pdf）")
+        except ReconciliationImportValidationError as exc:
+            all_issues.extend([{**issue, "file_name": file_name} for issue in exc.issues]); continue
         path, _ = save_upload(file, period_id, "tax_certificate")
         paths.append(str(path)); records, issues = parse_tax_certificate_pdf(path); all_issues.extend([{**issue, "file_name": file.filename} for issue in issues])
+        file_results.append({"file_name": file_name, "status": "success" if records else "failed", "error": ";".join(issue.get("message", "") for issue in issues) if issues else None})
         for raw in records:
             count += 1
-            db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="tax_certificate", row_number=count, organization_code=_clean(raw.get("org_code")), counterparty=_clean(raw.get("taxpayer_name")), amount=_to_decimal(raw.get("amount")), tax_period=_clean(raw.get("tax_period")), raw_data={**raw, "file_name": file.filename}))
-    batch.stored_path=";".join(paths); batch.row_count=count; batch.validation_issues=all_issues
+            raw_for_storage = {key: (str(value) if isinstance(value, Decimal) else value) for key, value in raw.items()}
+            db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="tax_certificate", row_number=count, organization_code=_clean(raw.get("org_code")), counterparty=_clean(raw.get("taxpayer_name")), amount=_to_decimal(raw.get("amount")), tax_period=_clean(raw.get("tax_period")), raw_data={**raw_for_storage, "file_name": file.filename}))
+    file_results.extend({"file_name": issue.get("file_name"), "status": "failed", "error": issue.get("message")} for issue in all_issues if issue.get("file_name") and not any(item.get("file_name") == issue.get("file_name") for item in file_results))
+    batch.stored_path=";".join(paths); batch.row_count=count; batch.validation_issues=all_issues; batch.file_results=file_results
     db.commit(); db.refresh(batch); return batch
+
+
+def _validate_file_suffix(file: UploadFile, allowed: set[str], message: str) -> None:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in allowed:
+        raise ReconciliationImportValidationError([{"issue_type": "invalid_file_type", "message": message}])
 
 
 def list_reconciliation_batches(

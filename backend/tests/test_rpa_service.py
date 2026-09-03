@@ -78,6 +78,24 @@ def test_status_adds_new_task_column_to_existing_results(tmp_path, monkeypatch):
     assert row["special_deduction"] == "成功 1笔"
 
 
+def test_start_chrome_waits_until_cdp_is_ready(tmp_path, monkeypatch):
+    service, app = make_service(tmp_path, monkeypatch)
+    chrome = tmp_path / "chrome.exe"
+    chrome.touch()
+    statuses = iter(({"status": "stopped"}, {"status": "stopped"}, {"status": "ready"}))
+    monkeypatch.setattr(service, "chrome_status", lambda: next(statuses))
+    launched = []
+    monkeypatch.setattr(service_module.subprocess, "Popen", lambda command, **kwargs: launched.append((command, kwargs)) or SimpleNamespace(poll=lambda: None))
+    monkeypatch.setattr(service_module.time, "sleep", lambda _seconds: None)
+
+    result = service.start_chrome(str(chrome))
+
+    assert result["message"].startswith("已启动可接管的 Chrome")
+    assert launched[0][0][0] == str(chrome)
+    assert launched[0][1]["shell"] is False
+    assert (app / ".chrome-debug-profile").is_dir()
+
+
 def test_cancel_requested_between_composite_subtasks_prevents_next_process(tmp_path, monkeypatch):
     service, app = make_service(tmp_path, monkeypatch)
     state = service.store.read()

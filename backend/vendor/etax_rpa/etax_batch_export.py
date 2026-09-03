@@ -16,11 +16,17 @@ from playwright.sync_api import sync_playwright
 
 try:
     from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait
+    from etax_popup_guard import handle_configured_popups, install_popup_guard, set_popup_guard_context
 except ImportError:  # Source-tree execution before runtime synchronization.
     extension_dir = Path(__file__).parents[2] / "app" / "rpa" / "extensions"
     if str(extension_dir) not in sys.path:
         sys.path.insert(0, str(extension_dir))
     from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait  # type: ignore[no-redef]
+    from etax_popup_guard import (  # type: ignore[no-redef]
+        install_popup_guard,
+        handle_configured_popups,
+        set_popup_guard_context,
+    )
 
 
 ETAX_URL = "https://etax.chinatax.gov.cn/"
@@ -40,20 +46,23 @@ class TaxOrg:
 NAME_HEADERS = {"机构名称", "机构简称", "单位名称", "名称"}
 CODE_HEADERS = {"机构代码", "机构编号", "代码", "编号"}
 RESULT_INDEX_HEADERS = {"RPA搜索结果序号", "RPA机构序号"}
-COMMON_POPUP_TITLES = ("未注册个税APP提醒", "温 馨 提 示", "温馨提示", "自然人代开发票提醒")
-TAX_REMINDER_MARKERS = (
-    "上一个所属期未申报",
-    "上期所属期未申报",
-    "综合所得年度汇算补税提醒",
-    "汇算清缴未完成",
-    "未完成办理综合所得汇算清缴",
-)
+WORKFLOW_DIALOG_MARKERS = ("请选择为哪个单位办税", "安全验证", "导出报表文件", "文件导入")
+TAX_REMINDER_MARKERS = ("上一属期未申报", "上一个所属期未申报", "上期所属期未申报")
+# Shared page-guard contract used by the desktop test suite and sibling RPA runners.
+COMMON_POPUP_TITLES = ("未注册个税APP提醒", "自然人代开发票提醒", "温馨提示", "温 馨 提 示")
 POPUP_CLOSE_SELECTOR = (
     ".el-message-box__headerbtn, .el-dialog__headerbtn, .ant-modal-close, "
     "button[aria-label='Close'], button[aria-label='关闭']"
 )
-WORKFLOW_DIALOG_MARKERS = ("请选择为哪个单位办税", "安全验证", "导出报表文件", "文件导入")
 POPUP_CONTEXT = {"org_code": "", "month": ""}
+
+
+def _known_popup_marker(text: str) -> str | None:
+    compact = "".join(str(text or "").split())
+    for marker in (*COMMON_POPUP_TITLES, *TAX_REMINDER_MARKERS):
+        if marker in compact:
+            return marker
+    return None
 
 
 def set_popup_context(org: TaxOrg | None = None, target_month: str | None = None) -> None:
@@ -61,6 +70,14 @@ def set_popup_context(org: TaxOrg | None = None, target_month: str | None = None
         POPUP_CONTEXT["org_code"] = org.code
     if target_month is not None:
         POPUP_CONTEXT["month"] = target_month
+    set_popup_guard_context(
+        org_code=org.code if org is not None else None,
+        month=target_month,
+    )
+
+
+def guard_page(page: Page) -> Page:
+    return install_popup_guard(page, log=log, record_dir=OUTPUT_DIR, known_popup_handler=drain_common_popups)
 
 
 def normalize_header(value) -> str:
@@ -146,7 +163,7 @@ def wait_for_user(message: str, skip: bool = False) -> None:
 def close_duplicate_etax_tabs(context, active_page: Page) -> Page:
     etax_pages = [p for p in context.pages if "etax.chinatax.gov.cn" in p.url]
     if len(etax_pages) <= 1:
-        return active_page
+        return guard_page(active_page)
 
     withholding_pages = [p for p in etax_pages if "withholding/index.html" in p.url]
     preferred = active_page if active_page in etax_pages else etax_pages[-1]
@@ -163,7 +180,7 @@ def close_duplicate_etax_tabs(context, active_page: Page) -> Page:
             log(f"关闭重复税务标签失败：{exc}")
 
     preferred.bring_to_front()
-    return preferred
+    return guard_page(preferred)
 
 
 def visible_count(page: Page, selector: str) -> int:
@@ -262,84 +279,54 @@ def capture_unknown_popup(page: Page, popup) -> Path:
     return evidence
 
 
-def close_common_popups(page: Page) -> None:
-    log("检查并关闭可能出现的提示弹框")
+def _close_one_common_popup(page: Page) -> bool:
     other_window_box = page.locator(".el-message-box__wrapper:visible").filter(has_text="其他窗口进行了单位切换")
     if other_window_box.count() > 0:
         other_window_box.first.locator("button.el-button--primary", has_text="确定").first.click()
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(800)
         log("已处理其他窗口单位切换提示")
-        return
+        return True
 
-    export_record_box = page.locator(".export-result-list-message-dialog:visible")
-    if export_record_box.count() > 0:
-        export_record_box.first.locator(".el-dialog__headerbtn").first.click(force=True)
-        page.wait_for_timeout(800)
-        log("已关闭导出记录弹框")
-        return
+    return False
 
-    # These tax-site reminders are informational.  Never click their primary
-    # buttons (which may start a declaration); close only the header button.
-    reminder_dialogs = page.locator(
-        ".el-message-box__wrapper:visible, .el-dialog:visible, .ant-modal:visible, [role='dialog']:visible"
-    )
-    for index in range(reminder_dialogs.count()):
-        popup = reminder_dialogs.nth(index)
-        try:
-            popup_text = popup.inner_text(timeout=2000)
-        except Exception:
-            continue
-        marker = next((value for value in TAX_REMINDER_MARKERS if value in popup_text), None)
-        if not marker:
-            continue
-        close_button = popup.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
-        if close_button.count() != 1:
-            evidence = capture_unknown_popup(page, popup)
-            raise RuntimeError(f"提醒弹窗无法自动关闭；证据目录：{evidence}")
-        close_button.click(force=True, timeout=3000)
-        page.wait_for_timeout(800)
-        log(
-            "popup_skipped："
-            f"类型={marker}；机构代码={POPUP_CONTEXT['org_code'] or '未知'}；"
-            f"税款所属期={POPUP_CONTEXT['month'] or '未知'}；未点击业务确认按钮"
-        )
-        return
 
-    for popup_text in COMMON_POPUP_TITLES:
-        popup = page.locator(".el-dialog, [role='dialog']").filter(has_text=popup_text).filter(visible=True)
-        if popup.count() > 0:
-            try:
-                close_button = popup.first.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
-                if close_button.count() > 0:
-                    close_button.first.click(force=True, timeout=3000)
-                else:
-                    popup.first.get_by_role("button", name="关闭", exact=True).click(timeout=3000)
-                page.wait_for_timeout(800)
-                log(f"已关闭提示弹框：{popup_text}")
-                return
-            except Exception:
-                pass
+def drain_common_popups(page: Page, max_popups: int = 8) -> int:
+    closed = 0
+    for _ in range(max_popups):
+        if not _close_one_common_popup(page):
+            break
+        closed += 1
+    if closed == max_popups:
+        log(f"连续关闭已知提示弹框达到上限：{max_popups}")
+    return closed
 
-    # Tax-site reminders change frequently. Close any otherwise unknown dialog by its
-    # visible header close button, while preserving dialogs the workflow must operate.
-    unknown = page.locator(
-        ".el-message-box__wrapper:visible, .el-dialog:visible, .ant-modal:visible, [role='dialog']:visible"
-    )
-    if unknown.count() > 0:
-        popup = unknown.first
-        popup_text = popup.inner_text(timeout=3000)
-        if not any(marker in popup_text for marker in WORKFLOW_DIALOG_MARKERS):
-            close_button = popup.locator(POPUP_CLOSE_SELECTOR).filter(visible=True)
-            if close_button.count() == 1:
-                close_button.click(force=True, timeout=3000)
-                page.wait_for_timeout(800)
-                log("已通过右上角关闭按钮关闭提示弹框")
-                return
-        evidence = capture_unknown_popup(page, popup)
-        raise RuntimeError(f"检测到未知弹窗，已暂停自动操作；证据目录：{evidence}")
+
+def close_common_popups(page: Page) -> None:
+    guard_page(page)
+    log("检查并关闭既有流程已识别的提示弹框")
+    drain_common_popups(page)
+    handle_configured_popups(page, log=log, record_dir=OUTPUT_DIR)
+
+
+def close_export_record_dialog(page: Page) -> bool:
+    """Close an export-record dialog only after its download work is complete."""
+    dialogs = page.locator(".export-result-list-message-dialog:visible")
+    if dialogs.count() == 0:
+        return False
+    dialog = dialogs.first
+    close_button = dialog.locator(
+        ".el-dialog__headerbtn, button[aria-label='Close'], button[aria-label='关闭']"
+    ).filter(visible=True)
+    if close_button.count() == 0:
+        raise RuntimeError("导出记录下载完成，但未找到弹框关闭按钮")
+    close_button.first.click(force=True, timeout=3000)
+    dialog.wait_for(state="hidden", timeout=5000)
+    log("导出记录下载完成，已关闭导出记录弹框")
+    return True
 
 
 def ensure_withholding_page(page: Page) -> Page:
+    guard_page(page)
     if "withholding/index.html" in page.url:
         page.bring_to_front()
         return page
@@ -352,6 +339,7 @@ def ensure_withholding_page(page: Page) -> Page:
         entry.first.click(force=True)
     new_page = new_page_info.value
     new_page.wait_for_load_state("domcontentloaded", timeout=30000)
+    guard_page(new_page)
     new_page.bring_to_front()
     log(f"已进入单位办税页面：{new_page.url}")
     return new_page
@@ -375,6 +363,7 @@ def open_company_switch_dialog(page: Page) -> None:
 
 def switch_org(page: Page, org: TaxOrg) -> None:
     log(f"切换纳税单位：{org.name}（{org.code}）")
+    close_export_record_dialog(page)
     close_common_popups(page)
     open_company_switch_dialog(page)
 
@@ -408,6 +397,7 @@ def switch_org(page: Page, org: TaxOrg) -> None:
 
 
 def set_tax_month(page: Page, target_month: str) -> None:
+    close_common_popups(page)
     target_label = month_label(target_month)
     target_month_text = f"{int(target_month.split('-', 1)[1])}月"
     month_input = page.locator(".tax-period-date-picker input, input.el-input__inner").filter(visible=True).first
@@ -422,7 +412,13 @@ def set_tax_month(page: Page, target_month: str) -> None:
     picker = page.locator(".el-picker-panel:visible").first
     picker.wait_for(state="visible", timeout=8000)
     picker.locator(".el-month-table td", has_text=target_month_text).filter(visible=True).first.click()
-    page.wait_for_timeout(3000)
+    # The previous-period reminder is rendered asynchronously after the month
+    # picker closes. Check once during the initial refresh and once more after
+    # the small delayed popup window observed on the tax site.
+    page.wait_for_timeout(1200)
+    close_common_popups(page)
+    page.wait_for_timeout(2200)
+    close_common_popups(page)
 
     actual_value = month_input.input_value(timeout=5000)
     if actual_value != target_label:
@@ -705,8 +701,12 @@ def export_all_people(page: Page, org: TaxOrg, target_month: str) -> str:
     export_name = current_name
     if not export_name.startswith(f"{month_prefix}_"):
         export_name = f"{month_prefix}_{export_name}"
-    if not export_name.endswith(f"_{org.code}"):
-        export_name = f"{export_name}_{org.code}"
+    org_suffix = f"{org.code}({org.name})"
+    if not export_name.endswith(f"_{org_suffix}"):
+        if export_name.endswith(f"_{org.code}"):
+            export_name = f"{export_name}({org.name})"
+        else:
+            export_name = f"{export_name}_{org_suffix}"
     filename_input.fill(export_name)
     log(f"导出文件名设置为：{export_name}")
     export_dialog.get_by_role("button", name="确定", exact=True).click()
@@ -756,6 +756,7 @@ def wait_and_download_export(page: Page, export_name: str, org: TaxOrg, max_wait
                 target = OUTPUT_DIR / f"{export_name}{suffix or '.xlsx'}"
                 download.save_as(str(target))
                 log(f"文件已下载：{target}")
+                close_export_record_dialog(page)
                 return target
         except Exception as exc:
             log(f"暂未找到成功记录：{exc}")
@@ -796,7 +797,7 @@ def make_context(playwright, args):
         withholding_pages = [p for p in context.pages if "withholding/index.html" in p.url]
         etax_pages = [p for p in context.pages if "etax.chinatax.gov.cn" in p.url]
         page = withholding_pages[-1] if withholding_pages else (etax_pages[-1] if etax_pages else context.new_page())
-        return browser, context, page
+        return browser, context, guard_page(page)
 
     chrome_args = ["--start-maximized", "--disable-features=AutomationControlled"]
     if args.proxy == "none":
@@ -816,7 +817,7 @@ def make_context(playwright, args):
         )
         context = browser.new_context(accept_downloads=True, ignore_https_errors=True, no_viewport=True)
         page = context.new_page()
-        return browser, context, page
+        return browser, context, guard_page(page)
 
     log(f"启动可见 Chrome（持久化用户数据目录）：{PROFILE_DIR}")
     context = playwright.chromium.launch_persistent_context(
@@ -829,7 +830,7 @@ def make_context(playwright, args):
         args=chrome_args,
     )
     page = context.pages[0] if context.pages else context.new_page()
-    return None, context, page
+    return None, context, guard_page(page)
 
 
 def main() -> int:

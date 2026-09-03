@@ -340,6 +340,18 @@ def _migration_9(connection: sqlite3.Connection) -> None:
         connection.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_period_id ON {table} (period_id)")
 
 
+def _migration_10(connection: sqlite3.Connection) -> None:
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'").fetchone()
+    if table is not None and "bank_subaccount" not in _table_columns(connection, "organization_mappings"):
+        connection.execute("ALTER TABLE organization_mappings ADD COLUMN bank_subaccount VARCHAR(120) NOT NULL DEFAULT ''")
+
+
+def _migration_11(connection: sqlite3.Connection) -> None:
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'reconciliation_import_batches'").fetchone()
+    if table is not None and "file_results" not in _table_columns(connection, "reconciliation_import_batches"):
+        connection.execute("ALTER TABLE reconciliation_import_batches ADD COLUMN file_results JSON")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -350,6 +362,8 @@ MIGRATIONS = {
     7: _migration_7,
     8: _migration_8,
     9: _migration_9,
+    10: _migration_10,
+    11: _migration_11,
 }
 
 

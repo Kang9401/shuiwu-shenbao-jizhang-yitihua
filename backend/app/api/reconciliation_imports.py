@@ -14,6 +14,7 @@ from app.services.reconciliation_import import (
     ReconciliationImportValidationError,
     import_reconciliation_file,
     import_pit_declaration_file,
+    import_pit_declaration_files,
     import_tax_certificate_files,
     list_reconciliation_batches,
 )
@@ -29,6 +30,7 @@ def _batch_payload(batch: ReconciliationImportBatch) -> dict:
         "original_name": batch.original_name,
         "row_count": batch.row_count,
         "validation_issues": batch.validation_issues or [],
+        "file_results": batch.file_results or [],
         "created_at": batch.created_at,
         "download_url": f"/api/reconciliation-imports/{batch.id}/download",
     }
@@ -84,6 +86,16 @@ def import_pit_declaration(period_id: int = Query(...), file: UploadFile = File(
     require_period(db, period_id)
     try: batch = import_pit_declaration_file(db, period_id=period_id, file=file)
     except ReconciliationImportValidationError as exc: raise HTTPException(status_code=400, detail=exc.issues) from exc
+    return _batch_payload(batch)
+
+
+@router.post("/pit-declarations")
+def import_pit_declarations(period_id: int = Query(...), files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> dict:
+    require_period(db, period_id)
+    try:
+        batch = import_pit_declaration_files(db, period_id=period_id, files=files)
+    except ReconciliationImportValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.issues) from exc
     return _batch_payload(batch)
 
 

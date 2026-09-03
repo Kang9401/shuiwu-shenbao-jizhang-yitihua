@@ -240,6 +240,33 @@ export interface ReconciliationImportBatch {
   validation_issues: any[]
   created_at: string
   download_url: string
+  file_results?: Array<{ file_name: string; status: 'success' | 'failed'; organization?: string; period?: string; error?: string }>
+}
+
+export type RpaPopupTask = RpaTaskKey | 'all' | 'tax_certificate_or_income_report'
+export type RpaPopupAction = 'keep' | 'close' | 'click'
+
+export interface RpaPopupRule {
+  id: string
+  keyword: string
+  task: RpaPopupTask
+  action: RpaPopupAction
+  button_text: string
+  delay_ms: number
+  enabled: boolean
+}
+
+export interface RpaPopupEvent {
+  captured_at: string
+  popup_type: 'dom' | 'browser' | string
+  org_code: string
+  month: string
+  task: string
+  url: string
+  content: string
+  close_action: string
+  rule_id?: string
+  keyword?: string
 }
 
 export interface OrganizationMapping {
@@ -252,6 +279,7 @@ export interface OrganizationMapping {
   rpa_org_name: string
   rpa_search_result_index: number
   parent_branch: string
+  bank_subaccount: string
   updated_at: string
 }
 
@@ -455,14 +483,15 @@ export const systemApi = {
 
 export const organizationMappingApi = {
   list: () => api.get<OrganizationMapping[]>('/organization-mappings'),
-  create: (payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string }) =>
+  create: (payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string; bank_subaccount: string }) =>
     api.post<OrganizationMapping>('/organization-mappings', payload),
-  update: (id: number, payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string }) =>
+  update: (id: number, payload: { branch_name: string; org_code: string; taxpayer_id: string; active: boolean; rpa_enabled: boolean; rpa_org_name: string; rpa_search_result_index: number; parent_branch: string; bank_subaccount: string }) =>
     api.put<OrganizationMapping>(`/organization-mappings/${id}`, payload),
+  delete: (id: number) => api.delete<{ deleted: number }>(`/organization-mappings/${id}`),
   importFile: (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return api.post<{ updated: number }>('/organization-mappings/import', form, {
+    return api.post<{ updated: number; deleted: number }>('/organization-mappings/import', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     })
@@ -502,23 +531,25 @@ export const personnelMasterApi = {
 }
 
 export const reconciliationImportApi = {
-  importFile: (file: File, periodId: number, importType: ReconciliationImportType) => {
+  importFiles: (files: File[], periodId: number, importType: ReconciliationImportType) => {
     const pathByType: Record<ReconciliationImportType, string> = {
       bank_statement: '/reconciliation-imports/bank-statement',
       declaration_result: '/reconciliation-imports/declaration-result',
       accounting_ledger: '/reconciliation-imports/accounting-ledger',
       balance_sheet: '/reconciliation-imports/balance-sheet',
-      pit_declaration: '/reconciliation-imports/pit-declaration',
+      pit_declaration: '/reconciliation-imports/pit-declarations',
       tax_certificate: '/reconciliation-imports/tax-certificates',
     }
     const form = new FormData()
-    form.append(importType === 'tax_certificate' ? 'files' : 'file', file)
+    const field = importType === 'tax_certificate' || importType === 'pit_declaration' ? 'files' : 'file'
+    files.forEach((file) => form.append(field, file))
     return api.post<ReconciliationImportBatch>(pathByType[importType], form, {
       params: { period_id: periodId },
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     })
   },
+  importFile: (file: File, periodId: number, importType: ReconciliationImportType) => reconciliationImportApi.importFiles([file], periodId, importType),
 
   list: (periodId: number, importType?: ReconciliationImportType) =>
     api.get<ReconciliationImportBatch[]>('/reconciliation-imports', {
@@ -534,22 +565,25 @@ export interface PitOccurrenceCheck { id: number; org_code: string; org_name: st
 export interface PitDeclarationSummary { id: number; org_code: string; org_name: string; declaration_type: string; income_item: string; person_count: number; income_amount: number | null; tax_amount: number | null }
 export interface PitDifferenceDetail { id: number; detail_type: string; org_code: string; org_name: string; subject_code?: string | null; identity_key: string; person_or_customer_name: string; id_number?: string | null; source_amount: number | null; target_amount: number | null; difference: number | null; auto_reason?: string | null; manual_reason?: string | null; remark?: string | null; detail_json: Record<string, unknown> | null }
 export interface PitBankTaxMatch { id: number; org_code: string; org_full_name: string; bank_account?: string | null; transaction_time?: string | null; transaction_summary?: string | null; debit_amount: number | null }
+export interface PitSheetData { sheet_name: string; columns: string[]; rows: Array<Record<string, unknown>>; total: number; page: number; page_size: number }
 export type PitListParams = { org_code?: string; subject_code?: string; only_differences?: boolean; detail_type?: string; search?: string }
 
 export const pitReconciliationApi = {
   getOverview: (periodId: number) => api.get<PitOverviewResponse>('/pit-reconciliations/overview', { params: { period_id: periodId } }),
   getReadiness: (periodId: number) => api.get<PitReadinessItem[]>('/pit-reconciliations/readiness', { params: { period_id: periodId } }),
-  recalculate: (periodId: number) => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId }, timeout: 120000 }),
+  recalculate: (periodId: number, stage: 'pre_payment' | 'post_payment' = 'pre_payment') => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId, stage }, timeout: 120000 }),
   getSummary: (periodId: number) => api.get<PitOrgSummary[]>('/pit-reconciliations/org-summaries', { params: { period_id: periodId } }),
   getTaxAmountChecks: (periodId: number, params: PitListParams = {}) => api.get<PitTaxAmountCheck[]>('/pit-reconciliations/tax-amount-checks', { params: { period_id: periodId, ...params } }),
   getOccurrenceChecks: (periodId: number, params: PitListParams = {}) => api.get<PitOccurrenceCheck[]>('/pit-reconciliations/occurrence-checks', { params: { period_id: periodId, ...params } }),
   getDeclarationSummary: (periodId: number) => api.get<PitDeclarationSummary[]>('/pit-reconciliations/declaration-summaries', { params: { period_id: periodId } }),
   getDifferences: (periodId: number, params: PitListParams) => api.get<PitDifferenceDetail[]>('/pit-reconciliations/difference-details', { params: { period_id: periodId, ...params } }),
   getBankMatches: (periodId: number, params: PitListParams = {}) => api.get<PitBankTaxMatch[]>('/pit-reconciliations/bank-matches', { params: { period_id: periodId, ...params } }),
-  updateSummary: (id: number, payload: Partial<Pick<PitOrgSummary, 'difference_1_manual_reason' | 'difference_2_manual_reason' | 'difference_3_manual_reason' | 'difference_4_manual_reason' | 'difference_5_manual_reason' | 'difference_6_manual_reason' | 'difference_7_manual_reason' | 'remark'>>) => api.patch<PitOrgSummary>(`/pit-reconciliations/org-summaries/${id}`, payload),
-  updateTaxAmountCheck: (id: number, payload: Partial<Pick<PitTaxAmountCheck, 'current_manual_reason' | 'cumulative_manual_reason' | 'business_declared_manual_reason' | 'remark'>>) => api.patch<PitTaxAmountCheck>(`/pit-reconciliations/tax-amount-checks/${id}`, payload),
-  updateOccurrenceCheck: (id: number, payload: Partial<Pick<PitOccurrenceCheck, 'broker_occurrence_manual_reason' | 'declared_income_manual_reason' | 'remark'>>) => api.patch<PitOccurrenceCheck>(`/pit-reconciliations/occurrence-checks/${id}`, payload),
-  updateDifference: (id: number, payload: { manual_reason?: string; remark?: string }) => api.patch<PitDifferenceDetail>(`/pit-reconciliations/difference-details/${id}`, payload),
+  getSheetData: (periodId: number, sheetName: string, page = 1, pageSize = 100) => api.get<PitSheetData>('/pit-reconciliations/sheet-data', { params: { period_id: periodId, sheet_name: sheetName, page, page_size: pageSize }, timeout: 120000 }),
+  exportUrl: (periodId: number) => companyUrl(`/api/pit-reconciliations/export?period_id=${periodId}`),
+  updateSummary: (periodId: number, id: number, payload: Partial<Pick<PitOrgSummary, 'difference_1_manual_reason' | 'difference_2_manual_reason' | 'difference_3_manual_reason' | 'difference_4_manual_reason' | 'difference_5_manual_reason' | 'difference_6_manual_reason' | 'difference_7_manual_reason' | 'remark'>>) => api.patch<PitOrgSummary>(`/pit-reconciliations/org-summaries/${id}`, payload, { params: { period_id: periodId } }),
+  updateTaxAmountCheck: (periodId: number, id: number, payload: Partial<Pick<PitTaxAmountCheck, 'current_manual_reason' | 'cumulative_manual_reason' | 'business_declared_manual_reason' | 'remark'>>) => api.patch<PitTaxAmountCheck>(`/pit-reconciliations/tax-amount-checks/${id}`, payload, { params: { period_id: periodId } }),
+  updateOccurrenceCheck: (periodId: number, id: number, payload: Partial<Pick<PitOccurrenceCheck, 'broker_occurrence_manual_reason' | 'declared_income_manual_reason' | 'remark'>>) => api.patch<PitOccurrenceCheck>(`/pit-reconciliations/occurrence-checks/${id}`, payload, { params: { period_id: periodId } }),
+  updateDifference: (periodId: number, id: number, payload: { manual_reason?: string; remark?: string }) => api.patch<PitDifferenceDetail>(`/pit-reconciliations/difference-details/${id}`, payload, { params: { period_id: periodId } }),
 }
 
 export const financeAIApi = {
@@ -572,6 +606,10 @@ export const bankFetchApi = {
 export const rpaApi = {
   getStatus: () => api.get<RpaStatus>('/rpa/status'),
   saveConfig: (chromePath: string, inputPath: string, outputPath: string) => api.put('/rpa/config', { chrome_path: chromePath, input_path: inputPath, output_path: outputPath }),
+  getPopupRules: () => api.get<RpaPopupRule[]>('/rpa/popup-rules'),
+  savePopupRules: (rules: RpaPopupRule[]) => api.put<RpaPopupRule[]>('/rpa/popup-rules', { rules }),
+  resetPopupRules: () => api.post<RpaPopupRule[]>('/rpa/popup-rules/reset'),
+  getPopupEvents: (limit = 100) => api.get<RpaPopupEvent[]>('/rpa/popup-events', { params: { limit } }),
   uploadOrgExcel: (file: File) => {
     const form = new FormData()
     form.append('file', file)

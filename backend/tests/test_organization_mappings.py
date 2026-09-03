@@ -53,9 +53,11 @@ def test_organization_mapping_crud_and_import():
                 "rpa_enabled": True,
                 "rpa_org_name": "测试证券营业部",
                 "parent_branch": "测试分公司",
+                "bank_subaccount": "001.02",
             },
         )
         assert created.status_code == 200
+        assert created.json()["bank_subaccount"] == "001.02"
         mapping_id = created.json()["id"]
 
         updated = client.put(
@@ -68,6 +70,7 @@ def test_organization_mapping_crud_and_import():
                 "rpa_enabled": True,
                 "rpa_org_name": "测试证券营业部",
                 "parent_branch": "测试分公司",
+                "bank_subaccount": "009.08",
             },
         )
         assert updated.status_code == 200
@@ -77,33 +80,41 @@ def test_organization_mapping_crud_and_import():
         assert updated.json()["rpa_enabled"] is True
         assert updated.json()["rpa_org_name"] == "测试证券营业部"
         assert updated.json()["parent_branch"] == "测试分公司"
+        assert updated.json()["bank_subaccount"] == "009.08"
 
         imported = client.post(
             "/api/organization-mappings/import",
             files={
                 "file": (
                     "机构映射.xlsx",
-                    _excel_bytes([{"营业部名称": "测试营业部", "机构代码": "10001"}]),
+                    _excel_bytes([{"营业部名称": "测试营业部", "机构代码": "10001", "银行子目": "0007.01"}]),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             },
         )
         assert imported.status_code == 200
-        assert imported.json() == {"updated": 1}
+        assert imported.json() == {"updated": 1, "deleted": 1}
 
         listed = client.get("/api/organization-mappings")
         assert listed.status_code == 200
         assert listed.json()[0]["org_code"] == "10001"
         assert listed.json()[0]["active"] is True
-        assert listed.json()[0]["rpa_enabled"] is True
-        assert listed.json()[0]["taxpayer_id"] == "9132ABCD"
+        assert listed.json()[0]["rpa_enabled"] is False
+        assert listed.json()[0]["taxpayer_id"] == ""
+        assert listed.json()[0]["bank_subaccount"] == "0007.01"
 
         exported = client.get("/api/organization-mappings/export")
         frame = pd.read_excel(io.BytesIO(exported.content), dtype=str).fillna("")
-        assert frame.loc[0, "是否启用RPA"] == "是"
-        assert frame.loc[0, "营业部全称"] == "测试证券营业部"
-        assert frame.loc[0, "所属分公司"] == "测试分公司"
-        assert frame.loc[0, "机构纳税人识别号"] == "9132ABCD"
+        assert frame.loc[0, "是否启用RPA"] == "否"
+        assert frame.loc[0, "营业部全称"] == ""
+        assert frame.loc[0, "所属分公司"] == ""
+        assert frame.loc[0, "机构纳税人识别号"] == ""
+        assert frame.loc[0, "银行子目"] == "0007.01"
+
+        deleted = client.delete(f"/api/organization-mappings/{listed.json()[0]['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] == listed.json()[0]["id"]
+        assert client.get("/api/organization-mappings").json() == []
     finally:
         app.dependency_overrides.clear()
 
@@ -137,7 +148,7 @@ def test_org_code_is_unique_and_last_import_row_wins():
             ]), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         )
         assert imported.status_code == 200
-        assert imported.json() == {"updated": 2}
+        assert imported.json() == {"updated": 1, "deleted": 0}
         assert [(item["org_code"], item["branch_name"]) for item in client.get("/api/organization-mappings").json()] == [("10001", "新名称")]
 
         duplicate = client.post(
@@ -187,6 +198,40 @@ def test_new_excel_columns_enable_rpa_mapping():
         assert mapping["rpa_enabled"] is True
         assert mapping["rpa_org_name"] == "测试证券营业部"
         assert mapping["parent_branch"] == "测试分公司"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_import_replaces_current_company_mappings_and_invalid_file_keeps_existing_rows():
+    client = _client()
+    try:
+        for code, name in [("10001", "第一营业部"), ("10002", "第二营业部")]:
+            assert client.post(
+                "/api/organization-mappings",
+                json={"branch_name": name, "org_code": code},
+            ).status_code == 200
+
+        invalid = client.post(
+            "/api/organization-mappings/import",
+            files={"file": ("错误.xlsx", _excel_bytes([
+                {"营业部名称": "无效机构", "机构代码": "12"},
+            ]), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert invalid.status_code == 400
+        assert len(client.get("/api/organization-mappings").json()) == 2
+
+        replaced = client.post(
+            "/api/organization-mappings/import",
+            files={"file": ("新维护表.xlsx", _excel_bytes([
+                {"营业部名称": "第三营业部", "机构代码": "10003", "启用": "否"},
+            ]), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert replaced.status_code == 200
+        assert replaced.json() == {"updated": 1, "deleted": 2}
+        rows = client.get("/api/organization-mappings").json()
+        assert [(row["org_code"], row["branch_name"], row["active"]) for row in rows] == [
+            ("10003", "第三营业部", False)
+        ]
     finally:
         app.dependency_overrides.clear()
 

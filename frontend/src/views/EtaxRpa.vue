@@ -5,7 +5,10 @@
         <h2>自然人电子税务局自动化工具</h2>
         <p>当前浏览器状态：<span :class="['rpa-state', `is-${status?.chrome.status || 'stopped'}`]">{{ chromeLabel }}</span></p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" circle title="刷新" @click="refreshAll" />
+      <div class="rpa-heading-actions">
+        <el-button :icon="Setting" @click="openPopupDrawer">弹窗规则详情</el-button>
+        <el-button :icon="Refresh" :loading="loading" circle title="刷新" @click="refreshAll" />
+      </div>
     </div>
 
     <div class="rpa-layout">
@@ -103,6 +106,50 @@
       </div>
     </div>
 
+    <el-drawer v-model="popupDrawerVisible" title="弹窗规则详情" size="min(1120px, 94vw)" append-to-body>
+      <div class="rpa-popup-drawer">
+        <section class="rpa-popup-section">
+          <div class="rpa-panel-title rpa-output-title">
+            <div>
+              <h3>提醒弹窗规则</h3>
+              <p class="rpa-panel-note">仅处理原有 RPA 流程未处理的提醒弹窗。安全验证滑块、导出记录下载、文件导入、生成零工资和清空确认等业务窗口不可配置。</p>
+            </div>
+            <div>
+              <el-button :disabled="running" @click="addPopupRule()">新增规则</el-button>
+              <el-button :disabled="running" @click="resetPopupRules">恢复默认</el-button>
+              <el-button type="primary" :loading="savingPopupRules" :disabled="running" @click="savePopupRules">保存</el-button>
+            </div>
+          </div>
+          <div class="rpa-popup-table-wrap">
+            <el-table :data="popupRules" row-key="id" empty-text="暂无提醒规则">
+              <el-table-column label="启用" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" :disabled="running" /></template></el-table-column>
+              <el-table-column label="匹配关键字" min-width="210"><template #default="{ row }"><el-input v-model="row.keyword" :disabled="running" placeholder="弹窗标题或正文中的稳定文字" /></template></el-table-column>
+              <el-table-column label="适用任务" width="155"><template #default="{ row }"><el-select v-model="row.task" :disabled="running"><el-option v-for="item in popupTaskOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+              <el-table-column label="动作" width="145"><template #default="{ row }"><el-select v-model="row.action" :disabled="running"><el-option v-for="item in popupActionOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+              <el-table-column label="按钮文字" width="145"><template #default="{ row }"><el-input v-model="row.button_text" :disabled="running || row.action !== 'click'" placeholder="如：我知道了" /></template></el-table-column>
+              <el-table-column label="延迟（毫秒）" width="155"><template #default="{ row }"><el-input-number v-model="row.delay_ms" :disabled="running" :min="0" :max="10000" :step="500" controls-position="right" /></template></el-table-column>
+              <el-table-column label="操作" width="70" fixed="right"><template #default="{ $index }"><el-button :icon="Delete" text type="danger" title="删除规则" :disabled="running" @click="popupRules.splice($index, 1)" /></template></el-table-column>
+            </el-table>
+          </div>
+        </section>
+
+        <section class="rpa-popup-section">
+          <div class="rpa-panel-title rpa-output-title">
+            <div><h3>最近弹窗记录</h3><p class="rpa-panel-note">未配置弹窗会记录内容并暂停任务；确认稳定关键字和处理按钮后可加入上方规则。</p></div>
+            <el-button size="small" :icon="Refresh" @click="loadPopupEvents">刷新记录</el-button>
+          </div>
+          <el-table :data="popupEvents" max-height="320" empty-text="暂无弹窗记录">
+            <el-table-column prop="captured_at" label="时间" min-width="175" />
+            <el-table-column prop="org_code" label="机构" width="95" />
+            <el-table-column label="任务" width="130"><template #default="{ row }">{{ popupTaskLabel(row.task) }}</template></el-table-column>
+            <el-table-column prop="content" label="弹窗内容" min-width="360" show-overflow-tooltip />
+            <el-table-column prop="close_action" label="处理结果" width="145" />
+            <el-table-column label="操作" width="105" fixed="right"><template #default="{ row }"><el-button size="small" :disabled="running" @click="addPopupRule(row)">新增规则</el-button></template></el-table-column>
+          </el-table>
+        </section>
+      </div>
+    </el-drawer>
+
     <el-dialog v-model="previewVisible" title="确认执行机构" width="620px">
       <p>请确认本次将处理以下 {{ previewOrgs.length }} 个机构。确认后程序开始执行。</p>
       <el-table :data="previewOrgs" max-height="360"><el-table-column prop="code" label="机构代码" width="150" /><el-table-column prop="name" label="机构名称" /></el-table>
@@ -114,8 +161,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Delete, DocumentAdd, Download, Monitor, Refresh, RefreshRight, Upload, VideoPause } from '@element-plus/icons-vue'
-import { rpaApi, type RpaFile, type RpaOrg, type RpaStatus, type RpaTaskKey } from '../api'
+import { CopyDocument, Delete, DocumentAdd, Download, Monitor, Refresh, RefreshRight, Setting, Upload, VideoPause } from '@element-plus/icons-vue'
+import { rpaApi, type RpaFile, type RpaOrg, type RpaPopupEvent, type RpaPopupRule, type RpaPopupTask, type RpaStatus, type RpaTaskKey } from '../api'
 
 const props = defineProps<{ periodId: number | null; initialMonth: string }>()
 const status = ref<RpaStatus | null>(null)
@@ -138,6 +185,10 @@ const previewVisible = ref(false)
 const previewOrgs = ref<RpaOrg[]>([])
 const pendingTask = ref<RpaTaskKey | null>(null)
 const pendingResume = ref(false)
+const popupRules = ref<RpaPopupRule[]>([])
+const popupEvents = ref<RpaPopupEvent[]>([])
+const savingPopupRules = ref(false)
+const popupDrawerVisible = ref(false)
 let timer: number | undefined
 
 const running = computed(() => ['starting', 'running', 'stopping'].includes(status.value?.current_run.status || ''))
@@ -167,10 +218,25 @@ const steps = [
   { step: '步骤 4', key: 'tax_certificate', title: '完税证明下载', description: '按机构查询缴款记录并下载完税证明 PDF。默认查询申报月份的次月缴款记录。' },
   { step: '步骤 5', key: 'declaration_reports', title: '下载申报结果', description: '依次下载综合所得、分类所得和限售股申报结果。' },
 ]
+const popupTaskOptions: Array<{ value: RpaPopupTask; label: string }> = [
+  { value: 'all', label: '全部任务' },
+  { value: 'special_deduction', label: '专项附加导出' },
+  { value: 'import', label: '导入数据' },
+  { value: 'tax_certificate', label: '完税证明下载' },
+  { value: 'declaration_reports', label: '下载申报结果' },
+  { value: 'income_report', label: '综合所得申报' },
+  { value: 'extra_income_reports', label: '分类/限售股申报' },
+  { value: 'tax_certificate_or_income_report', label: '完税及申报下载' },
+]
+const popupActionOptions = [
+  { value: 'keep', label: '保留（不处理）' },
+  { value: 'close', label: '关闭弹窗' },
+  { value: 'click', label: '点击按钮' },
+]
 
 watch(() => props.initialMonth, (value) => { if (value && !running.value) { month.value = value; monthManuallyOverridden.value = false } })
 watch(() => props.periodId, async () => { selectedOrgCodes.value = []; await loadOrganizations() })
-onMounted(async () => { await Promise.all([refreshAll(), loadOrganizations()]); timer = window.setInterval(poll, 1500) })
+onMounted(async () => { await Promise.all([refreshAll(), loadOrganizations(), loadPopupRules(), loadPopupEvents()]); timer = window.setInterval(poll, 1500) })
 onBeforeUnmount(() => window.clearInterval(timer))
 
 async function refreshAll() {
@@ -188,6 +254,24 @@ async function savePaths() { try { const { data } = await rpaApi.saveConfig(chro
 async function chooseDirectory(kind: 'input' | 'output') { const api = (window as any).pywebview?.api; if (!api?.choose_directory) { ElMessage.info('浏览器模式下请直接输入完整路径'); return } const current = kind === 'input' ? inputPath.value : outputPath.value; const result = await api.choose_directory(current); if (!result?.path) return; if (kind === 'input') inputPath.value = result.path; else outputPath.value = result.path; await savePaths() }
 async function initializeChrome() { try { await saveChromePath(); const { data } = await rpaApi.startChrome(chromePath.value); ElMessage.success(data.message); window.setTimeout(refreshAll, 1800) } catch (error: any) { ElMessage.error(detail(error, '浏览器初始化失败')) } }
 async function loadOrganizations() { if (!props.periodId) { organizations.value = []; return } try { organizations.value = (await rpaApi.organizations(props.periodId)).data.items } catch (error: any) { organizations.value = []; ElMessage.error(detail(error, '机构列表加载失败')) } }
+async function loadPopupRules() { try { popupRules.value = (await rpaApi.getPopupRules()).data.map((rule) => ({ ...rule })) } catch (error: any) { ElMessage.error(detail(error, '提醒弹窗规则加载失败')) } }
+async function loadPopupEvents() { try { popupEvents.value = (await rpaApi.getPopupEvents()).data } catch (error: any) { ElMessage.error(detail(error, '弹窗记录加载失败')) } }
+async function openPopupDrawer() { popupDrawerVisible.value = true; await Promise.all([loadPopupRules(), loadPopupEvents()]) }
+function addPopupRule(event?: RpaPopupEvent) {
+  const eventTask = popupTaskOptions.some((item) => item.value === event?.task) ? event?.task as RpaPopupTask : 'all'
+  popupRules.value.push({
+    id: `popup-${Date.now()}-${popupRules.value.length + 1}`,
+    keyword: String(event?.content || '').slice(0, 120),
+    task: eventTask,
+    action: 'close',
+    button_text: '',
+    delay_ms: 4000,
+    enabled: true,
+  })
+}
+async function savePopupRules() { savingPopupRules.value = true; try { popupRules.value = (await rpaApi.savePopupRules(popupRules.value)).data; ElMessage.success('提醒弹窗规则已保存') } catch (error: any) { ElMessage.error(detail(error, '提醒弹窗规则保存失败')) } finally { savingPopupRules.value = false } }
+async function resetPopupRules() { try { await ElMessageBox.confirm('确认恢复系统内置的提醒弹窗规则？', '恢复默认规则'); popupRules.value = (await rpaApi.resetPopupRules()).data; ElMessage.success('已恢复默认提醒规则') } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '恢复默认规则失败')) } }
+function popupTaskLabel(task: string) { return popupTaskOptions.find((item) => item.value === task)?.label || task || '未知' }
 async function uploadImports(event: Event) { const input = event.target as HTMLInputElement; const files = Array.from(input.files || []); if (!files.length) return; try { await rpaApi.uploadImportFiles(files); ElMessage.success('导入文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) { await rpaApi.uploadImportFiles(files, true); ElMessage.success('同名文件已覆盖'); await refreshAll() } else if (error?.response?.status !== 409) ElMessage.error(detail(error, '导入文件上传失败')) } finally { input.value = '' } }
 async function preparePeriodFiles(overwrite: boolean) { if (!props.periodId) return; try { await rpaApi.prepareFromPeriod(props.periodId, overwrite); ElMessage.success('本期申报文件已准备'); await refreshAll() } catch (error: any) { if (error?.response?.status === 409 && await confirmOverwrite()) await preparePeriodFiles(true); else if (error?.response?.status !== 409) ElMessage.error(detail(error, '准备本期文件失败')) } }
 async function removeImport(name: string) { try { await ElMessageBox.confirm(`确认从 input 删除“${name}”？`, '删除导入文件', { type: 'warning' }); await rpaApi.clearImportFiles([name]); await refreshAll() } catch (error: any) { if (error !== 'cancel' && error !== 'close') ElMessage.error(detail(error, '删除失败')) } }
@@ -242,4 +326,5 @@ async function confirmOverwrite() { try { await ElMessageBox.confirm('发现同�
 <style scoped>
 .rpa-page{display:flex;flex-direction:column;gap:14px}.rpa-heading{display:flex;align-items:center;justify-content:space-between}.rpa-heading h2{margin:0;font-size:20px;letter-spacing:0}.rpa-heading p{margin:5px 0 0;color:#667085}.rpa-state{font-weight:700}.is-ready{color:#15803d}.is-starting,.is-unavailable{color:#b45309}.is-stopped{color:#667085}.rpa-layout{display:grid;grid-template-columns:minmax(380px,440px) minmax(0,1fr);gap:14px;align-items:start}.rpa-left,.rpa-right{display:flex;flex-direction:column;gap:14px;min-width:0}.rpa-panel{border:1px solid #e3e7ee;border-radius:6px;background:#fff;padding:14px}.rpa-panel h3{margin:0 0 12px;font-size:15px;letter-spacing:0}.rpa-form{display:grid;grid-template-columns:82px minmax(0,1fr);align-items:center;gap:10px}.rpa-form label{color:#475467;font-size:13px}.rpa-file-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.rpa-hint{margin:10px 0 0 92px;color:#7b8494;font-size:12px}.rpa-step{display:grid;grid-template-columns:52px minmax(0,1fr) 64px;gap:10px;align-items:center;padding:11px 0;border-top:1px solid #eef1f5}.rpa-step:first-of-type{border-top:0}.rpa-step-no{color:#667085;font-size:12px}.rpa-step strong{font-size:14px}.rpa-step p{margin:3px 0 0;color:#7b8494;font-size:12px;line-height:1.45}.rpa-input-actions{display:flex;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid #eef1f5}.rpa-file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.rpa-file-list span{display:flex;max-width:100%;align-items:center;gap:5px;padding:4px 7px;background:#f2f4f7;border-radius:4px;font-size:12px;overflow-wrap:anywhere}.rpa-file-list button{border:0;background:transparent;color:#b42318;cursor:pointer;font-size:16px}.rpa-result{font-weight:600}.rpa-result.success{color:#15803d}.rpa-result.failed{color:#c2413b}.rpa-result.running{color:#2563eb}.rpa-result.pending{color:#7b8494}.rpa-panel-title{display:flex;justify-content:space-between;align-items:center}.rpa-panel-title span{color:#2563eb;font-size:12px}.rpa-output-title{margin-bottom:12px;gap:12px}.rpa-output-title h3{margin:0}.rpa-output-title>div{display:flex;gap:8px;flex-wrap:wrap}.rpa-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.rpa-log{height:280px;margin:0;padding:12px;overflow:auto;white-space:pre;font:12px/1.6 Consolas,"Courier New",monospace;background:#111827;color:#d1fae5;border-radius:4px}.rpa-output-list{display:flex;flex-direction:column}.rpa-output-list button{display:grid;grid-template-columns:minmax(0,1fr) auto 24px;align-items:center;gap:12px;width:100%;padding:9px 4px;border:0;border-top:1px solid #eef1f5;background:transparent;text-align:left;cursor:pointer}.rpa-output-list button:hover{background:#f8fafc}.rpa-output-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rpa-output-list small{color:#7b8494}@media(max-width:1100px){.rpa-layout{grid-template-columns:1fr}.rpa-left,.rpa-right{width:100%}}@media(max-width:640px){.rpa-form{grid-template-columns:1fr}.rpa-hint{margin-left:0}.rpa-step{grid-template-columns:45px minmax(0,1fr)}.rpa-step .el-button{grid-column:2}.rpa-output-list button{grid-template-columns:minmax(0,1fr) 24px}.rpa-output-list small{grid-row:2;grid-column:1}}
 .rpa-result-title{margin-bottom:10px}.rpa-result-title h3{margin:0}.rpa-summary{display:grid;grid-template-columns:repeat(5,minmax(80px,1fr));gap:8px;margin-bottom:12px}.rpa-summary span{padding:8px;background:#f7f8fa;border:1px solid #e7eaf0;border-radius:4px;color:#667085;font-size:12px}.rpa-summary strong{display:block;margin-top:2px;color:#101828;font-size:18px}.rpa-summary .success strong{color:#15803d}.rpa-summary .failed strong{color:#c2413b}
+.rpa-heading-actions{display:flex;align-items:center;gap:8px}.rpa-popup-drawer{display:flex;flex-direction:column;gap:24px}.rpa-popup-section{min-width:0}.rpa-popup-section+.rpa-popup-section{padding-top:20px;border-top:1px solid #e5e7eb}.rpa-popup-section .rpa-output-title{align-items:flex-start}.rpa-popup-section .rpa-output-title>div:first-child{display:block}.rpa-panel-note{margin:5px 0 0;color:#667085;font-size:12px;line-height:1.5}.rpa-popup-table-wrap{overflow-x:auto}.rpa-popup-table-wrap .el-table{min-width:1050px}.rpa-popup-table-wrap .el-input-number{width:125px}
 </style>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sys
+import os
 from pathlib import Path
 
 TASK_SCRIPTS = {
@@ -72,7 +73,25 @@ def build_task_command(
 
 
 def build_chrome_command(app_dir: Path, chrome_path: str = "") -> list[str]:
-    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(app_dir / "start_debug_chrome.ps1")]
-    if chrome_path.strip():
-        args += ["-ChromePath", chrome_path.strip()]
-    return args
+    candidates = [
+        chrome_path.strip(),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe"),
+    ]
+    executable = next((Path(item) for item in candidates if item and Path(item).is_file()), None)
+    if executable is None:
+        attempted = "; ".join(item for item in candidates if item)
+        raise RuntimeError(f"找不到 Chrome。请填写 chrome.exe 完整路径。已尝试：{attempted}")
+    profile = app_dir / ".chrome-debug-profile"
+    return [
+        str(executable),
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=9222",
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--start-maximized",
+        "--new-window",
+        "https://etax.chinatax.gov.cn/",
+    ]

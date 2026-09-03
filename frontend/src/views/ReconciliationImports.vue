@@ -32,13 +32,13 @@
           </label>
         </div>
 
-        <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFile }">
+        <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFiles.length }">
           <label>{{ importTypeLabel }}</label>
-          <input type="file" :accept="importType === 'tax_certificate' ? '.pdf' : '.xls,.xlsx,.csv'" @change="onFilePicked" />
-          <span class="upload-status" :class="selectedFile ? 'ready' : 'empty'">
-            {{ selectedFile?.name || '未选择' }}
+          <input type="file" multiple :accept="importType === 'tax_certificate' ? '.pdf' : importType === 'pit_declaration' ? '.xls,.xlsx' : '.xls,.xlsx,.csv'" @change="onFilePicked" />
+          <span class="upload-status" :class="selectedFiles.length ? 'ready' : 'empty'">
+            {{ selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件` : '未选择' }}
           </span>
-          <button class="btn btn-xs btn-ghost" :disabled="!selectedFile" @click="selectedFile = null">清除</button>
+          <button class="btn btn-xs btn-ghost" :disabled="!selectedFiles.length" @click="selectedFiles = []">清除</button>
         </div>
 
         <div v-if="errorText" class="personnel-error-panel">
@@ -65,15 +65,28 @@
         <button class="btn btn-sm btn-outline" @click="loadBatches">刷新</button>
       </div>
       <div class="card-body">
+        <div v-if="batches.length" class="batch-selection-bar">
+          <label class="batch-select-all"><input type="checkbox" :checked="allBatchesSelected" @change="toggleAllBatches" /> 全选当前页</label>
+          <span>已选择 {{ selectedBatchIds.length }} 项</span>
+          <button class="btn btn-xs btn-ghost" :disabled="!selectedBatchIds.length" @click="selectedBatchIds = []">取消选择</button>
+        </div>
         <div v-if="!batches.length" class="empty-inline">当前月份尚未导入该类数据。</div>
         <div v-else class="download-grid">
-          <a v-for="batch in batches" :key="batch.id" class="download-item" :href="batch.download_url" target="_blank">
+          <div v-for="batch in batches" :key="batch.id" class="download-item">
+            <input type="checkbox" :checked="selectedBatchIds.includes(batch.id)" @change="toggleBatch(batch.id)" />
+            <a class="download-item-link" :href="batch.download_url" target="_blank">
             <el-icon><Download /></el-icon>
             <span class="download-text">
               <strong>{{ batch.original_name }}</strong>
               <small>{{ typeLabel(batch.import_type) }} · {{ batch.row_count }} 行 · {{ batch.created_at }}</small>
             </span>
-          </a>
+            </a>
+            <div v-if="batch.file_results?.length" class="file-results">
+              <div v-for="result in batch.file_results" :key="`${batch.id}-${result.file_name}`" class="file-result-row">
+                <span>{{ result.file_name }}</span><span>{{ result.status === 'success' ? '成功' : '失败' }}</span><span v-if="result.error">{{ result.error }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -94,7 +107,8 @@ import {
 const props = defineProps<{ periodId: number | null }>()
 
 const importType = ref<ReconciliationImportType>('bank_statement')
-const selectedFile = ref<File | null>(null)
+const selectedFiles = ref<File[]>([])
+const selectedBatchIds = ref<number[]>([])
 const batches = ref<ReconciliationImportBatch[]>([])
 const loading = ref(false)
 const errorText = ref('')
@@ -107,7 +121,8 @@ let fetchTimer: number | undefined
 const fetchRunning = computed(() => ['starting', 'running', 'waiting-login', 'importing'].includes(fetchStatus.value.status))
 
 const importTypeLabel = computed(() => typeLabel(importType.value))
-const canImport = computed(() => !!props.periodId && !!selectedFile.value)
+const canImport = computed(() => !!props.periodId && selectedFiles.value.length > 0)
+const allBatchesSelected = computed(() => batches.value.length > 0 && batches.value.every((batch) => selectedBatchIds.value.includes(batch.id)))
 
 onMounted(() => { loadBatches(); pollBankFetch(); fetchTimer = window.setInterval(pollBankFetch, 1500) })
 onBeforeUnmount(() => window.clearInterval(fetchTimer))
@@ -126,7 +141,7 @@ function typeLabel(type: ReconciliationImportType) {
 }
 
 function onFilePicked(event: Event) {
-  selectedFile.value = (event.target as HTMLInputElement).files?.[0] || null
+  selectedFiles.value = Array.from((event.target as HTMLInputElement).files || [])
   errorText.value = ''
 }
 
@@ -140,16 +155,28 @@ async function loadBatches() {
   if (!props.periodId) return
   const { data } = await reconciliationImportApi.list(props.periodId, importType.value)
   batches.value = data
+  selectedBatchIds.value = selectedBatchIds.value.filter((id) => data.some((batch) => batch.id === id))
+}
+
+function toggleBatch(id: number) {
+  selectedBatchIds.value = selectedBatchIds.value.includes(id)
+    ? selectedBatchIds.value.filter((item) => item !== id)
+    : [...selectedBatchIds.value, id]
+}
+
+function toggleAllBatches() {
+  selectedBatchIds.value = allBatchesSelected.value ? [] : batches.value.map((batch) => batch.id)
 }
 
 async function importFile() {
-  if (!props.periodId || !selectedFile.value) return
+  if (!props.periodId || !selectedFiles.value.length) return
   loading.value = true
   errorText.value = ''
   try {
-    await reconciliationImportApi.importFile(selectedFile.value, props.periodId, importType.value)
-    selectedFile.value = null
-    ElMessage.success('导入完成')
+    const { data } = await reconciliationImportApi.importFiles(selectedFiles.value, props.periodId, importType.value)
+    selectedFiles.value = []
+    const failures = data.validation_issues?.length || 0
+    ElMessage[failures ? 'warning' : 'success'](failures ? `批量导入完成，${failures} 项需要处理` : '批量导入完成')
     await loadBatches()
   } catch (error: any) {
     errorText.value = formatError(error)
@@ -167,4 +194,5 @@ async function stopBankFetch() { fetchStatus.value = (await bankFetchApi.stop())
 
 <style scoped>
 .bank-fetch-grid{display:grid;grid-template-columns:minmax(260px,1fr) 180px 180px;gap:12px;align-items:end}.bank-fetch-grid label{display:flex;flex-direction:column;gap:6px}.bank-fetch-grid textarea,.bank-fetch-grid input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #d0d5dd;border-radius:4px;font:inherit}.bank-fetch-grid .action-bar{grid-column:1/-1}@media(max-width:800px){.bank-fetch-grid{grid-template-columns:1fr}}
+.batch-selection-bar{display:flex;align-items:center;gap:14px;margin-bottom:10px;color:var(--el-text-color-secondary);font-size:13px}.batch-select-all{display:flex;align-items:center;gap:6px}.download-item{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}.download-item-link{display:flex;align-items:flex-start;gap:10px;min-width:0;flex:1}.file-results{flex-basis:100%;padding-left:28px;border-top:1px solid var(--el-border-color-lighter);font-size:12px}.file-result-row{display:grid;grid-template-columns:minmax(160px,1fr) 48px minmax(160px,2fr);gap:8px;padding:5px 0}.file-result-row span:nth-child(2){font-weight:600}.file-result-row span:last-child{color:var(--el-color-danger)}
 </style>
