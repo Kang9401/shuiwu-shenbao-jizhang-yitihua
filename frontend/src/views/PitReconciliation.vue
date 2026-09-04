@@ -82,11 +82,41 @@ function pitCellClassName({ row, column }: { row: TableRow; column: { property?:
   if (value === null || value === undefined || value === '') return 'pit-cell-diff-missing'
   return Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0.01 ? 'pit-cell-diff-alert' : ''
 }
-function sumField(rows: TableRow[], field: string) { return rows.reduce((total, row) => { const value = Number(row[field]); return Number.isFinite(value) ? total + value : total }, 0) }
+function summarizeField(rows: TableRow[], field: string) {
+  let total = 0
+  let missingCount = 0
+  for (const row of rows) {
+    const raw = row[field]
+    if (raw === null || raw === undefined || raw === '') {
+      missingCount += 1
+      continue
+    }
+    const value = Number(raw)
+    if (!Number.isFinite(value)) {
+      missingCount += 1
+      continue
+    }
+    total += value
+  }
+  return { total, missingCount }
+}
 const summarySumFields = new Set(['declared_tax_amount','balance_tax_amount','difference_1','scoped_declared_tax_amount','payroll_business_tax_amount','difference_2','taxable_income_difference','certificate_tax_amount','difference_4','bank_tax_amount','difference_5','broker_occurrence_difference','other_income_difference'])
 const taxSumFields = new Set(['opening_balance','debit_amount','credit_amount','closing_balance','business_tax_amount','declared_tax_amount','current_difference','cumulative_difference','scoped_declared_tax_amount','business_declared_difference'])
 const occurrenceSumFields = new Set(['opening_balance','debit_amount','credit_amount','closing_balance','occurrence_amount','broker_payroll_amount','broker_occurrence_difference','expected_declared_income','actual_declared_income','declared_income_difference'])
-function tableSummary(fields: Set<string>, { columns, data }: { columns: Array<{ property?: string }>; data: TableRow[] }) { return columns.map((column, index) => { if (index === 0) return '合计'; const field = column.property; return field && fields.has(field) ? formatMoney(sumField(data, field)) : '' }) }
+function tableSummary(fields: Set<string>, { columns, data }: { columns: Array<{ property?: string }>; data: TableRow[] }) {
+  return columns.map((column, index) => {
+    if (index === 0) return '合计'
+    const field = column.property
+    if (!field || !fields.has(field)) return ''
+    const { total, missingCount } = summarizeField(data, field)
+    const nonZeroDifference = differenceFields.has(field) && isDifference(total)
+    if (!missingCount && !nonZeroDifference) return formatMoney(total)
+    return h('span', {
+      class: ['pit-summary-value', nonZeroDifference ? 'pit-summary-diff-alert' : '', missingCount ? 'pit-summary-incomplete' : ''],
+      title: missingCount ? `当前合计基于已有有效数据，存在 ${missingCount} 条缺失记录` : undefined,
+    }, `${missingCount ? '⚠ ' : ''}${formatMoney(total)}`)
+  })
+}
 function summarySummaryMethod(context: { columns: Array<{ property?: string }>; data: TableRow[] }) { return tableSummary(summarySumFields, context) }
 function taxSummaryMethod(context: { columns: Array<{ property?: string }>; data: TableRow[] }) { return tableSummary(taxSumFields, context) }
 function occurrenceSummaryMethod(context: { columns: Array<{ property?: string }>; data: TableRow[] }) { return tableSummary(occurrenceSumFields, context) }
@@ -167,6 +197,9 @@ const DetailDifferenceColumn = defineComponent({ props:{ label:{ type:String,req
 .pit-table-wrap :deep(th.pit-header-occurrence) { background:#f2ebfb; color:#65419a; }
 .pit-table-wrap :deep(th.pit-header-difference) { background:#fde8e8; color:#b42318; }
 .pit-reconciliation-table :deep(.el-table__footer-wrapper td) { font-weight:700; background:#f5f7fa; border-top:2px solid var(--el-border-color); }
+.pit-reconciliation-table :deep(.el-table__footer-wrapper td:has(.pit-summary-incomplete)) { background:#fffbe6; }
+.pit-summary-incomplete { color:#ad6800; font-weight:700; cursor:help; }
+.pit-summary-diff-alert { color:#cf1322; font-weight:700; }
 .pit-reconciliation-table :deep(td.pit-cell-diff-alert) { background:#fff1f0 !important; }
 .pit-reconciliation-table :deep(td.pit-cell-diff-alert .cell) { color:#cf1322; font-weight:700; }
 .pit-reconciliation-table :deep(td.pit-cell-diff-missing) { background:#fffbe6 !important; }

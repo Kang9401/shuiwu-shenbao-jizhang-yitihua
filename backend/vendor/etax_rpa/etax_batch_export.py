@@ -16,7 +16,13 @@ from playwright.sync_api import sync_playwright
 
 try:
     from etax_report_download import TaskCancelled, check_cancelled, interruptible_wait
-    from etax_popup_guard import handle_configured_popups, install_popup_guard, set_popup_guard_context, set_popup_step
+    from etax_popup_guard import (
+        handle_configured_popups,
+        install_popup_guard,
+        mark_rpa_progress,
+        set_popup_guard_context,
+        set_popup_step,
+    )
 except ImportError:  # Source-tree execution before runtime synchronization.
     extension_dir = Path(__file__).parents[2] / "app" / "rpa" / "extensions"
     if str(extension_dir) not in sys.path:
@@ -25,6 +31,7 @@ except ImportError:  # Source-tree execution before runtime synchronization.
     from etax_popup_guard import (  # type: ignore[no-redef]
         install_popup_guard,
         handle_configured_popups,
+        mark_rpa_progress,
         set_popup_guard_context,
         set_popup_step,
     )
@@ -399,6 +406,7 @@ def switch_org(page: Page, org: TaxOrg) -> None:
     # 新版提醒可能在扣缴端首页完成渲染后延迟出现。
     page.wait_for_timeout(1000)
     close_common_popups(page)
+    mark_rpa_progress("org_switched", page)
     set_popup_step("workflow")
 
 
@@ -411,6 +419,7 @@ def set_tax_month(page: Page, target_month: str) -> None:
     current_value = month_input.input_value(timeout=3000)
     if current_value == target_label:
         log(f"税款所属月份已是：{target_label}")
+        mark_rpa_progress("month_selected", page)
         return
 
     log(f"切换税款所属月份：{current_value} -> {target_label}")
@@ -431,6 +440,7 @@ def set_tax_month(page: Page, target_month: str) -> None:
     if actual_value != target_label:
         raise RuntimeError(f"税款所属月份切换失败，当前值：{actual_value}，目标值：{target_label}")
     log(f"税款所属月份已切换为：{target_label}")
+    mark_rpa_progress("month_selected", page)
     set_popup_step("workflow")
 
 
@@ -439,6 +449,7 @@ def enter_salary_page(page: Page, target_month: str) -> None:
     if "income_declaration/salary" in page.url:
         log("当前已在正常工资薪金所得明细页")
         set_tax_month(page, target_month)
+        mark_rpa_progress("salary_page_opened", page)
         return
 
     click_text(page, "扣缴申报", exact=False)
@@ -453,6 +464,7 @@ def enter_salary_page(page: Page, target_month: str) -> None:
     page.wait_for_load_state("domcontentloaded", timeout=20000)
     page.wait_for_timeout(1500)
     close_common_popups(page)
+    mark_rpa_progress("salary_page_opened", page)
 
 
 def table_has_salary_rows(page: Page) -> bool:

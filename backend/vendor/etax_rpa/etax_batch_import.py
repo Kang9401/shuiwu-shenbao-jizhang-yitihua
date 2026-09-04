@@ -27,6 +27,7 @@ from etax_batch_export import (
     interruptible_wait,
     log,
     make_context,
+    mark_rpa_progress,
     month_label,
     read_orgs_from_excel,
     set_popup_context,
@@ -155,6 +156,7 @@ def open_import_dialog(page: Page) -> Page:
         click_text(page, "导入文件", exact=False, timeout=8000)
     dialog = visible_dialog(page, "文件导入")
     dialog.wait_for(state="visible", timeout=15000)
+    mark_rpa_progress("import_dialog_opened", page)
     return dialog
 
 
@@ -198,6 +200,7 @@ def clear_existing_data(page: Page, task: ImportTask) -> None:
             )
         set_popup_step("clear_data", "click_clear_data")
         clear_item.click()
+        mark_rpa_progress("clear_data_clicked", page)
         dialogs = page.locator(
             ".el-message-box__wrapper:visible, .el-dialog:visible, [role='dialog']:visible"
         )
@@ -227,6 +230,7 @@ def clear_existing_data(page: Page, task: ImportTask) -> None:
             raise RuntimeError(f"清空数据确认按钮不唯一：{task.label}")
         buttons.first.click()
         confirmation.wait_for(state="hidden", timeout=CLEAR_CONFIRMATION_WAIT_SECONDS * 1000)
+        mark_rpa_progress("clear_data_confirmed", page)
         page.wait_for_timeout(1200)
         close_common_popups(page)
         set_popup_step("workflow")
@@ -268,6 +272,7 @@ def wait_import_success(page: Page, filename: str, *, max_wait_seconds: int) -> 
             log(f"导入结果：{last_status[:160]}")
             if "成功" in row_text and "失败" not in row_text:
                 log(f"文件导入成功：{filename}")
+                mark_rpa_progress("import_result_success", page)
                 return
             if "失败" in row_text:
                 raise RuntimeError(f"文件导入失败：{filename}；结果行：{last_status}")
@@ -384,8 +389,10 @@ def upload_and_verify(page: Page, file_path: Path, *, label: str, max_wait_secon
     log(f"开始上传：{label} -> {file_path.name}")
     dialog = open_import_dialog(page)
     choose_input_file(dialog, file_path)
+    mark_rpa_progress("file_selected", page)
     log(f"已选择文件：{file_path}")
     page.wait_for_timeout(1500)
+    mark_rpa_progress("import_submitted", page)
     wait_import_success(page, file_path.name, max_wait_seconds=max_wait_seconds)
     close_import_dialog(page)
 

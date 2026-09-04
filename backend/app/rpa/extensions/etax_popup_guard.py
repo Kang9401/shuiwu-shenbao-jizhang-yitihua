@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import sys
@@ -41,7 +42,16 @@ PROTECTED_MARKERS = (
     "其他窗口进行了单位切换",
 )
 GENERIC_REMINDER_KEYWORDS = {"温馨提示", "温 馨 提 示"}
-_CONTEXT = {"org_code": "", "month": "", "task": "", "step": "workflow", "trigger": ""}
+UNKNOWN_POPUP_TIMEOUT_SECONDS = 60.0
+_CONTEXT = {
+    "org_code": "",
+    "month": "",
+    "task": "",
+    "step": "workflow",
+    "trigger": "",
+    "last_progress_at": time.monotonic(),
+    "last_progress_event": "guard_initialized",
+}
 _TASK_BY_SCRIPT = {
     "etax_batch_export.py": "special_deduction",
     "etax_batch_import.py": "import",
@@ -120,6 +130,28 @@ def set_popup_guard_context(
 
 def set_popup_step(step: str, trigger: str = "") -> None:
     set_popup_guard_context(step=step, trigger=trigger)
+
+
+def mark_rpa_progress(event: str, page: Any | None = None) -> None:
+    """Mark effective workflow progress and reconcile deferred popups when possible."""
+    _CONTEXT["last_progress_at"] = time.monotonic()
+    _CONTEXT["last_progress_event"] = str(event or "workflow_progress")
+    if page is None:
+        return
+    guard_state = getattr(page, "_etax_popup_guard_state", None)
+    if not isinstance(guard_state, dict):
+        return
+    try:
+        drain_unexpected_popups(
+            page,
+            log=guard_state["log"],
+            record_dir=guard_state["record_dir"],
+            protected_markers=guard_state["protected_markers"],
+            rules=guard_state["rules"],
+            enforce_timeout=False,
+        )
+    except Exception as exc:
+        guard_state["log"](f"popup_guard_checkpoint_failed：事件={event}；原因={exc}")
 
 
 def _compact(value: Any, limit: int = 1000) -> str:
@@ -213,6 +245,61 @@ def _matching_rule(rules: Iterable[dict[str, Any]], text: str) -> dict[str, Any]
     return next((rule for rule in rules if _rule_matches(rule, text)), None)
 
 
+def _popup_title(popup: Any) -> str:
+    selector = ".el-message-box__title, .el-dialog__title, .ant-modal-title, [role='heading']"
+    try:
+        titles = popup.locator(selector).filter(visible=True)
+        if titles.count() > 0:
+            return _compact(titles.first.inner_text(timeout=500), limit=200)
+    except Exception:
+        pass
+    return ""
+
+
+def _popup_buttons(popup: Any) -> list[str]:
+    try:
+        values = popup.locator("button:visible").all_inner_texts()
+    except Exception:
+        return []
+    return [text for value in values if (text := _compact(value, limit=100))]
+
+
+def _popup_fingerprint(*, title: str, text: str, buttons: Iterable[str]) -> str:
+    source = json.dumps(
+        {
+            "step": _CONTEXT["step"],
+            "trigger": _CONTEXT["trigger"],
+            "title": _compact(title),
+            "text": _compact(text),
+            "buttons": [_compact(button) for button in buttons],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _unknown_registry(page: Any) -> dict[str, dict[str, Any]]:
+    registry = getattr(page, "_etax_unknown_popups", None)
+    if not isinstance(registry, dict):
+        registry = {}
+        setattr(page, "_etax_unknown_popups", registry)
+    return registry
+
+
+def _timeout_screenshot(page: Any, record_dir: Path | None, fingerprint: str) -> str:
+    if record_dir is None:
+        return ""
+    record_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = record_dir / f"popup_blocked_{timestamp}_{fingerprint[:10]}.png"
+    try:
+        page.screenshot(path=str(path), full_page=True)
+    except Exception:
+        return ""
+    return str(path)
+
+
 def handle_configured_popups(
     page: Any,
     *,
@@ -295,6 +382,7 @@ def handle_configured_popups(
             f"步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
             f"机构代码={payload['org_code'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
+        mark_rpa_progress("popup_rule_applied")
         handled += 1
         page.wait_for_timeout(300)
     return handled
@@ -308,54 +396,137 @@ def drain_unexpected_popups(
     protected_markers: Iterable[str] = PROTECTED_MARKERS,
     max_popups: int = 8,
     confirmation_delay_ms: int = 4000,
+    rules: list[dict[str, Any]] | None = None,
+    timeout_seconds: float = UNKNOWN_POPUP_TIMEOUT_SECONDS,
+    enforce_timeout: bool = True,
 ) -> int:
-    """Record and stop on an unconfigured dialog that still blocks after a delay."""
-    handled = 0
-    for _ in range(max_popups):
-        dialogs = page.locator(DIALOG_SELECTOR)
-        candidate = None
-        candidate_text = ""
-        for index in range(dialogs.count()):
-            popup = dialogs.nth(index)
-            try:
-                text = _compact(popup.inner_text(timeout=1500))
-            except Exception:
-                continue
-            if _is_protected_popup(popup, text, protected_markers):
-                continue
-            candidate = popup
-            candidate_text = text
-            break
-        if candidate is None:
-            break
+    """Observe unknown dialogs without taking over the original workflow."""
+    del confirmation_delay_ms  # Kept for compatibility with older callers.
+    rules = _load_popup_rules() if rules is None else rules
+    registry = _unknown_registry(page)
+    now = time.monotonic()
+    now_iso = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    visible: dict[str, dict[str, Any]] = {}
+    dialogs = page.locator(DIALOG_SELECTOR)
 
-        page.wait_for_timeout(confirmation_delay_ms)
+    for index in range(min(dialogs.count(), max_popups)):
+        popup = dialogs.nth(index)
         try:
-            if not candidate.is_visible():
-                continue
-        except AttributeError:
-            if not getattr(candidate, "visible", True):
-                continue
-        try:
-            candidate_text = _compact(candidate.inner_text(timeout=1500))
+            text = _compact(popup.inner_text(timeout=1500))
         except Exception:
             continue
-        if _is_protected_popup(candidate, candidate_text, protected_markers):
+        if _is_protected_popup(popup, text, protected_markers):
             continue
+        if _matching_rule(rules, text) is not None:
+            continue
+        title = _popup_title(popup)
+        buttons = _popup_buttons(popup)
+        fingerprint = _popup_fingerprint(title=title, text=text, buttons=buttons)
+        visible[fingerprint] = {"title": title, "text": text, "buttons": buttons}
 
-        payload = _record(page, candidate_text, "unconfigured_block", record_dir=record_dir, popup_type="dom")
+    for fingerprint, entry in list(registry.items()):
+        if fingerprint in visible:
+            continue
+        duration = max(0.0, now - float(entry["first_seen_monotonic"]))
+        payload = _record(
+            page,
+            entry["text"],
+            "workflow",
+            record_dir=record_dir,
+            popup_type="dom",
+            extra={
+                "event": "popup_unknown_resolved",
+                "resolution": "workflow",
+                "fingerprint": fingerprint,
+                "title": entry["title"],
+                "buttons": entry["buttons"],
+                "first_seen_at": entry["first_seen_at"],
+                "last_seen_at": entry["last_seen_at"],
+                "duration": round(duration, 3),
+            },
+        )
         log(
-            "popup_unconfigured_blocked："
-            f"类型=页面弹窗；步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
-            f"机构代码={payload['org_code'] or '未知'}；"
-            f"税款所属期={payload['month'] or '未知'}；内容={payload['content'] or '<空>'}"
+            "popup_unknown_resolved：resolution=workflow；"
+            f"duration={payload['duration']}s；步骤={payload['step'] or '未知'}；"
+            f"触发={payload['trigger'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
-        # Unknown dialogs are never safe to dismiss: the first button may be
-        # a destructive business action such as submit, delete, or clear.
+        del registry[fingerprint]
+
+    detected = 0
+    for fingerprint, snapshot in visible.items():
+        entry = registry.get(fingerprint)
+        if entry is None:
+            entry = {
+                **snapshot,
+                "first_seen_at": now_iso,
+                "last_seen_at": now_iso,
+                "first_seen_monotonic": now,
+            }
+            registry[fingerprint] = entry
+            payload = _record(
+                page,
+                snapshot["text"],
+                "defer_to_workflow",
+                record_dir=record_dir,
+                popup_type="dom",
+                extra={
+                    "event": "popup_unknown_detected",
+                    "action": "defer_to_workflow",
+                    "fingerprint": fingerprint,
+                    "title": snapshot["title"],
+                    "buttons": snapshot["buttons"],
+                    "first_seen_at": now_iso,
+                    "last_seen_at": now_iso,
+                },
+            )
+            log(
+                "popup_unknown_detected：action=defer_to_workflow；"
+                f"步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
+                f"机构代码={payload['org_code'] or '未知'}；"
+                f"税款所属期={payload['month'] or '未知'}；内容={payload['content'] or '<空>'}"
+            )
+            detected += 1
+        else:
+            entry["last_seen_at"] = now_iso
+
+        if not enforce_timeout:
+            continue
+        popup_age = now - float(entry["first_seen_monotonic"])
+        no_progress = now - float(_CONTEXT["last_progress_at"])
+        if popup_age < timeout_seconds or no_progress < timeout_seconds:
+            continue
+        blocked_seconds = min(popup_age, no_progress)
+        screenshot = _timeout_screenshot(page, record_dir, fingerprint)
+        payload = _record(
+            page,
+            entry["text"],
+            "stop_rpa",
+            record_dir=record_dir,
+            popup_type="dom",
+            extra={
+                "event": "popup_blocked_timeout",
+                "fingerprint": fingerprint,
+                "title": entry["title"],
+                "buttons": entry["buttons"],
+                "first_seen_at": entry["first_seen_at"],
+                "last_seen_at": entry["last_seen_at"],
+                "blocked_seconds": round(blocked_seconds, 3),
+                "last_progress_event": _CONTEXT["last_progress_event"],
+                "screenshot": screenshot,
+            },
+        )
+        log(
+            "popup_blocked_timeout："
+            f"blocked_seconds={payload['blocked_seconds']}；步骤={payload['step'] or '未知'}；"
+            f"触发={payload['trigger'] or '未知'}；机构代码={payload['org_code'] or '未知'}；"
+            f"税款所属期={payload['month'] or '未知'}；截图={screenshot or '保存失败'}；"
+            f"内容={payload['content'] or '<空>'}"
+        )
         raise RuntimeError(
-            f"检测到未配置弹窗，RPA 已停止，避免误操作：{candidate_text[:200]}"
+            f"未知弹窗持续阻塞且业务流程超过 {int(timeout_seconds)} 秒无进展，RPA 已停止："
+            f"{entry['text'][:200]}"
         )
-    return handled
+    return detected
 
 
 def install_popup_guard(
@@ -373,8 +544,12 @@ def install_popup_guard(
         _CONTEXT["task"] = _task_from_runtime()
     setattr(page, "_etax_popup_guard_installed", True)
     configured_rules = _load_popup_rules()
-    configured_markers = tuple(str(rule.get("keyword") or "") for rule in configured_rules)
-    effective_protected_markers = tuple(protected_markers) + configured_markers
+    setattr(page, "_etax_popup_guard_state", {
+        "log": log,
+        "record_dir": record_dir,
+        "protected_markers": tuple(protected_markers),
+        "rules": configured_rules,
+    })
 
     def handle_native(dialog: Any) -> None:
         text = _compact(getattr(dialog, "message", ""))
@@ -399,16 +574,30 @@ def install_popup_guard(
                 f"内容={payload['content'] or '<空>'}"
             )
             return
-        time.sleep(4)
-        payload = _record(page, text, "unconfigured_pause", record_dir=record_dir, popup_type="browser")
+        fingerprint = _popup_fingerprint(title="browser_dialog", text=text, buttons=[])
+        seen = getattr(page, "_etax_native_unknown_popups", set())
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        setattr(page, "_etax_native_unknown_popups", seen)
+        payload = _record(
+            page,
+            text,
+            "defer_to_workflow",
+            record_dir=record_dir,
+            popup_type="browser",
+            extra={
+                "event": "popup_unknown_detected",
+                "action": "defer_to_workflow",
+                "fingerprint": fingerprint,
+            },
+        )
         log(
-            "popup_unconfigured_paused："
+            "popup_unknown_detected：action=defer_to_workflow；"
             f"类型=浏览器弹窗；步骤={payload['step'] or '未知'}；触发={payload['trigger'] or '未知'}；"
             f"机构代码={payload['org_code'] or '未知'}；"
             f"税款所属期={payload['month'] or '未知'}；内容={payload['content'] or '<空>'}"
         )
-        dialog.dismiss()
-        raise RuntimeError(f"检测到未配置浏览器弹窗，已记录并暂停任务：{payload['content']}")
 
     page.on("dialog", handle_native)
     # During dialog transitions the old modal and the next modal can both be
@@ -431,7 +620,8 @@ def install_popup_guard(
             page,
             log=log,
             record_dir=record_dir,
-            protected_markers=effective_protected_markers,
+            protected_markers=protected_markers,
+            rules=configured_rules,
         )
 
     page.add_locator_handler(

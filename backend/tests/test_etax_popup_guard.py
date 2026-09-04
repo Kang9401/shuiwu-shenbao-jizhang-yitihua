@@ -57,6 +57,7 @@ class FakePage:
         self.waits = []
         self.events = {}
         self.locator_handler = None
+        self.screenshots = []
 
     def locator(self, _selector):
         return FakeDialogs(self.popups)
@@ -70,29 +71,40 @@ class FakePage:
     def add_locator_handler(self, _locator, handler, **_kwargs):
         self.locator_handler = handler
 
+    def screenshot(self, **kwargs):
+        self.screenshots.append(kwargs)
 
-def test_guard_records_and_closes_unexpected_popups_but_preserves_workflow_dialog(tmp_path):
+
+def test_guard_defers_unknown_popup_and_records_workflow_resolution(tmp_path):
     unexpected_before_month = FakePopup("系统繁忙额外提醒，请稍后处理")
     workflow_dialog = FakePopup("文件导入 导入结果")
     page = FakePage([unexpected_before_month, workflow_dialog])
     logs = []
     module.set_popup_guard_context(org_code="10001", month="2026-08", task="special_deduction")
 
-    closed = module.drain_unexpected_popups(page, log=logs.append, record_dir=tmp_path)
+    detected = module.drain_unexpected_popups(page, log=logs.append, record_dir=tmp_path, rules=[])
 
-    assert closed == 1
-    assert unexpected_before_month.visible is False
+    assert detected == 1
+    assert unexpected_before_month.visible is True
     assert workflow_dialog.visible is True
     assert "系统繁忙额外提醒" in logs[0]
-    record = json.loads((tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").strip())
-    assert record["org_code"] == "10001"
-    assert record["month"] == "2026-08"
-    assert record["task"] == "special_deduction"
-    assert record["content"] == "系统繁忙额外提醒，请稍后处理"
-    assert "secret" not in record["url"]
+    first_record = json.loads((tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").strip())
+    assert first_record["event"] == "popup_unknown_detected"
+    assert first_record["action"] == "defer_to_workflow"
+    assert first_record["org_code"] == "10001"
+    assert first_record["month"] == "2026-08"
+    assert first_record["task"] == "special_deduction"
+    assert first_record["content"] == "系统繁忙额外提醒，请稍后处理"
+    assert "secret" not in first_record["url"]
+
+    unexpected_before_month.visible = False
+    module.drain_unexpected_popups(page, log=logs.append, record_dir=tmp_path, rules=[])
+    records = [json.loads(line) for line in (tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["event"] == "popup_unknown_resolved"
+    assert records[-1]["resolution"] == "workflow"
 
 
-def test_installed_guard_handles_popups_before_and_after_month_selection(tmp_path):
+def test_installed_guard_deduplicates_unknown_popups(tmp_path):
     before = FakePopup("选择月份前提醒")
     page = FakePage([before])
 
@@ -103,14 +115,22 @@ def test_installed_guard_handles_popups_before_and_after_month_selection(tmp_pat
     assert not (tmp_path / "popup_events.jsonl").exists()
     assert callable(page.locator_handler)
     page.locator_handler()
-    assert before.visible is False
+    assert before.visible is True
+    page.locator_handler()
+    assert len((tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+    before.visible = False
     after = FakePopup("选择月份后提醒")
     page.popups.append(after)
     page.locator_handler()
-    assert after.visible is False
-    assert page.waits == [4000, 300, 4000, 300]
+    assert after.visible is True
+    assert page.waits == []
     records = [json.loads(line) for line in (tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [record["content"] for record in records] == ["选择月份前提醒", "选择月份后提醒"]
+    assert [record["event"] for record in records] == [
+        "popup_unknown_detected",
+        "popup_unknown_resolved",
+        "popup_unknown_detected",
+    ]
 
 
 def test_blocking_guard_does_not_close_known_workflow_dialog(tmp_path):
@@ -146,8 +166,31 @@ def test_blocking_guard_runs_known_handler_before_unknown_fallback(tmp_path):
 
     assert handled == ["未注册个税APP提醒"]
     assert known.visible is False
-    assert unexpected.visible is False
-    assert page.waits == [4000, 300]
+    assert unexpected.visible is True
+    assert page.waits == []
+
+
+def test_unknown_popup_stops_only_after_popup_and_progress_timeout(tmp_path):
+    popup = FakePopup("无法识别的新提示")
+    page = FakePage([popup])
+    logs = []
+
+    module.drain_unexpected_popups(page, log=logs.append, record_dir=tmp_path, rules=[])
+    entry = next(iter(page._etax_unknown_popups.values()))
+    entry["first_seen_monotonic"] -= 61.0
+    module._CONTEXT["last_progress_at"] = module.time.monotonic() - 61.0
+
+    try:
+        module.drain_unexpected_popups(page, log=logs.append, record_dir=tmp_path, rules=[])
+    except RuntimeError as exc:
+        assert "超过 60 秒无进展" in str(exc)
+    else:
+        raise AssertionError("unknown popup watchdog did not stop the blocked workflow")
+
+    records = [json.loads(line) for line in (tmp_path / "popup_events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["event"] == "popup_blocked_timeout"
+    assert records[-1]["blocked_seconds"] >= 60.0
+    assert page.screenshots
 
 
 def test_protected_marker_matching_ignores_spaces_between_chinese_characters():
