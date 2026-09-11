@@ -16,8 +16,26 @@ storage/artifacts/
 storage/backups/
 storage/logs/
 storage/temp/
+storage/rpa/
+backend/vendor/etax_rpa/input/
+backend/vendor/etax_rpa/output/
+backend/vendor/etax_rpa/.chrome-debug-profile/
+backend/vendor/etax_rpa/.chrome-etax-profile/
+backend/vendor/etax_rpa/机构信息表.xlsx
+**/etax_config.json
 *.sqlite3
+*.sqlite
 *.db
+*.diff
+*.xls
+*.xlsx
+!backend/resources/
+!backend/resources/*.xlsx
+/database/
+/databases/
+/backend/database/
+/backend/databases/
+/etax_github_source_20260714/
 
 # Local business data and generated tax-workbook artifacts. Keep only the
 # placeholder so the runtime storage directory exists after checkout.

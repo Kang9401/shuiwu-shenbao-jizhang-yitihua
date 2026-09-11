@@ -4,6 +4,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -19,10 +20,40 @@ import uvicorn
 
 from app.core.config import settings
 from app.core.version import APP_SLUG, PRODUCT_NAME
+from app.core.paths import resource_root
 from app.main import app
 
 
 _mutex_handle = None
+_monitor_window = None
+_desktop_exiting = False
+
+
+class DesktopWindowManager:
+    def open_rpa_monitor(self) -> dict:
+        if _monitor_window is None:
+            return {"opened": False, "message": "监控窗口尚未初始化"}
+        _monitor_window.show()
+        _monitor_window.restore()
+        return {"opened": True}
+
+    def hide_rpa_monitor(self) -> dict:
+        if _monitor_window is not None:
+            _monitor_window.hide()
+        return {"hidden": True}
+
+    def choose_directory(self, initial_path: str = "") -> dict:
+        import webview
+
+        window = webview.windows[0] if webview.windows else None
+        if window is None:
+            return {"path": ""}
+        result = window.create_file_dialog(
+            webview.FOLDER_DIALOG,
+            directory=initial_path if initial_path and Path(initial_path).is_dir() else "",
+            allow_multiple=False,
+        )
+        return {"path": str(result[0]) if result else ""}
 
 
 def _message(title: str, content: str) -> None:
@@ -47,6 +78,28 @@ def _find_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def resource_path(relative: str | os.PathLike[str]) -> Path:
+    """Resolve a bundled resource in both source and frozen execution."""
+    return resource_root() / Path(relative)
+
+
+def _validate_frontend_dist(frontend_dir: Path | None = None) -> Path:
+    root = (frontend_dir or settings.frontend_dist_dir).resolve()
+    index_file = root / "index.html"
+    if not index_file.is_file():
+        raise FileNotFoundError(f"前端首页不存在：{index_file}")
+    text = index_file.read_text(encoding="utf-8", errors="replace")
+    if '<div id="app"></div>' not in text:
+        raise RuntimeError("前端首页缺少应用挂载节点")
+    for asset in re.findall(r"(?:src|href)=\"([^\"]+)\"", text):
+        if asset.startswith(("http://", "https://", "data:", "#")):
+            continue
+        asset_path = (root / asset.lstrip("/")).resolve()
+        if not asset_path.is_file() or not str(asset_path).lower().startswith(str(root).lower()):
+            raise FileNotFoundError(f"前端静态资源不存在：{asset}")
+    return index_file
+
+
 def _prepare_runtime() -> None:
     for path in (settings.storage_root, settings.upload_dir, settings.artifact_dir, settings.log_dir, settings.temp_dir):
         path.mkdir(parents=True, exist_ok=True)
@@ -67,7 +120,7 @@ def _create_server(port: int, application=app) -> uvicorn.Server:
     return uvicorn.Server(config)
 
 
-def _wait_for_server(url: str, timeout: float = 20.0, thread: threading.Thread | None = None) -> None:
+def _wait_for_server(url: str, timeout: float = 60.0, thread: threading.Thread | None = None) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if thread is not None and not thread.is_alive():
@@ -99,41 +152,40 @@ def _start_server(port: int | None = None, application=app) -> tuple[uvicorn.Ser
 def _stop_server(server: uvicorn.Server, thread: threading.Thread) -> None:
     server.should_exit = True
     thread.join(timeout=5)
+    if thread.is_alive():
+        server.force_exit = True
+        thread.join(timeout=5)
+
+
+def _hide_monitor_on_close(manager: DesktopWindowManager) -> bool:
+    if _desktop_exiting:
+        return True
+    manager.hide_rpa_monitor()
+    return False
+
+
+def _close_monitor_on_main_close() -> bool:
+    global _desktop_exiting
+    _desktop_exiting = True
+    if _monitor_window is not None:
+        _monitor_window.destroy()
+    return True
 
 
 def _verify_frontend(url: str) -> None:
+    _validate_frontend_dist()
     response = httpx.get(url, timeout=5.0, follow_redirects=True)
     response.raise_for_status()
     if '<div id="app"></div>' not in response.text:
         raise RuntimeError("前端首页内容校验失败")
 
 
-def _verify_webview_backend(url: str, timeout: float = 20.0) -> None:
+def _verify_webview_backend() -> None:
     import webview
+    import webview.platforms.winforms
 
-    loaded = threading.Event()
-    window = webview.create_window(
-        "TaxWorkbench Self Test",
-        url,
-        hidden=True,
-    )
-    if window is None:
-        raise RuntimeError("WebView 窗口创建失败")
-
-    def close_after_load() -> None:
-        loaded.set()
-        window.destroy()
-
-    window.events.loaded += close_after_load
-    timer = threading.Timer(timeout, window.destroy)
-    timer.daemon = True
-    timer.start()
-    try:
-        webview.start(debug=False, private_mode=True)
-    finally:
-        timer.cancel()
-    if not loaded.is_set():
-        raise RuntimeError("WebView2 页面加载超时")
+    if not callable(getattr(webview, "create_window", None)):
+        raise RuntimeError("WebView backend is unavailable")
 
 
 def main() -> int:
@@ -141,24 +193,32 @@ def main() -> int:
         server = None
         thread = None
         try:
+            logging.getLogger(__name__).info("Desktop self-test starting; resource_root=%s frontend=%s", resource_root(), settings.frontend_dist_dir)
             _prepare_runtime()
             from app.db.init_db import init_db
+            from app.rpa.runtime import ensure_runtime_app
             import webview
             import webview.platforms.winforms
 
             init_db()
-            index_file = settings.frontend_dist_dir / "index.html"
-            if not index_file.is_file():
-                raise FileNotFoundError(f"前端资源不存在：{index_file}")
+            rpa_runtime = ensure_runtime_app()
+            expected_helpers = (
+                "etax_rpa_runner.exe",
+            )
+            missing_helpers = [name for name in expected_helpers if not (rpa_runtime / name).is_file()]
+            if missing_helpers:
+                raise FileNotFoundError(f"RPA helper executables are missing: {', '.join(missing_helpers)}")
+            index_file = _validate_frontend_dist()
             server, thread, url = _start_server()
             _verify_frontend(url)
-            _verify_webview_backend(url)
+            _verify_webview_backend()
             print(json.dumps({
                 "status": "ok",
                 "data_root": str(settings.storage_root),
                 "frontend": str(index_file),
                 "server": url,
                 "desktop_backend": "webview.platforms.winforms",
+                "rpa_runtime": str(rpa_runtime),
             }, ensure_ascii=False))
             return 0
         except Exception as exc:
@@ -171,19 +231,36 @@ def main() -> int:
         _message(PRODUCT_NAME, "程序已经在运行，请勿重复打开。")
         return 0
     try:
+        global _monitor_window, _desktop_exiting
+        _desktop_exiting = False
         _prepare_runtime()
+        logging.getLogger(__name__).info("Desktop startup: resource_root=%s frontend=%s log_dir=%s", resource_root(), settings.frontend_dist_dir, settings.log_dir)
         server, thread, url = _start_server()
         try:
             import webview
 
-            webview.create_window(
+            manager = DesktopWindowManager()
+            main_window = webview.create_window(
                 PRODUCT_NAME,
                 url,
                 width=1440,
                 height=900,
                 min_size=(1080, 680),
                 text_select=True,
+                js_api=manager,
             )
+            _monitor_window = webview.create_window(
+                "RPA 任务监控",
+                f"{url}/?window=rpa-monitor",
+                width=460,
+                height=640,
+                min_size=(380, 420),
+                hidden=True,
+                text_select=True,
+                js_api=manager,
+            )
+            _monitor_window.events.closing += lambda: _hide_monitor_on_close(manager)
+            main_window.events.closing += _close_monitor_on_main_close
             webview.start(
                 debug=False,
                 private_mode=False,

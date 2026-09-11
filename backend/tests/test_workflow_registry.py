@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +10,7 @@ from app.core.config import settings
 from app.db.session import Base
 from app.models.core import Period, UploadedFile
 from app.models.accounting import PersonnelMasterArtifact
+from app.services.personnel_update import PERSONNEL_COLLECTION_COLUMNS
 from app.workflows import get_workflow, list_workflows
 
 
@@ -126,6 +128,50 @@ def test_tax_workflow_uses_shared_monthly_staff_info_when_not_uploaded(tmp_path,
     db.close()
 
 
+def test_broker_tax_copies_previous_month_master_before_using_shared_staff_info(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session()
+    previous = Period(year=2025, month=1, name="2025-01")
+    current = Period(year=2025, month=2, name="2025-02")
+    db.add_all([previous, current])
+    db.commit()
+    db.refresh(previous)
+    db.refresh(current)
+
+    staff_path = tmp_path / "broker_staff.xlsx"
+    income_path = tmp_path / "broker_income.xlsx"
+    pd.DataFrame([{
+        "员工编号": "1001", "姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "分支机构代码": "10301",
+    }]).to_excel(staff_path, index=False)
+    pd.DataFrame([{"员工编号": "1001", "本期收入": 100, "个人所得税": 10}]).to_excel(income_path, index=False)
+    db.add(PersonnelMasterArtifact(
+        period_id=previous.id, person_type="broker", scope_type="month", scope_code="",
+        file_name=staff_path.name, stored_path=str(staff_path), row_count=1, validation_issues=[],
+    ))
+    db.commit()
+
+    uploaded = UploadedFile(
+        period_id=current.id, file_role="broker_income", original_name=income_path.name,
+        stored_path=str(income_path), size_bytes=income_path.stat().st_size,
+        validation_status="uploaded", validation_issues=[],
+    )
+    result = get_workflow("broker_tax").run(db, 9010, current.id, [uploaded])
+
+    assert result.summary["shared_staff_info"] is True
+    assert db.query(PersonnelMasterArtifact).filter(
+        PersonnelMasterArtifact.period_id == current.id,
+        PersonnelMasterArtifact.person_type == "broker",
+    ).count() == 1
+    declaration = next(Path(path) for kind, path in result.artifact_paths if kind == "declaration")
+    columns = list(pd.read_excel(declaration).columns)
+    assert columns[columns.index("减免税额"):columns.index("备注") + 1] == ["减免税额", "协定减免", "备注"]
+    broker_book = load_workbook(declaration, data_only=True)
+    assert broker_book["Sheet1"]["F2"].data_type == "s"
+    broker_book.close()
+    db.close()
+
+
 def test_restricted_stock_generates_declaration_before_balance_reconciliation(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
     db = _db_session()
@@ -215,6 +261,20 @@ def test_restricted_stock_and_interest_use_separate_tax_templates(tmp_path, monk
     assert sheets["10301_6-利息、股息、红利所得(2025年02月).xlsx"].iloc[0]["*税率"] == "20%"
     assert sheets["10301_7-限售股转让所得(2025年02月).xlsx"].iloc[0]["*每股计税价格(元/股)"] == 10
     assert sheets["10301_6-利息、股息、红利所得(2025年02月).xlsx"].iloc[0]["*收入"] == 100
+    stock_book = load_workbook(next(path for path in declarations if "_7-" in path.name), data_only=True)
+    interest_book = load_workbook(next(path for path in declarations if "_6-" in path.name), data_only=True)
+    assert stock_book["Sheet1"]["K2"].data_type == "s"
+    assert stock_book["Sheet1"]["L2"].data_type == "s"
+    assert interest_book["Sheet1"]["G2"].data_type == "s"
+    stock_book.close()
+    interest_book.close()
+    collection = next(Path(path) for kind, path in result.artifact_paths if kind == "personnel_collection")
+    collection_rows = pd.read_excel(collection, dtype=str).fillna("")
+    stock_collection = collection_rows[collection_rows["*姓名"] == "张三"].iloc[0]
+    interest_collection = collection_rows[collection_rows["*姓名"] == "李四"].iloc[0]
+    assert stock_collection["*证件类型"] == "居民身份证"
+    assert stock_collection["其他情况说明"] == "申报其他所得"
+    assert interest_collection["其他情况说明"] == "扣缴申报利息股息红利所得"
     db.close()
 
 
@@ -282,4 +342,18 @@ def test_intern_workflow_writes_personnel_collection_and_declaration_templates(t
     collection = next(path for (kind, _), path in artifacts.items() if kind == "personnel_collection")
     assert "10367_4-个税申报表_实习生" in declaration.name
     assert "10367_2-人员信息采集_实习生" in collection.name
-    assert list(pd.read_excel(declaration).columns) == ["*姓名", "*证件类型", "证件号码", "*所得项目", "本期收入"]
+    collection_columns = [column for column in PERSONNEL_COLLECTION_COLUMNS if column != "人员状态"]
+    collection_table = pd.read_excel(collection, dtype=str)
+    assert list(collection_table.columns) == collection_columns
+    assert not {"*所得项目", "本期收入", "实习生本期收入"}.intersection(collection_table.columns)
+    intern_row = collection_table.loc[collection_table["*姓名"] == "张三"].iloc[0]
+    assert intern_row["*任职受雇从业类型"] == "实习学生（全日制学历教育）"
+    assert intern_row["任职受雇从业日期"] == "2025-02-01"
+    intern_book = load_workbook(declaration, data_only=True)
+    assert intern_book["Sheet1"]["F2"].data_type == "s"
+    intern_book.close()
+    assert list(pd.read_excel(declaration).columns) == [
+        "工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入",
+        "本期免税收入", "累计个人养老金", "商业健康保险", "税延养老保险", "其他",
+        "允许扣除的税费", "减免税额", "协定减免", "备注",
+    ]

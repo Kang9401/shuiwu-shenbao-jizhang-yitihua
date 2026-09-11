@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.session import get_db
+from app.api.dependencies import require_company
 from app.models.core import Period
 from app.schemas.core import PeriodCreate, PeriodRead
 
-router = APIRouter(prefix="/periods", tags=["periods"])
+router = APIRouter(prefix="/periods", tags=["periods"], dependencies=[Depends(require_company)])
 
 
 def _create_period(db: Session, year: int, month: int) -> Period:

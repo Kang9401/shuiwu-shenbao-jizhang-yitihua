@@ -8,12 +8,16 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.db.session import Base
-from app.models.accounting import PersonnelMasterArtifact, PersonnelMasterImportBatch, ReconciliationImportBatch
+from app.models.accounting import OrganizationMapping, PersonnelMasterArtifact, PersonnelMasterImportBatch, ReconciliationImportBatch
 from app.models.core import Period, UploadedFile as UploadedFileModel
+from app.rpa.service import RpaService
+from app.rpa.state_store import StateStore
 from app.services.personnel_master import (
     PersonnelMasterResolver,
     PersonnelMasterValidationError,
+    copy_previous_month_personnel_master_if_missing,
     import_personnel_master,
+    list_rpa_organizations,
 )
 from app.workflows import get_workflow
 
@@ -147,6 +151,113 @@ def test_personnel_master_duplicate_validation_only_blocks_active_status(tmp_pat
         assert all(issue["status"] == "正常" for issue in exc.issues)
     else:
         raise AssertionError("expected validation error")
+    db.close()
+
+
+def test_rpa_organizations_use_mapping_metadata_and_exclude_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session()
+    period = Period(year=2025, month=2, name="2025-02")
+    db.add(period)
+    db.commit()
+    db.refresh(period)
+    employee = tmp_path / "employee_rpa.xlsx"
+    pd.DataFrame([
+        {"姓名": "张三", "证件号码": "1", "机构代码": "10001"},
+        {"姓名": "李四", "证件号码": "2", "机构代码": "10001"},
+        {"姓名": "王五", "证件号码": "3", "机构代码": "10002"},
+    ]).to_excel(employee, index=False)
+    import_personnel_master(
+        db, period_id=period.id, person_type="employee", scope_type="month", scope_code=None, file=_upload(employee)
+    )
+    db.add_all([
+        OrganizationMapping(
+            branch_name="营业部一", org_code="10001", active=1, rpa_enabled=1,
+            rpa_org_name="第一证券营业部", parent_branch="华东分公司",
+        ),
+        OrganizationMapping(
+            branch_name="营业部二", org_code="10002", active=1, rpa_enabled=0,
+            rpa_org_name="第二证券营业部", parent_branch="华南分公司",
+        ),
+        OrganizationMapping(
+            branch_name="营业部三", org_code="10003", active=1, rpa_enabled=1,
+            rpa_org_name="第三证券营业部", parent_branch="华北分公司",
+        ),
+    ])
+    db.commit()
+
+    expected = [
+        {
+            "code": "10001",
+            "name": "第一证券营业部",
+            "parent_branch": "华东分公司",
+            "employee_count": 2,
+        },
+        {
+            "code": "10003",
+            "name": "第三证券营业部",
+            "parent_branch": "华北分公司",
+            "employee_count": 0,
+        },
+    ]
+    assert list_rpa_organizations(db, period_id=period.id) == expected
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    monkeypatch.setattr("app.rpa.service.ensure_runtime_app", lambda: runtime_dir)
+    path, selected = RpaService(store=StateStore(tmp_path / "state.json")).prepare_runtime_org_excel(
+        db, period_id=period.id
+    )
+    assert selected == expected
+    assert pd.read_excel(path, dtype=str).to_dict("records") == [
+        {"机构名称": "第一证券营业部", "机构代码": "10001"},
+        {"机构名称": "第三证券营业部", "机构代码": "10003"},
+    ]
+    db.close()
+
+
+def test_copies_all_previous_month_broker_masters_when_current_month_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session()
+    previous = Period(year=2025, month=1, name="2025-01")
+    current = Period(year=2025, month=2, name="2025-02")
+    db.add_all([previous, current])
+    db.commit()
+    db.refresh(previous)
+    db.refresh(current)
+
+    for scope_type, scope_code, name in [
+        ("month", None, "month.xlsx"),
+        ("org", "10301", "org.xlsx"),
+        ("branch", "BJ", "branch.xlsx"),
+    ]:
+        source = tmp_path / name
+        row = {"员工编号": "1", "姓名": "张三", "证件号码": "110101199001010011"}
+        if scope_type == "org":
+            row["机构代码"] = scope_code
+        elif scope_type == "branch":
+            row["分公司代码"] = scope_code
+        pd.DataFrame([row]).to_excel(source, index=False)
+        import_personnel_master(
+            db,
+            period_id=previous.id,
+            person_type="broker",
+            scope_type=scope_type,
+            scope_code=scope_code,
+            file=_upload(source),
+        )
+
+    copied = copy_previous_month_personnel_master_if_missing(db, period_id=current.id, person_type="broker")
+
+    assert {(item.scope_type, item.scope_code) for item in copied} == {
+        ("month", ""), ("org", "10301"), ("branch", "BJ"),
+    }
+    assert all(Path(item.stored_path).exists() for item in copied)
+    assert db.query(PersonnelMasterImportBatch).filter(
+        PersonnelMasterImportBatch.period_id == current.id,
+        PersonnelMasterImportBatch.person_type == "broker",
+    ).count() == 3
+    assert not copy_previous_month_personnel_master_if_missing(db, period_id=current.id, person_type="broker")
     db.close()
 
 

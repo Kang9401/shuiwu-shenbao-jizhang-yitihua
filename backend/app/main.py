@@ -9,17 +9,22 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import artifacts, files, jobs, ledgers, organization_mappings, periods, personnel_masters, reconciliation_imports, system, tax, workflows
+from app.api import artifacts, bank_fetch, companies, files, finance_ai, jobs, ledgers, organization_mappings, periods, personnel_masters, pit_reconciliations, reconciliation_imports, rpa, system, tax, workflows
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
 from app.db.init_db import init_db
+from app.rpa.service import rpa_service
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    yield
+    rpa_service.initialize()
+    try:
+        yield
+    finally:
+        rpa_service.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -34,6 +39,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(periods.router, prefix=settings.api_prefix)
+    app.include_router(companies.router, prefix=settings.api_prefix)
     app.include_router(files.router, prefix=settings.api_prefix)
     app.include_router(jobs.router, prefix=settings.api_prefix)
     app.include_router(artifacts.router, prefix=settings.api_prefix)
@@ -41,9 +47,13 @@ def create_app() -> FastAPI:
     app.include_router(personnel_masters.router, prefix=settings.api_prefix)
     app.include_router(organization_mappings.router, prefix=settings.api_prefix)
     app.include_router(reconciliation_imports.router, prefix=settings.api_prefix)
+    app.include_router(pit_reconciliations.router, prefix=settings.api_prefix)
+    app.include_router(bank_fetch.router, prefix=settings.api_prefix)
     app.include_router(workflows.router, prefix=settings.api_prefix)
     app.include_router(tax.router, prefix=settings.api_prefix)
     app.include_router(system.router, prefix=settings.api_prefix)
+    app.include_router(rpa.router, prefix=settings.api_prefix)
+    app.include_router(finance_ai.router, prefix=settings.api_prefix)
 
     @app.get("/health")
     def health() -> Dict[str, str]:

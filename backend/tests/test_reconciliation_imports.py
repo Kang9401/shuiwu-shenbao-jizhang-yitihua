@@ -13,6 +13,8 @@ from app.models.core import Period
 from app.services.reconciliation_import import (
     ReconciliationImportValidationError,
     import_reconciliation_file,
+    import_pit_declaration_files,
+    import_tax_certificate_files,
 )
 
 
@@ -127,4 +129,29 @@ def test_imports_balance_sheet_with_report_metadata_rows(tmp_path, monkeypatch):
     assert row.account_code == "21510009"
     assert row.organization_code == "10301"
     assert row.amount == 100
+    db.close()
+
+
+def test_pit_batch_import_keeps_per_file_results_and_rejects_wrong_type(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session(); period = _period(db)
+    good = tmp_path / "good.xlsx"; bad = tmp_path / "bad.pdf"
+    pd.DataFrame([{"纳税人姓名": "张三", "税额": "10", "申报类型": "工资薪金"}]).to_excel(good, index=False)
+    bad.write_bytes(b"pdf")
+    monkeypatch.setattr("app.services.pit_reconciliation.parsers.declaration_parser.parse_declaration_file", lambda path: ([{"纳税人姓名": "张三", "税额": "10", "申报类型": "工资薪金"}], []))
+    batch = import_pit_declaration_files(db, period_id=period.id, files=[_upload(good), _upload(bad)])
+    assert batch.row_count == 1
+    assert {item["file_name"]: item["status"] for item in batch.file_results} == {"good.xlsx": "success", "bad.pdf": "failed"}
+    assert any(issue["file_name"] == "bad.pdf" for issue in batch.validation_issues)
+    db.close()
+
+
+def test_tax_certificate_batch_reports_each_pdf(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+    db = _db_session(); period = _period(db)
+    first = tmp_path / "one.pdf"; second = tmp_path / "two.xlsx"
+    first.write_bytes(b"pdf"); second.write_bytes(b"xlsx")
+    monkeypatch.setattr("app.services.pit_reconciliation.parsers.tax_certificate_parser.parse_tax_certificate_pdf", lambda path: ([{"org_code": "10001", "taxpayer_name": "测试", "amount": "1.00"}], []))
+    batch = import_tax_certificate_files(db, period_id=period.id, files=[_upload(first), _upload(second)])
+    assert {item["file_name"]: item["status"] for item in batch.file_results} == {"one.pdf": "success", "two.xlsx": "failed"}
     db.close()

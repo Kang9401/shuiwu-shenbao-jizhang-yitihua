@@ -1,13 +1,45 @@
 <template>
-  <div class="shell">
+  <RpaMonitor v-if="isRpaMonitor" />
+  <div v-else-if="initializingCompanies" class="company-entry company-entry-loading">
+    <el-icon class="company-entry-spinner"><Loading /></el-icon>
+    <strong>正在加载分公司</strong>
+  </div>
+  <div v-else-if="!selectedCompany" class="company-entry">
+    <header class="company-entry-header">
+      <span class="brand-mark company-entry-brand-mark">
+        <img class="brand-logo" src="/gf-logo.jpg" alt="广发证券" />
+      </span>
+      <div><h1>广发证券财务工作台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
+    </header>
+    <div class="company-entry-grid">
+      <section class="company-entry-list">
+        <div class="company-entry-section-title"><strong>选择分公司</strong><span>{{ companies.length }} 个可用主体</span></div>
+        <button v-for="company in companies" :key="company.id" class="company-choice" @click="selectCompany(company.id)">
+          <span class="company-choice-icon"><el-icon><OfficeBuilding /></el-icon></span>
+          <span><strong>{{ company.name }}</strong><small>{{ company.code }} · 使用人：{{ company.operator_name }}</small></span>
+          <el-icon><ArrowRight /></el-icon>
+        </button>
+        <div v-if="!companies.length" class="company-empty">尚未创建分公司，请填写右侧资料创建第一个主体。</div>
+      </section>
+      <section class="company-create-panel">
+        <div class="company-entry-section-title"><strong>新建分公司</strong><span>创建后进入独立工作区</span></div>
+        <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" placeholder="例如：广州分公司" /></label>
+        <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" placeholder="例如：17001" /></label>
+        <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" placeholder="请输入使用人" /></label>
+        <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" placeholder="选填" /></label>
+        <el-button type="primary" :loading="savingCompany" @click="saveCompany(true)">创建并进入</el-button>
+      </section>
+    </div>
+  </div>
+  <div v-else class="shell">
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">
-          <el-icon><Tickets /></el-icon>
+          <img class="brand-logo" src="/gf-logo.jpg" alt="广发证券" />
         </span>
         <div class="brand-text">
-          <strong>税务申报核对</strong>
-          <small>工作台</small>
+          <strong>广发证券</strong>
+          <small>财务工作台</small>
         </div>
       </div>
 
@@ -35,6 +67,17 @@
           <p>{{ activeMeta.description }}</p>
         </div>
         <div class="topbar-right">
+          <div class="company-control">
+            <span>当前分公司</span>
+            <div class="company-picker-actions">
+              <select :value="selectedCompany.id" class="period-native-select" aria-label="当前分公司" @change="switchCompany">
+                <option v-for="company in companies" :key="company.id" :value="company.id">{{ company.name }}（{{ company.code }}）</option>
+              </select>
+              <el-tooltip content="管理分公司" placement="bottom">
+                <button class="period-add-button" type="button" aria-label="管理分公司" @click="openCompanyManager"><el-icon><Setting /></el-icon></button>
+              </el-tooltip>
+            </div>
+          </div>
           <div v-if="activeView === 'personnel_masters'" class="period-control period-control-editable">
             <span>所属期间</span>
             <div class="period-picker-actions">
@@ -58,6 +101,14 @@
       </header>
 
       <section class="content">
+        <WorkGuide
+          v-if="activeView === 'work_guide'"
+          :company-id="selectedCompany?.id || null"
+          :period-id="selectedPeriodId"
+          :period-label="selectedPeriodLabel"
+          @navigate="activeView = $event"
+        />
+
         <template v-if="activeView === 'tax_declaration'">
           <div v-if="!sessionId" class="diagnostic-card">
             <div>
@@ -71,17 +122,25 @@
             :session="session"
             :session-id="sessionId"
             @session-updated="session = $event"
+            @open-rpa="activeView = 'etax_rpa'"
           />
         </template>
 
         <PersonnelMasters
           v-else-if="activeView === 'personnel_masters'"
+          :key="`personnel-masters-${selectedCompany?.id || 'none'}`"
           :period-id="selectedPeriodId"
         />
 
         <ReconciliationImports
           v-else-if="activeView === 'reconciliation_imports'"
           :period-id="selectedPeriodId"
+        />
+
+        <EtaxRpa
+          v-else-if="activeView === 'etax_rpa'"
+          :period-id="selectedPeriodId"
+          :initial-month="selectedPeriodMonth"
         />
 
         <TaskCenter
@@ -91,6 +150,20 @@
         />
 
         <SystemMaintenance v-else-if="activeView === 'system_maintenance'" />
+
+        <FinanceSkill
+          v-else-if="activeView === 'finance_skill'"
+          :period-label="selectedPeriodLabel"
+        />
+
+        <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
+
+        <MonthlyPersonnelWorkflow
+          v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
+          :key="`monthly-${selectedCompany?.id}-${activeWorkflow.code}`"
+          :workflow="activeWorkflow"
+          :period-id="selectedPeriodId"
+        />
 
         <GenericWorkflow
           v-else-if="activeWorkflow"
@@ -137,19 +210,45 @@
         <el-button type="primary" :loading="creatingPeriod" @click="createPeriod">新增</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="companyManagerVisible" title="分公司管理" width="760px">
+      <div class="company-manager-toolbar"><span>停用后不会出现在日常选择列表中，历史数据仍会保留。</span><el-button type="primary" @click="openCompanyEditor()"><el-icon><Plus /></el-icon>新建分公司</el-button></div>
+      <el-table :data="allCompanies" size="small" max-height="420">
+        <el-table-column prop="name" label="分公司" min-width="150" />
+        <el-table-column prop="code" label="编码" width="110" />
+        <el-table-column prop="operator_name" label="使用人" width="120" />
+        <el-table-column label="状态" width="80"><template #default="{ row }"><span class="tag" :class="row.active ? 'tag-success' : 'tag-info'">{{ row.active ? '启用' : '停用' }}</span></template></el-table-column>
+        <el-table-column label="操作" width="180"><template #default="{ row }"><el-button link type="primary" @click="openCompanyEditor(row)">编辑</el-button><el-button link :type="row.active ? 'danger' : 'success'" @click="toggleCompany(row)">{{ row.active ? '停用' : '启用' }}</el-button></template></el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="companyEditorVisible" :title="editingCompanyId ? '编辑分公司' : '新建分公司'" width="480px">
+      <div class="company-editor-form">
+        <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" /></label>
+        <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" /></label>
+        <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" /></label>
+        <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" /></label>
+      </div>
+      <template #footer><el-button @click="companyEditorVisible = false">取消</el-button><el-button type="primary" :loading="savingCompany" @click="saveCompany(false)">保存</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  ArrowRight,
+  ChatDotRound,
   CircleCheck,
   Clock,
   Coin,
   DocumentChecked,
   Files,
+  Loading,
   Memo,
+  Monitor,
+  OfficeBuilding,
   Plus,
   Setting,
   Tickets,
@@ -159,24 +258,33 @@ import {
 } from '@element-plus/icons-vue'
 import TaxDeclaration from './views/TaxDeclaration.vue'
 import GenericWorkflow from './views/GenericWorkflow.vue'
+import MonthlyPersonnelWorkflow from './views/MonthlyPersonnelWorkflow.vue'
+import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
+import PitReconciliation from './views/PitReconciliation.vue'
+import WorkGuide from './views/WorkGuide.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
+import FinanceSkill from './views/FinanceSkill.vue'
 import TaskCenter from './views/TaskCenter.vue'
-import { api, taxApi, workflowApi, type Period, type TaxSession, type Workflow } from './api'
+import RpaMonitor from './views/RpaMonitor.vue'
+import { api, COMPANY_STORAGE_KEY, companyApi, taxApi, workflowApi, type Company, type Period, type TaxSession, type Workflow } from './api'
 
 type ViewKey =
   | 'work_guide'
   | 'task_center'
   | 'system_maintenance'
-  | 'deduction_download'
+  | 'finance_skill'
   | 'personnel_masters'
   | 'tax_declaration'
+  | 'etax_rpa'
   | 'annual_bonus_tax'
   | 'broker_tax'
+  | 'part_time_tax'
   | 'intern_tax'
   | 'restricted_stock_interest_tax'
   | 'reconciliation_imports'
+  | 'pit_reconciliation'
   | 'vat_deduction'
   | 'invoice_booking'
   | 'voucher_draft'
@@ -197,7 +305,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
   {
     label: '工作清单',
     items: [
-      { key: 'work_guide', label: '操作指引', icon: Memo, kicker: 'Work guide', description: '税务岗每月工作清单和操作指引。', planned: true },
+      { key: 'work_guide', label: '操作指引', icon: Memo, kicker: 'Work guide', description: '税务岗每月工作清单和操作指引。' },
       { key: 'task_center', label: '运行记录', icon: Clock, kicker: 'Task history', description: '查看当前所属期间各申报流程的运行状态和版本。' },
       { key: 'system_maintenance', label: '系统维护', icon: Setting, kicker: 'System', description: '程序版本、数据备份、恢复和诊断。' },
     ],
@@ -207,17 +315,20 @@ const navSections: { label: string; items: NavItem[] }[] = [
     items: [
       { key: 'personnel_masters', label: '人员主数据', icon: User, kicker: 'Personnel master', description: '员工、经纪人人员主数据初始化与导出。' },
       { key: 'tax_declaration', label: '工资薪金申报', icon: DocumentChecked, kicker: 'Individual income tax', description: '工资资料上传、差异核对、人员确认与申报表生成。' },
+      { key: 'etax_rpa', label: '个税 RPA', icon: Monitor, kicker: 'Etax automation', description: '自然人电子税务局批量自动化。' },
       { key: 'annual_bonus_tax', label: '年终奖申报', icon: Wallet, workflowCode: 'annual_bonus_tax', kicker: 'Annual bonus', description: '全年一次性奖金个税申报数据处理。' },
       { key: 'broker_tax', label: '经纪人申报', icon: TrendCharts, workflowCode: 'broker_tax', kicker: 'Broker tax', description: '证券经纪人佣金收入个税申报。' },
+      { key: 'part_time_tax', label: '劳务报酬申报', icon: User, workflowCode: 'part_time_tax', kicker: 'Labor remuneration', description: '劳务报酬人员信息、收入和申报文件处理。' },
       { key: 'intern_tax', label: '实习生申报', icon: User, workflowCode: 'intern_tax', kicker: 'Intern tax', description: '实习生补贴个税申报与人员采集。' },
       { key: 'restricted_stock_interest_tax', label: '限售股/利息税', icon: Coin, workflowCode: 'restricted_stock_interest_tax', kicker: 'Restricted stock', description: '限售股、债券利息及客户类个人所得申报。' },
       { key: 'reconciliation_imports', label: '核对数据导入', icon: Files, kicker: 'Reconciliation imports', description: '银行流水、申报结果和账务数据结构化入库。' },
+      { key: 'pit_reconciliation', label: '个税核对底稿', icon: DocumentChecked, kicker: 'PIT reconciliation', description: '以数据库保存的月度个税申报、账务、完税与银行核对底稿。' },
     ],
   },
   {
-    label: '专项附加扣除',
+    label: '智能能力',
     items: [
-      { key: 'deduction_download', label: '专项附加扣除', icon: CircleCheck, kicker: 'Special deductions', description: '专项附加扣除下载、合并和重复员工提示。', planned: true },
+      { key: 'finance_skill', label: '财务 SKILL', icon: ChatDotRound, kicker: 'Finance AI', description: '面向财务分析、会计处理、税务判断与风险复核的大模型助手。' },
     ],
   },
   {
@@ -238,6 +349,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
 ]
 
 const periods = ref<Period[]>([])
+const isRpaMonitor = new URLSearchParams(window.location.search).get('window') === 'rpa-monitor'
 const workflows = ref<Workflow[]>([])
 const selectedPeriodId = ref<number | null>(null)
 const session = ref<TaxSession | null>(null)
@@ -245,6 +357,16 @@ const activeView = ref<ViewKey>('tax_declaration')
 const periodDialogVisible = ref(false)
 const newPeriodMonth = ref('')
 const creatingPeriod = ref(false)
+const companies = ref<Company[]>([])
+const allCompanies = ref<Company[]>([])
+const selectedCompany = ref<Company | null>(null)
+const initializingCompanies = ref(!isRpaMonitor)
+const companyManagerVisible = ref(false)
+const companyEditorVisible = ref(false)
+const editingCompanyId = ref<number | null>(null)
+const savingCompany = ref(false)
+const emptyCompanyDraft = () => ({ name: '', code: '', operator_name: '', notes: '' })
+const companyDraft = reactive(emptyCompanyDraft())
 
 const flatItems = computed(() => navSections.flatMap((section) => section.items))
 const activeItem = computed(() => flatItems.value.find((item) => item.key === activeView.value) || flatItems.value[0])
@@ -252,6 +374,13 @@ const sessionId = computed(() => session.value?.id)
 const selectedPeriodLabel = computed(() => {
   const period = periods.value.find((item) => item.id === selectedPeriodId.value)
   return period ? `${period.year}年${String(period.month).padStart(2, '0')}月` : '未选择'
+})
+const selectedPeriodMonth = computed(() => {
+  const period = periods.value.find((item) => item.id === selectedPeriodId.value)
+  if (period) return `${period.year}-${String(period.month).padStart(2, '0')}`
+  const date = new Date()
+  date.setMonth(date.getMonth() - 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 })
 
 const activeWorkflow = computed(() => {
@@ -267,7 +396,11 @@ const activeMeta = computed(() => ({
 }))
 
 onMounted(async () => {
-  await Promise.all([loadPeriods(), loadWorkflows()])
+  if (isRpaMonitor) return
+  await loadCompanies()
+  const storedId = Number(window.localStorage.getItem(COMPANY_STORAGE_KEY))
+  if (companies.value.some((item) => item.id === storedId)) await selectCompany(storedId, false)
+  initializingCompanies.value = false
 })
 
 watch(selectedPeriodId, async (periodId) => {
@@ -300,6 +433,92 @@ async function loadPeriods() {
     if (target) selectedPeriodId.value = target.id
   } catch (error) {
     ElMessage.error('所属期间加载失败，请检查后端服务')
+  }
+}
+
+async function loadCompanies(includeInactive = false) {
+  try {
+    const { data } = await companyApi.list(includeInactive)
+    if (includeInactive) allCompanies.value = data
+    else companies.value = data
+  } catch (error) {
+    ElMessage.error('分公司加载失败，请检查后端服务')
+  }
+}
+
+async function selectCompany(companyId: number, notify = true) {
+  try {
+    const { data } = await companyApi.select(companyId)
+    window.localStorage.setItem(COMPANY_STORAGE_KEY, String(companyId))
+    selectedCompany.value = data
+    periods.value = []
+    selectedPeriodId.value = null
+    session.value = null
+    await Promise.all([loadPeriods(), loadWorkflows()])
+    if (notify) ElMessage.success(`已切换到${data.name}`)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '分公司切换失败')
+  }
+}
+
+async function switchCompany(event: Event) {
+  const companyId = Number((event.target as HTMLSelectElement).value)
+  if (companyId !== selectedCompany.value?.id) await selectCompany(companyId)
+}
+
+function resetCompanyDraft() {
+  Object.assign(companyDraft, emptyCompanyDraft())
+  editingCompanyId.value = null
+}
+
+async function openCompanyManager() {
+  await loadCompanies(true)
+  companyManagerVisible.value = true
+}
+
+function openCompanyEditor(company?: Company) {
+  resetCompanyDraft()
+  if (company) {
+    editingCompanyId.value = company.id
+    Object.assign(companyDraft, { name: company.name, code: company.code, operator_name: company.operator_name, notes: company.notes })
+  }
+  companyEditorVisible.value = true
+}
+
+async function saveCompany(enterAfterCreate: boolean) {
+  if (!companyDraft.name || !companyDraft.code || !companyDraft.operator_name) {
+    ElMessage.warning('请填写分公司名称、编码和使用人')
+    return
+  }
+  savingCompany.value = true
+  try {
+    const response = editingCompanyId.value
+      ? await companyApi.update(editingCompanyId.value, companyDraft)
+      : await companyApi.create(companyDraft)
+    companyEditorVisible.value = false
+    resetCompanyDraft()
+    await Promise.all([loadCompanies(), loadCompanies(true)])
+    if (selectedCompany.value?.id === response.data.id) selectedCompany.value = response.data
+    if (enterAfterCreate || !selectedCompany.value) await selectCompany(response.data.id)
+    else ElMessage.success('分公司资料已保存')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '分公司保存失败')
+  } finally {
+    savingCompany.value = false
+  }
+}
+
+async function toggleCompany(company: Company) {
+  try {
+    await companyApi.updateStatus(company.id, !company.active)
+    await Promise.all([loadCompanies(), loadCompanies(true)])
+    if (company.active && selectedCompany.value?.id === company.id) {
+      const replacement = companies.value[0]
+      if (replacement) await selectCompany(replacement.id)
+    }
+    ElMessage.success(company.active ? '分公司已停用' : '分公司已启用')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '状态更新失败')
   }
 }
 

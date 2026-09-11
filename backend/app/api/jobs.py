@@ -8,13 +8,14 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
-from app.models.core import Job
+from app.api.dependencies import require_company, require_period
+from app.models.core import Job, UploadedFile
 from app.core.version import APP_VERSION, RULESET_VERSION
 from app.schemas.core import JobCreate, JobDetail, JobRead
 from app.services.job_runner import run_job
 from app.workflows import get_workflow
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_company)])
 
 
 @router.get("", response_model=List[JobRead])
@@ -38,6 +39,14 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)) -> Job:
         get_workflow(payload.workflow_code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.period_id is not None:
+        require_period(db, payload.period_id)
+    if payload.input_file_ids:
+        found_ids = {
+            row[0] for row in db.query(UploadedFile.id).filter(UploadedFile.id.in_(payload.input_file_ids)).all()
+        }
+        if found_ids != set(payload.input_file_ids):
+            raise HTTPException(status_code=404, detail="部分上传文件不存在")
     job = Job(
         workflow_code=payload.workflow_code,
         period_id=payload.period_id,
@@ -113,7 +122,14 @@ def download_job_declarations(job_id: int, db: Session = Depends(get_db)) -> Res
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for artifact in declaration_artifacts:
             archive.write(artifact.stored_path, f"申报文件/{artifact.file_name}")
-    filename = f"{job.workflow_code}_申报文件.zip"
+    zip_labels = {
+        "general_salary_tax": "工资薪金个税申报文件",
+        "broker_tax": "经纪人个税申报文件",
+        "intern_tax": "实习生个税申报文件",
+        "part_time_tax": "劳务报酬个税申报文件",
+        "restricted_stock_interest_tax": "限售股个税申报文件",
+    }
+    filename = f"{zip_labels.get(job.workflow_code, '个税申报文件')}.zip"
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",

@@ -5,7 +5,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.session import Base, get_db
 from app.main import app
-from app.models.core import Job, Period
+from app.models.core import Company, Job, Period
 
 
 def test_latest_job_is_filtered_by_period_workflow_and_operation():
@@ -17,7 +17,8 @@ def test_latest_job_is_filtered_by_period_workflow_and_operation():
     session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     Base.metadata.create_all(bind=engine)
     db = session_local()
-    period = Period(year=2026, month=6, name="2026年06月", status="open")
+    db.add(Company(id=1, name="测试分公司", code="TEST", operator_name="测试人"))
+    period = Period(company_id=1, year=2026, month=6, name="2026年06月", status="open")
     db.add(period)
     db.commit()
     db.refresh(period)
@@ -38,7 +39,7 @@ def test_latest_job_is_filtered_by_period_workflow_and_operation():
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-Company-ID": "1"})
         generated = client.get(
             "/api/jobs/latest",
             params={

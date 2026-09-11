@@ -120,7 +120,7 @@ def test_export_marks_missing_required_cells_yellow(tmp_path):
 
     worksheet = load_workbook(output).active
     columns = {cell.value: cell.column for cell in worksheet[1]}
-    for column in ["证件类型", "证件号码", "员工编号", "机构代码(人员信息表)"]:
+    for column in ["证件类型", "证件号码", "手机号码", "员工编号", "机构代码(人员信息表)"]:
         assert worksheet.cell(row=2, column=columns[column]).fill.fgColor.rgb == "00FFFF00"
 
 
