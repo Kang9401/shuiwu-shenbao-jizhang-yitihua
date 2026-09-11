@@ -204,8 +204,8 @@ class PitSourceService:
         if batch is None:return SourceResult("bank_statement","missing",required=False)
         result=[]; issues=[]
         for row in rows:
-            raw=row.raw_data or {}; account=_text(_pick(raw,"本方账号","账号","银行账号") or row.account_code); name=_text(_pick(raw,"本方户名","账户名称","户名")); resolved=self.resolver.resolve_by_full_name(name) or self.resolver.resolve_by_branch_name(name) or self.resolver.resolve_by_bank_account(account)
-            org=_text(row.organization_code) or (resolved.org_code if resolved else "")
+            raw=row.raw_data or {}; account=_text(_pick(raw,"本方账号","账号","银行账号") or row.account_code); name=_text(_pick(raw,"本方户名","账户名称","户名")); resolved=self.resolver.resolve_by_bank_account(account) or self.resolver.resolve_by_full_name(name) or self.resolver.resolve_by_branch_name(name)
+            org=(resolved.org_code if resolved else "") or _text(row.organization_code)
             if not org: issues.append({"issue_type":"unresolved_bank_organization","message":"银行流水未识别本方机构，已排除自动匹配","row_id":row.id,"bank_account":account})
             result.append(BankRow(org,account,_text(row.transaction_date),_text(row.summary),money_or_none(_pick(raw,"借方金额") or row.amount),batch.id,row.id))
         return SourceResult("bank_statement","ready_empty" if not rows else "ready",result,False,"reconciliation_import_batch",batch.id,batch.stored_path,issues)

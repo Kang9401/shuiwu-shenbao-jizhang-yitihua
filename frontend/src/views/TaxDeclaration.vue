@@ -100,26 +100,7 @@
             </div>
           </div>
 
-          <div class="upload-section">
-            <h4>专项附加扣除</h4>
-            <div class="upload-item" :class="{ 'has-file': deductionFiles.length }">
-              <label>专项附加扣除文件</label>
-              <label class="btn btn-sm btn-outline file-picker-button">
-                选择文件
-                <input :key="`deductions-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" multiple @change="pickDeductionFiles" />
-              </label>
-              <span class="upload-status" :class="deductionFiles.length ? 'ready' : 'empty'">
-                {{ deductionFiles.length ? `已选择 ${deductionFiles.length} 个文件` : '未选择' }}
-              </span>
-              <button class="btn btn-xs btn-ghost" :disabled="!deductionFiles.length" @click="clearDeductionFiles">清除</button>
-            </div>
-            <div v-if="deductionFiles.length" class="deduction-file-list">
-              <span v-for="file in deductionFiles" :key="fileIdentity(file)">
-                {{ file.name }}
-                <button type="button" title="移除" @click="removeDeductionFile(file)">×</button>
-              </span>
-            </div>
-          </div>
+
         </div>
 
         <div class="action-bar">
@@ -237,42 +218,6 @@
             <el-table-column prop="employee_id" label="员工编号" width="120" />
             <el-table-column prop="taxpayer_id" label="扣缴义务人纳税人识别号" min-width="220" />
             <el-table-column prop="message" label="提示" min-width="260" />
-          </el-table>
-        </div>
-      </section>
-
-      <section v-if="hasDeductionWarnings" class="card">
-        <div class="card-header">
-          <strong>专项附加扣除异常</strong>
-          <span class="tag tag-danger">
-            重复人员 {{ report.deduction_warnings.duplicates.length }} 名，缺失机构 {{ report.deduction_warnings.missing_orgs.length }} 个，需补全证件号 {{ deductionMatchWarnings.length }} 人
-          </span>
-        </div>
-        <div class="card-body">
-          <el-table v-if="report.deduction_warnings.duplicates.length" :data="report.deduction_warnings.duplicates" size="small" max-height="260">
-            <el-table-column type="expand">
-              <template #default="{ row }">
-                <el-table :data="row.details" size="small" style="width:100%">
-                  <el-table-column prop="file_name" label="来源表" min-width="200" />
-                  <el-table-column prop="deduction_summary" label="专项扣除明细" min-width="360" />
-                </el-table>
-              </template>
-            </el-table-column>
-            <el-table-column prop="name" label="重复人员" width="120" />
-            <el-table-column prop="id_number" label="证件号码" min-width="170" />
-            <el-table-column prop="file_names" label="重复来源表" min-width="260" />
-            <el-table-column prop="file_count" label="出现次数" width="100" />
-          </el-table>
-          <el-table v-if="deductionMissingOrgRows.length" :data="deductionMissingOrgRows" size="small" max-height="260" style="margin-top:16px">
-            <el-table-column prop="org_code" label="机构代码" width="140" />
-            <el-table-column prop="message" label="异常说明" min-width="280" />
-          </el-table>
-          <el-table v-if="deductionMatchWarnings.length" :data="deductionMatchWarnings" size="small" max-height="260" style="margin-top:16px">
-            <el-table-column prop="name" label="专项表姓名" width="120" />
-            <el-table-column prop="id_number" label="专项表证件号码" min-width="170" />
-            <el-table-column prop="candidate_count" label="候选人数" width="100" />
-            <el-table-column prop="candidate_id_numbers" label="工资人员候选证件号码" min-width="260" />
-            <el-table-column prop="message" label="处理提示" min-width="360" />
           </el-table>
         </div>
       </section>
@@ -476,8 +421,8 @@
             <el-icon><RefreshRight /></el-icon>
             开始新的申报
           </button>
-          <button class="btn btn-primary btn-lg" :disabled="!generatedFiles.length" @click="emit('open-rpa')">
-            开始申报
+          <button class="btn btn-primary btn-lg" :disabled="!generatedFiles.length" @click="openPreDeclaration">
+            预申报
           </button>
         </div>
       </div>
@@ -693,8 +638,7 @@ function pickFolder(event: Event) {
     fileData[role] = file
     count += 1
   }
-  deductionFiles.value = mergeUniqueFiles(deductionFiles.value, classified.deductionFiles)
-  count += classified.deductionFiles.length
+
   const artifactCount = classified.knownArtifacts.length
 
   inputVersion.value += 1
@@ -790,7 +734,7 @@ async function runVerify() {
       if (role === 'staff_change' && step.value !== 2) continue
       form.append(role, file)
     }
-    deductionFiles.value.forEach((file) => form.append('deduction_files', file))
+
     if (retirementWelfareColumn.value) form.append('retirement_welfare_column', retirementWelfareColumn.value)
 
     const { data } = await taxApi.verify(props.sessionId, form)
@@ -893,6 +837,10 @@ function goToStep(target: number) {
 }
 
 // 批量下载：通过后端打包 zip，浏览器弹出"另存为"对话框让用户选保存路径
+async function openPreDeclaration() {
+  try { await ElMessageBox.confirm('当前操作为预申报，请确认申报数据无误后再进行后续正式申报操作。', '预申报', {confirmButtonText:'进入预申报',cancelButtonText:'取消'}); emit('open-rpa') } catch {}
+}
+
 async function batchDownload() {
   if (!props.sessionId || !generatedFiles.value.length) return
   batchDownloading.value = true

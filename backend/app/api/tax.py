@@ -455,21 +455,8 @@ async def run_verify(
         has_staff_change=staff_change is not None,
     )
 
-    # 专项附加扣除保存到同一个文件夹
+    # 保留旧请求参数兼容性，但不再读取专项附加扣除附件。
     deduction_dir = ""
-    if deduction_files:
-        dedup_dir = settings.upload_dir / str(session.period_id) / "deductions"
-        dedup_dir.mkdir(parents=True, exist_ok=True)
-        for existing in dedup_dir.iterdir():
-            if existing.is_file() and existing.suffix.lower() in {".xls", ".xlsx"}:
-                existing.unlink()
-        for df in deduction_files:
-            safe_name = Path(df.filename or "deduction.xlsx").name
-            dest = dedup_dir / safe_name
-            with dest.open("wb") as out:
-                while chunk := df.file.read(1024 * 1024):
-                    out.write(chunk)
-        deduction_dir = str(dedup_dir)
 
     artifact_path = tax_artifact_dir(session_id) / f"round_{round_num}"
     personnel_update_dir = artifact_path / "personnel_update"

@@ -119,6 +119,10 @@
             <el-icon><Download /></el-icon>
             下载导入模板
           </a>
+          <a v-if="isPartTime" class="btn btn-outline btn-lg" :href="workflowApi.partTimeTemplateUrl()" target="_blank">
+            <el-icon><Download /></el-icon>
+            下载导入模板
+          </a>
           <button v-if="!isRestrictedStockInterest && !isAutoGenerateWorkflow && !isPartTime" class="btn btn-primary btn-lg" :disabled="running || missingRequired.length > 0" @click="runWorkflow()">
             <span v-if="running" class="spinner"></span>
             <el-icon v-else><VideoPlay /></el-icon>

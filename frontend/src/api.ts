@@ -202,7 +202,7 @@ export interface RpaStatus {
   can_resume: boolean
 }
 
-export type PersonType = 'employee' | 'broker' | 'part_time'
+export type PersonType = 'employee' | 'intern' | 'broker' | 'part_time'
 export type PersonnelScopeType = 'month' | 'org' | 'branch'
 export type ReconciliationImportType = 'bank_statement' | 'declaration_result' | 'accounting_ledger' | 'balance_sheet' | 'pit_declaration' | 'tax_certificate'
 
@@ -283,6 +283,7 @@ export interface OrganizationMapping {
   rpa_org_name: string
   rpa_search_result_index: number
   parent_branch: string
+  bank_account: string
   bank_subaccount: string
   updated_at: string
 }
@@ -392,6 +393,8 @@ export interface VerifyResponse {
 export const taxApi = {
   createSession: (periodId: number) =>
     api.post<TaxSession>('/tax/sessions', { period_id: periodId }),
+  listSessions: (periodId?: number | null) =>
+    api.get<TaxSession[]>('/tax/sessions', { params: { period_id: periodId || undefined } }),
 
   verify: (sessionId: number, formData: FormData) =>
     api.post<VerifyResponse>(`/tax/sessions/${sessionId}/verify`, formData, {
@@ -432,6 +435,7 @@ export const taxApi = {
 }
 
 export const workflowApi = {
+  partTimeTemplateUrl: () => companyUrl('/api/workflows/part-time-tax/template'),
   list: () => api.get<Workflow[]>('/workflows'),
 
   uploadFile: (file: File, fileRole: string, periodId: number | null) => {
@@ -535,6 +539,7 @@ export const personnelMasterApi = {
 }
 
 export const reconciliationImportApi = {
+  clear: (period_id: number, import_type: ReconciliationImportType, batch_ids: number[]) => api.post<{deleted_batches:number;deleted_rows:number}>('/reconciliation-imports/clear', {period_id, import_type, batch_ids}),
   importFiles: (files: File[], periodId: number, importType: ReconciliationImportType) => {
     const pathByType: Record<ReconciliationImportType, string> = {
       bank_statement: '/reconciliation-imports/bank-statement',

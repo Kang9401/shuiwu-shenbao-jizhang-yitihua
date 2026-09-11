@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import math
+import numbers
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,10 +47,19 @@ def pick_column(row: dict[str, Any], candidates: list[str]) -> Any:
 def _text_frame(df: pd.DataFrame) -> pd.DataFrame:
     """Serialize every cell as text for tax-bureau import templates."""
     result = df.copy()
+    def format_value(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        if isinstance(value, numbers.Real) and not isinstance(value, bool):
+            number = float(value)
+            if math.isfinite(number):
+                return f"{number:.2f}"
+        if isinstance(value, Decimal):
+            return f"{value:.2f}"
+        return str(value)
+
     for column in result.columns:
-        result[column] = result[column].map(
-            lambda value: "" if value is None or pd.isna(value) else str(value)
-        )
+        result[column] = result[column].map(format_value)
     return result
 
 

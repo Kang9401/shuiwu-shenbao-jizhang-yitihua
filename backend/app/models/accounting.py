@@ -170,5 +170,6 @@ class OrganizationMapping(Base):
     rpa_search_result_index: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     parent_branch: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     bank_subaccount: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    bank_account: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

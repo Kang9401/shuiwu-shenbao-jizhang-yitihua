@@ -1146,14 +1146,7 @@ def build_working_sheet(
                 if field in sheet.columns and _clean_text(sheet.at[idx, field]) == "":
                     sheet.at[idx, field] = profile.get(field, "")
 
-    # ---- 6. 关联专项附加扣除（完整证件号优先；脱敏号码按姓名和首尾唯一匹配）----
-    deductions, _ = load_deduction_files(deduction_folder)
-    if not deductions.empty and "证件号码" in sheet.columns:
-        sheet["证件号码"] = sheet["证件号码"].map(_normalize_id_number)
-        sheet, deduction_match_quality = apply_deduction_matches(sheet, deductions)
-        sheet.attrs["deduction_match_quality"] = deduction_match_quality
-    else:
-        sheet.attrs["deduction_match_quality"] = {"low_confidence": [], "name_mismatches": []}
+    sheet.attrs["deduction_match_quality"] = {"low_confidence": [], "name_mismatches": []}
 
     # ---- 7. 填充缺失列 ----
     for col in DEDUCTION_COLUMNS:
@@ -1191,7 +1184,8 @@ def build_working_sheet(
         retirement_reconciliation,
         key=lambda item: (item["status"] != "福利费待核对", item["name"], item["org_code"]),
     )
-    return sheet, staff
+    from app.services.salary_deductions import blank_special_additional
+    return blank_special_additional(sheet), staff
 
 
 # ============================================================

@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.api.dependencies import require_company
 from app.models.accounting import OrganizationMapping
 from app.core.company_context import current_company_id
+from app.services.bank_accounts import normalize_bank_account
 
 
 router = APIRouter(prefix="/organization-mappings", tags=["organization-mappings"], dependencies=[Depends(require_company)])
@@ -29,6 +30,7 @@ class MappingPayload(BaseModel):
     rpa_search_result_index: int = 1
     parent_branch: str = ""
     bank_subaccount: str = ""
+    bank_account: str = ""
 
 
 def _validate(
@@ -70,6 +72,16 @@ def _validate_taxpayer_id_conflict(
     if query.first():
         raise HTTPException(status_code=409, detail="该机构纳税人识别号已被其他机构使用")
 
+def _validate_bank_account_conflict(db: Session, bank_account: str, exclude_id: int | None = None) -> None:
+    account = normalize_bank_account(bank_account)
+    if not account:
+        return
+    query = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.bank_account == account)
+    if exclude_id is not None:
+        query = query.filter(OrganizationMapping.id != exclude_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail="该银行账号已被其他机构使用")
+
 
 def _validate_org_code_conflict(db: Session, org_code: str, exclude_id: int | None = None) -> None:
     query = db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id(), OrganizationMapping.org_code == org_code)
@@ -110,6 +122,7 @@ def _payload(item: OrganizationMapping) -> dict:
         "rpa_search_result_index": item.rpa_search_result_index,
         "parent_branch": item.parent_branch,
         "bank_subaccount": item.bank_subaccount,
+        "bank_account": item.bank_account,
         "updated_at": item.updated_at,
     }
 
@@ -130,6 +143,7 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
     _validate_org_code_conflict(db, code)
     _validate_rpa_conflicts(db, org_code=code, rpa_org_name=full_name, rpa_enabled=payload.rpa_enabled)
     _validate_taxpayer_id_conflict(db, taxpayer_id)
+    _validate_bank_account_conflict(db, payload.bank_account)
     item = OrganizationMapping(
         branch_name=name,
         org_code=code,
@@ -140,6 +154,7 @@ def create_mapping(payload: MappingPayload, db: Session = Depends(get_db)) -> di
         rpa_search_result_index=result_index,
         parent_branch=parent,
         bank_subaccount=payload.bank_subaccount.strip(),
+        bank_account=normalize_bank_account(payload.bank_account),
     )
     db.add(item)
     db.commit()
@@ -168,6 +183,7 @@ def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depen
         exclude_id=mapping_id,
     )
     _validate_taxpayer_id_conflict(db, taxpayer_id, exclude_id=mapping_id)
+    _validate_bank_account_conflict(db, payload.bank_account, exclude_id=mapping_id)
     item.branch_name = name
     item.org_code = code
     item.taxpayer_id = taxpayer_id
@@ -177,6 +193,7 @@ def update_mapping(mapping_id: int, payload: MappingPayload, db: Session = Depen
     item.rpa_search_result_index = result_index
     item.parent_branch = parent
     item.bank_subaccount = payload.bank_subaccount.strip()
+    item.bank_account = normalize_bank_account(payload.bank_account)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -238,6 +255,7 @@ def import_mappings(file: UploadFile = File(...), db: Session = Depends(get_db))
             "rpa_search_result_index": result_index,
             "parent_branch": parent,
             "bank_subaccount": str(row.get("银行子目", "")).strip(),
+            "bank_account": normalize_bank_account(row.get("银行账号", "")),
             "row_number": int(row_index) + 2,
         }
 
@@ -256,6 +274,7 @@ def import_mappings(file: UploadFile = File(...), db: Session = Depends(get_db))
             seen[value] = (code, values["row_number"])
 
     ensure_unique(prepared.items(), "branch_name", "营业部名称")
+    ensure_unique(prepared.items(), "bank_account", "银行账号", populated_only=True)
     ensure_unique(prepared.items(), "taxpayer_id", "机构纳税人识别号", populated_only=True)
     ensure_unique(
         ((code, values) for code, values in prepared.items() if values["rpa_enabled"]),
@@ -294,6 +313,7 @@ def export_mappings(db: Session = Depends(get_db)) -> Response:
             "RPA搜索结果序号": item.rpa_search_result_index,
             "所属分公司": item.parent_branch,
             "银行子目": item.bank_subaccount,
+            "银行账号": item.bank_account,
         }
         for item in db.query(OrganizationMapping).filter(OrganizationMapping.company_id == current_company_id()).order_by(OrganizationMapping.org_code).all()
     ]

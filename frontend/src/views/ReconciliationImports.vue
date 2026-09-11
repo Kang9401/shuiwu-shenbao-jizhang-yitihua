@@ -13,7 +13,7 @@
       <div class="card-header">
         <div>
           <strong>核对数据导入</strong>
-          <p>导入银行流水、申报结果和账务数据，先结构化入库，供后续核对底稿使用。</p>
+          <p>导入银行流水、个税申报 Excel、完税证明和余额表，用于个税核对。</p>
         </div>
         <span class="tag tag-info">{{ importTypeLabel }}</span>
       </div>
@@ -23,10 +23,8 @@
             <span>导入类型</span>
             <select v-model="importType" class="period-native-select">
               <option value="bank_statement">银行流水</option>
-              <option value="declaration_result">申报结果</option>
               <option value="pit_declaration">个税申报 Excel</option>
               <option value="tax_certificate">完税证明 PDF</option>
-              <option value="accounting_ledger">账务数据</option>
               <option value="balance_sheet">余额表</option>
             </select>
           </label>
@@ -68,6 +66,8 @@
         <div v-if="batches.length" class="batch-selection-bar">
           <label class="batch-select-all"><input type="checkbox" :checked="allBatchesSelected" @change="toggleAllBatches" /> 全选当前页</label>
           <span>已选择 {{ selectedBatchIds.length }} 项</span>
+          <el-button type="danger" :disabled="loading || !selectedBatchIds.length" @click="clearImported(false)">清空所选</el-button>
+          <el-button type="danger" plain :disabled="loading" @click="clearImported(true)">清空当前类型全部数据</el-button>
           <button class="btn btn-xs btn-ghost" :disabled="!selectedBatchIds.length" @click="selectedBatchIds = []">取消选择</button>
         </div>
         <div v-if="!batches.length" class="empty-inline">当前月份尚未导入该类数据。</div>
@@ -95,7 +95,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Upload } from '@element-plus/icons-vue'
 import {
   bankFetchApi,
@@ -151,9 +151,14 @@ function formatError(error: any) {
   return detail || '导入失败，请检查文件格式'
 }
 
+let loadVersion = 0
 async function loadBatches() {
+  const version = ++loadVersion
+  batches.value = []
+  selectedBatchIds.value = []
   if (!props.periodId) return
   const { data } = await reconciliationImportApi.list(props.periodId, importType.value)
+  if (version !== loadVersion) return
   batches.value = data
   selectedBatchIds.value = selectedBatchIds.value.filter((id) => data.some((batch) => batch.id === id))
 }
@@ -166,6 +171,22 @@ function toggleBatch(id: number) {
 
 function toggleAllBatches() {
   selectedBatchIds.value = allBatchesSelected.value ? [] : batches.value.map((batch) => batch.id)
+}
+
+async function clearImported(all: boolean) {
+  if (!props.periodId || loading.value) return
+  const targets = all ? batches.value : batches.value.filter(b => selectedBatchIds.value.includes(b.id))
+  const period = props.periodId
+  const type = importType.value
+  const ids = targets.map(b => b.id)
+  try { await ElMessageBox.confirm(`将清空当前分公司、期间 ${period} 的${importTypeLabel.value}：${targets.length} 个批次，共 ${targets.reduce((n,b) => n+b.row_count,0)} 行。相关底稿需要重新核对。`, '清空导入数据', { type:'warning', confirmButtonText:'清空', cancelButtonText:'取消' }) } catch { return }
+  if (period !== props.periodId || type !== importType.value) return
+  loading.value = true
+  try {
+    const { data } = await reconciliationImportApi.clear(period, type, ids)
+    ElMessage.success(`已清空 ${data.deleted_batches} 个批次、${data.deleted_rows} 行`)
+    await loadBatches()
+  } catch (error) { ElMessage.error(formatError(error)) } finally { loading.value = false }
 }
 
 async function importFile() {

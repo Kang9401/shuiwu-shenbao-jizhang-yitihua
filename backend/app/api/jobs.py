@@ -122,7 +122,14 @@ def download_job_declarations(job_id: int, db: Session = Depends(get_db)) -> Res
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for artifact in declaration_artifacts:
             archive.write(artifact.stored_path, f"申报文件/{artifact.file_name}")
-    filename = f"{job.workflow_code}_申报文件.zip"
+    zip_labels = {
+        "general_salary_tax": "工资薪金个税申报文件",
+        "broker_tax": "经纪人个税申报文件",
+        "intern_tax": "实习生个税申报文件",
+        "part_time_tax": "劳务报酬个税申报文件",
+        "restricted_stock_interest_tax": "限售股个税申报文件",
+    }
+    filename = f"{zip_labels.get(job.workflow_code, '个税申报文件')}.zip"
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",

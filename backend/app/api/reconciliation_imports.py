@@ -6,6 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from app.core.company_context import current_company_id
+from app.models.accounting import ReconciliationImportRow
+from app.models.pit_reconciliation import PitReconciliationWorkpaper
 
 from app.db.session import get_db
 from app.api.dependencies import require_company, require_period
@@ -20,6 +24,33 @@ from app.services.reconciliation_import import (
 )
 
 router = APIRouter(prefix="/reconciliation-imports", tags=["reconciliation-imports"], dependencies=[Depends(require_company)])
+
+
+class ClearImports(BaseModel):
+    period_id: int
+    import_type: str
+    batch_ids: list[int] | None = None
+
+
+@router.post("/clear")
+def clear_imports(payload: ClearImports, db: Session = Depends(get_db)) -> dict:
+    require_period(db, payload.period_id)
+    if payload.import_type not in {"bank_statement", "pit_declaration", "tax_certificate", "balance_sheet", "declaration_result", "accounting_ledger"}:
+        raise HTTPException(400, "未知导入类型")
+    query = db.query(ReconciliationImportBatch).filter_by(company_id=current_company_id(), period_id=payload.period_id, import_type=payload.import_type)
+    if payload.batch_ids is not None:
+        query = query.filter(ReconciliationImportBatch.id.in_(payload.batch_ids))
+    ids = [item.id for item in query.all()]
+    if payload.batch_ids is not None and set(ids) != set(payload.batch_ids):
+        raise HTTPException(404, "部分批次不存在或不属于当前分公司、期间和类型")
+    deleted_rows = db.query(ReconciliationImportRow).filter(ReconciliationImportRow.company_id == current_company_id(), ReconciliationImportRow.batch_id.in_(ids)).delete(synchronize_session=False)
+    query.delete(synchronize_session=False)
+    if ids:
+        for workpaper in db.query(PitReconciliationWorkpaper).filter_by(company_id=current_company_id(), period_id=payload.period_id):
+            workpaper.calculation_status = "stale"
+            workpaper.last_error = "核对来源已清空，请重新核对"
+    db.commit()
+    return {"deleted_batches": len(ids), "deleted_rows": deleted_rows}
 
 
 def _batch_payload(batch: ReconciliationImportBatch) -> dict:

@@ -457,13 +457,21 @@ def _intern_country_default(cert_type: str, id_number: str) -> str:
 
 def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     broker = frames_by_role.get("broker_salary_sheet", pd.DataFrame()).copy()
+    # The broker workflow has one income upload. Accept legacy role names and
+    # direct callers that provide that frame under a different key as well.
+    if broker.empty:
+        for key, frame in frames_by_role.items():
+            if key in {"broker_staff_info", "staff_info"} or not isinstance(frame, pd.DataFrame) or frame.empty:
+                continue
+            broker = frame.copy()
+            break
     staff = frames_by_role.get("broker_staff_info", pd.DataFrame()).copy()
     issues: List[Dict[str, Any]] = []
     if broker.empty:
         return {
             "detail": broker,
             "summary": pd.DataFrame(),
-            "issues": [{"issue_type": "缺失输入", "message": "缺少经纪人综合业绩指标表"}],
+            "issues": [{"issue_type": "缺失输入", "message": "缺少经纪人工资单"}],
             "block_declarations": True,
         }
 
@@ -685,8 +693,8 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             "*国籍(地区)": nationality,
             "*性别": _clean_cell(row.get("*性别")),
             "*出生日期": _clean_cell(row.get("*出生日期")),
-            "出生国家(地区)": nationality,
-            "涉税事由": "提供临时劳务" if cert_type != "居民身份证" else "",
+            "出生国家(地区)": (_clean_cell(row.get("出生国家(地区)")) or "国籍") if cert_type != "居民身份证" else nationality,
+            "涉税事由": (_clean_cell(row.get("涉税事由")) or "其他") if cert_type != "居民身份证" else _clean_cell(row.get("涉税事由")),
             "任职受雇从业日期": row.get("实习开始时间", ""),
             "手机号码": _clean_cell(row.get("联系方式", row.get("手机号码"))),
             "人员状态": "正常",

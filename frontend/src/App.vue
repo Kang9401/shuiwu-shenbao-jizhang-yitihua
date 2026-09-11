@@ -6,8 +6,10 @@
   </div>
   <div v-else-if="!selectedCompany" class="company-entry">
     <header class="company-entry-header">
-      <span class="brand-mark"><el-icon><Tickets /></el-icon></span>
-      <div><h1>智能税务平台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
+      <span class="brand-mark company-entry-brand-mark">
+        <img class="brand-logo" src="/gf-logo.jpg" alt="广发证券" />
+      </span>
+      <div><h1>广发证券财务工作台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
     </header>
     <div class="company-entry-grid">
       <section class="company-entry-list">
@@ -33,11 +35,11 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">
-          <el-icon><Tickets /></el-icon>
+          <img class="brand-logo" src="/gf-logo.jpg" alt="广发证券" />
         </span>
         <div class="brand-text">
-            <strong>智能税务平台</strong>
-          <small>工作台</small>
+          <strong>广发证券</strong>
+          <small>财务工作台</small>
         </div>
       </div>
 
@@ -99,6 +101,14 @@
       </header>
 
       <section class="content">
+        <WorkGuide
+          v-if="activeView === 'work_guide'"
+          :company-id="selectedCompany?.id || null"
+          :period-id="selectedPeriodId"
+          :period-label="selectedPeriodLabel"
+          @navigate="activeView = $event"
+        />
+
         <template v-if="activeView === 'tax_declaration'">
           <div v-if="!sessionId" class="diagnostic-card">
             <div>
@@ -118,6 +128,7 @@
 
         <PersonnelMasters
           v-else-if="activeView === 'personnel_masters'"
+          :key="`personnel-masters-${selectedCompany?.id || 'none'}`"
           :period-id="selectedPeriodId"
         />
 
@@ -146,6 +157,13 @@
         />
 
         <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
+
+        <MonthlyPersonnelWorkflow
+          v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
+          :key="`monthly-${selectedCompany?.id}-${activeWorkflow.code}`"
+          :workflow="activeWorkflow"
+          :period-id="selectedPeriodId"
+        />
 
         <GenericWorkflow
           v-else-if="activeWorkflow"
@@ -240,10 +258,12 @@ import {
 } from '@element-plus/icons-vue'
 import TaxDeclaration from './views/TaxDeclaration.vue'
 import GenericWorkflow from './views/GenericWorkflow.vue'
+import MonthlyPersonnelWorkflow from './views/MonthlyPersonnelWorkflow.vue'
 import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
 import PitReconciliation from './views/PitReconciliation.vue'
+import WorkGuide from './views/WorkGuide.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
 import FinanceSkill from './views/FinanceSkill.vue'
 import TaskCenter from './views/TaskCenter.vue'
@@ -285,7 +305,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
   {
     label: '工作清单',
     items: [
-      { key: 'work_guide', label: '操作指引', icon: Memo, kicker: 'Work guide', description: '税务岗每月工作清单和操作指引。', planned: true },
+      { key: 'work_guide', label: '操作指引', icon: Memo, kicker: 'Work guide', description: '税务岗每月工作清单和操作指引。' },
       { key: 'task_center', label: '运行记录', icon: Clock, kicker: 'Task history', description: '查看当前所属期间各申报流程的运行状态和版本。' },
       { key: 'system_maintenance', label: '系统维护', icon: Setting, kicker: 'System', description: '程序版本、数据备份、恢复和诊断。' },
     ],

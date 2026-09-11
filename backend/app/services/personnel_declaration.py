@@ -65,6 +65,8 @@ def _normalize_master(frame: pd.DataFrame) -> list[dict[str, str]]:
             "leave_date": _first_value(row, ["离职日期"]),
             "org_code": _first_value(row, ["机构代码", "机构代码(人员信息表)", "机构代码(工资单)"]),
             "status": _first_value(row, ["人员状态", "*人员状态", "状态"]),
+            "tax_reason": _first_value(row, ["涉税事由"]),
+            "birth_country": _first_value(row, ["出生国家(地区)", "出生国家（地区）"]),
         })
     return records
 
@@ -89,6 +91,8 @@ def _change_row(record: dict[str, str], *, status: str, year: int, month: int, l
         "机构代码(人员信息表)": record["org_code"],
         "机构代码(工资单)": record["org_code"] if status == "正常" else "",
         "员工编号": record["employee_id"],
+        "涉税事由": record.get("tax_reason", "") or ("其他" if cert_type != "居民身份证" else ""),
+        "出生国家(地区)": record.get("birth_country", "") or ("国籍" if cert_type != "居民身份证" else ""),
     }
 
 

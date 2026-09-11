@@ -352,6 +352,12 @@ def _migration_11(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE reconciliation_import_batches ADD COLUMN file_results JSON")
 
 
+def _migration_12(connection: sqlite3.Connection) -> None:
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'organization_mappings'").fetchone()
+    if table is not None and "bank_account" not in _table_columns(connection, "organization_mappings"):
+        connection.execute("ALTER TABLE organization_mappings ADD COLUMN bank_account VARCHAR(120) NOT NULL DEFAULT ''")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -364,6 +370,7 @@ MIGRATIONS = {
     9: _migration_9,
     10: _migration_10,
     11: _migration_11,
+    12: _migration_12,
 }
 
 

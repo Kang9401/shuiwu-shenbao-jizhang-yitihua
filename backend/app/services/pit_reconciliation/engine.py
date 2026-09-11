@@ -8,7 +8,7 @@ from .constants import OCCURRENCE_INCOME_TYPES, OCCURRENCE_SUBJECT_CODES, TAX_SU
 from .money import add_nullable, has_difference, subtract_nullable
 from .rules.bond_interest import bond_interest_details
 from .rules.declaration_summary import summarize
-from .rules.occurrence import calc_vat
+from .rules.occurrence import expected_income
 from .rules.payment import find_subset_sum
 from .rules.restricted_stock import restricted_stock_details
 from .rules.salary_tax import salary_tax_details
@@ -47,7 +47,7 @@ class PitReconciliationEngine:
                 status="invalid_source" if source.status=="invalid" or bundle.declarations.status=="invalid" or bundle.balance.status=="invalid" else "missing_source" if source.status=="missing" or bundle.declarations.status=="missing" or bundle.balance.status=="missing" else "ok"
                 current=subtract_nullable(declared_value,item.credit_amount if item else Decimal("0.00")); cumulative=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); business_diff=subtract_nullable(scoped_value,business_value)
                 if status=="ok" and any(has_difference(value) for value in (current,cumulative,business_diff)): status="difference"
-                tax_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":TAX_SUBJECT_NAMES[subject],"opening_balance":item.opening_balance if item else Decimal("0.00"),"debit_amount":item.debit_amount if item else Decimal("0.00"),"credit_amount":item.credit_amount if item else Decimal("0.00"),"closing_balance":item.closing_balance if item else Decimal("0.00"),"business_tax_amount":business_value,"declared_tax_amount":declared_value,"current_difference":current,"cumulative_difference":cumulative,"scoped_declared_tax_amount":scoped_value,"business_declared_difference":business_diff,"check_status":status})
+                tax_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":item.description if item else "","opening_balance":item.opening_balance if item else Decimal("0.00"),"debit_amount":item.debit_amount if item else Decimal("0.00"),"credit_amount":item.credit_amount if item else Decimal("0.00"),"closing_balance":item.closing_balance if item else Decimal("0.00"),"business_tax_amount":business_value,"declared_tax_amount":declared_value,"current_difference":current,"cumulative_difference":cumulative,"scoped_declared_tax_amount":scoped_value,"business_declared_difference":business_diff,"check_status":status})
             broker_gross=sum((item.gross_before_topup or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00")); broker_vat=sum((item.vat_amount or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00"))
             actual_by_item=defaultdict(lambda:Decimal("0.00"))
             for declaration in bundle.declarations.rows:
@@ -58,7 +58,7 @@ class PitReconciliationEngine:
                 item=balance[org_code].get(subject); occurrence=item.debit_amount if item else (None if bundle.balance.status in {"missing","invalid"} else Decimal("0.00")); income_type=OCCURRENCE_INCOME_TYPES[subject]
                 broker_value=(broker_gross if subject=="45019006" else Decimal("0.00")) if bundle.broker.status not in {"missing","invalid"} else None
                 broker_diff=subtract_nullable(broker_value,occurrence) if subject=="45019006" else Decimal("0.00")
-                expected=occurrence if subject in {"21131042","21210012"} else subtract_nullable(broker_gross,broker_vat) if subject=="45019006" and broker_value is not None else subtract_nullable(occurrence,calc_vat(occurrence))
+                expected, _ = expected_income(subject, occurrence, broker_value, broker_vat if broker_value is not None else None)
                 expected_by_subject[subject]=expected
                 occurrence_context[subject]=(item,occurrence,income_type,broker_value,broker_diff)
             broker_expected_total=sum((expected_by_subject.get(subject) or Decimal("0.00") for subject in {"21131042","45019006"}),Decimal("0.00"))
@@ -69,7 +69,7 @@ class PitReconciliationEngine:
                 # Legacy repeats the broker declaration amount on both component rows.
                 difference=subtract_nullable(actual,broker_expected_total if subject in {"21131042","45019006"} else expected)
                 status="invalid_source" if bundle.balance.status=="invalid" or bundle.declarations.status=="invalid" or (subject=="45019006" and bundle.broker.status=="invalid") else "missing_source" if bundle.balance.status=="missing" or bundle.declarations.status=="missing" or (subject=="45019006" and bundle.broker.status=="missing") else "difference" if has_difference(broker_diff) or has_difference(difference) else "ok"
-                occurrence_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":subject,"income_type":income_type,"opening_balance":item.opening_balance if item else None,"debit_amount":item.debit_amount if item else None,"credit_amount":item.credit_amount if item else None,"closing_balance":item.closing_balance if item else None,"occurrence_amount":occurrence,"broker_payroll_amount":broker_value,"broker_occurrence_difference":broker_diff,"expected_declared_income":expected,"expected_income_description":income_type,"actual_declared_income":actual,"declared_income_difference":difference,"check_status":status})
+                occurrence_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":item.description if item else "","income_type":income_type,"opening_balance":item.opening_balance if item else None,"debit_amount":item.debit_amount if item else None,"credit_amount":item.credit_amount if item else None,"closing_balance":item.closing_balance if item else None,"occurrence_amount":occurrence,"broker_payroll_amount":broker_value,"broker_occurrence_difference":broker_diff,"expected_declared_income":expected,"expected_income_description":expected_income(subject, occurrence, broker_value, broker_vat)[1],"actual_declared_income":actual,"declared_income_difference":difference,"check_status":status})
         details=[]
         if bundle.salary.status=="ready" and bundle.declarations.status=="ready": details += salary_tax_details(bundle.salary.rows,bundle.declarations.rows)+salary_taxable_income_details(bundle.salary.rows,bundle.declarations.rows)
         if bundle.bond_interest.status=="ready" and bundle.declarations.status=="ready": details += bond_interest_details(bundle.bond_interest.rows,bundle.declarations.rows)

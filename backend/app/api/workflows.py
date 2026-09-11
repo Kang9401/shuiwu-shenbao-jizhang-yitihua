@@ -13,8 +13,18 @@ from app.api.dependencies import require_company
 from app.models.core import Company
 from app.models.accounting import OrganizationMapping
 from app.workflows import list_workflows
+from app.services.part_time_tax import PAYROLL_COLUMNS
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+@router.get("/part-time-tax/template")
+def download_part_time_template(_company: Company = Depends(require_company)) -> Response:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame(columns=PAYROLL_COLUMNS).to_excel(writer, sheet_name="劳务报酬收入表", index=False)
+        pd.DataFrame([{"字段": c, "填写说明": "按模板字段填写"} for c in PAYROLL_COLUMNS]).to_excel(writer, sheet_name="填写说明", index=False)
+    filename = "劳务报酬导入模板.xlsx"
+    return Response(content=buffer.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
 
 
 @router.get("")

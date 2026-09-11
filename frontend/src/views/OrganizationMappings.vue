@@ -20,6 +20,7 @@
         <label><span>RPA 搜索结果序号</span><input v-model.number="draft.rpa_search_result_index" type="number" min="1" step="1" class="text-input" :disabled="!draft.rpa_enabled" placeholder="默认第 1 条" /></label>
         <label><span>所属分公司</span><input v-model.trim="draft.parent_branch" class="text-input" :disabled="!draft.rpa_enabled" placeholder="请输入所属分公司" /></label>
         <label><span>银行子目</span><input v-model.trim="draft.bank_subaccount" class="text-input" maxlength="120" placeholder="可含前导 0 或点号" /></label>
+        <label><span>银行账号</span><input v-model.trim="draft.bank_account" class="text-input" maxlength="120" placeholder="完整银行账号，保留前导零" /></label>
         <button class="btn btn-primary" :disabled="saving || !canSave" @click="saveDraft">{{ editingId ? '保存修改' : '新增机构' }}</button>
         <button v-if="editingId" class="btn btn-outline" @click="resetDraft">取消</button>
       </div>
@@ -39,6 +40,7 @@
         <el-table-column prop="rpa_org_name" label="营业部全称" min-width="260" show-overflow-tooltip />
         <el-table-column prop="rpa_search_result_index" label="搜索结果序号" width="120" />
         <el-table-column prop="parent_branch" label="所属分公司" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="bank_account" label="银行账号" min-width="190" />
         <el-table-column prop="bank_subaccount" label="银行子目" min-width="130" show-overflow-tooltip />
         <el-table-column label="状态" width="100"><template #default="{ row }"><span class="tag" :class="row.active ? 'tag-success' : 'tag-info'">{{ row.active ? '启用' : '停用' }}</span></template></el-table-column>
         <el-table-column label="操作" width="130"><template #default="{ row }"><button class="btn btn-xs btn-ghost" @click="editRow(row)">编辑</button><el-tooltip content="删除机构" placement="top"><el-button link type="danger" :icon="Delete" :disabled="saving" aria-label="删除机构" @click="deleteRow(row)" /></el-tooltip></template></el-table-column>
@@ -57,7 +59,7 @@ const mappings = ref<OrganizationMapping[]>([])
 const editingId = ref<number | null>(null)
 const importFile = ref<File | null>(null)
 const saving = ref(false)
-const emptyDraft = () => ({ branch_name: '', org_code: '', taxpayer_id: '', active: true, rpa_enabled: false, rpa_org_name: '', rpa_search_result_index: 1, parent_branch: '', bank_subaccount: '' })
+const emptyDraft = () => ({ branch_name: '', org_code: '', taxpayer_id: '', active: true, rpa_enabled: false, rpa_org_name: '', rpa_search_result_index: 1, parent_branch: '', bank_subaccount: '', bank_account: '' })
 const draft = reactive(emptyDraft())
 const canSave = computed(() => !!draft.branch_name && /^\d{5}$/.test(draft.org_code) && (!draft.rpa_enabled || (!!draft.rpa_org_name && !!draft.parent_branch && Number.isInteger(draft.rpa_search_result_index) && draft.rpa_search_result_index >= 1)))
 
@@ -85,6 +87,7 @@ function editRow(row: OrganizationMapping) {
     rpa_search_result_index: row.rpa_search_result_index || 1,
     parent_branch: row.parent_branch,
     bank_subaccount: row.bank_subaccount || '',
+    bank_account: row.bank_account || '',
   })
 }
 

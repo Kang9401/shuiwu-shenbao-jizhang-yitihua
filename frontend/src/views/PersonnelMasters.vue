@@ -6,7 +6,7 @@
       <div class="card-header">
         <div>
           <strong>人员主数据初始化/维护</strong>
-          <p>按月份维护员工和经纪人人员主数据，支持按月、机构、分公司导入和导出。</p>
+          <p>按月份维护员工、实习生和经纪人人员主数据，支持按月、机构、分公司导入和导出。</p>
         </div>
         <span class="tag tag-info">{{ personTypeLabel }}</span>
       </div>
@@ -17,6 +17,7 @@
             <span>人员类型</span>
             <select v-model="personType" class="period-native-select">
               <option value="employee">员工</option>
+              <option value="intern">实习生</option>
               <option value="broker">经纪人</option>
               <option value="part_time">劳务报酬人员</option>
             </select>
@@ -51,7 +52,7 @@
 
         <div class="action-bar">
           <div class="action-hint">
-            <span>工资薪金和年终奖使用员工主数据；经纪人申报使用经纪人主数据。</span>
+            <span>{{ personType === 'employee' ? '工资薪金和年终奖使用员工主数据。' : personType === 'intern' ? '实习生申报使用实习生人员主数据。' : personType === 'broker' ? '经纪人申报使用经纪人主数据。' : '劳务报酬申报使用劳务报酬人员主数据。' }}</span>
           </div>
           <button class="btn btn-primary btn-lg" :disabled="!canImport || loading" @click="importFile">
             <span v-if="loading" class="spinner"></span>
@@ -125,6 +126,7 @@ const errorText = ref('')
 
 const personTypeLabel = computed(() => ({
   employee: '员工',
+  intern: '实习生',
   broker: '经纪人',
   part_time: '劳务报酬人员',
 }[personType.value]))

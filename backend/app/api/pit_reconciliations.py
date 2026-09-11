@@ -20,10 +20,12 @@ from app.services.pit_reconciliation.exporter import SHEET_NAMES, build_pit_work
 
 router=APIRouter(prefix="/pit-reconciliations",tags=["pit-reconciliations"],dependencies=[Depends(require_company)])
 
-def _workpaper(db: Session, period_id: int):
+def _workpaper(db: Session, period_id: int, *, allow_stale: bool = False):
     require_period(db,period_id)
     row=db.query(PitReconciliationWorkpaper).filter_by(company_id=current_company_id(),period_id=period_id,tax_type="pit").first()
     if row is None: raise HTTPException(status_code=404,detail="当前所属期尚未生成个税核对底稿")
+    if row.calculation_status == "stale" and not allow_stale:
+        raise HTTPException(status_code=409, detail="核对来源已改变，请重新核对后查看或导出")
     return row
 
 def _payload(row):
@@ -31,7 +33,7 @@ def _payload(row):
 
 @router.get("/overview")
 def overview(period_id:int=Query(...),db:Session=Depends(get_db)):
-    try: row=_workpaper(db,period_id)
+    try: row=_workpaper(db,period_id,allow_stale=True)
     except HTTPException as exc:
         if exc.status_code==404:return {"exists":False,"period_id":period_id}
         raise

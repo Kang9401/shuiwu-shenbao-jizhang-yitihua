@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.services.verification import DECLARATION_COLUMNS, _normalize_emp_id, _clean_text
+from app.services.salary_deductions import blank_special_additional
 
 
 SALARY_RECONCILIATION_ONLY_FIELDS = {
@@ -69,7 +70,7 @@ def generate_declarations(
 
         # 选择申报列
         output_cols = [c for c in DECLARATION_COLUMNS if c in grp.columns and c not in SALARY_RECONCILIATION_ONLY_FIELDS]
-        org_sheet = grp[output_cols].copy()
+        org_sheet = blank_special_additional(grp[output_cols])
 
         # 文本列：工号/姓名/证件类型/证件号码/备注 必须保留为字符串，禁止数值化
         text_cols = {"工号", "*姓名", "*证件类型", "*证件号码", "备注"}
