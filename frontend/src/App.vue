@@ -158,6 +158,8 @@
 
         <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :company-id="selectedCompany?.id" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
 
+        <PitReview v-else-if="activeView === 'pit_review'" />
+
         <MonthlyPersonnelWorkflow
           v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
           :key="`monthly-${selectedCompany?.id}-${activeWorkflow.code}`"
@@ -263,6 +265,7 @@ import EtaxRpa from './views/EtaxRpa.vue'
 import PersonnelMasters from './views/PersonnelMasters.vue'
 import ReconciliationImports from './views/ReconciliationImports.vue'
 import PitReconciliation from './views/PitReconciliation.vue'
+import PitReview from './views/PitReview.vue'
 import WorkGuide from './views/WorkGuide.vue'
 import SystemMaintenance from './views/SystemMaintenance.vue'
 import FinanceSkill from './views/FinanceSkill.vue'
@@ -285,6 +288,7 @@ type ViewKey =
   | 'restricted_stock_interest_tax'
   | 'reconciliation_imports'
   | 'pit_reconciliation'
+  | 'pit_review'
   | 'vat_deduction'
   | 'invoice_booking'
   | 'voucher_draft'
@@ -323,6 +327,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
       { key: 'restricted_stock_interest_tax', label: '限售股/利息税', icon: Coin, workflowCode: 'restricted_stock_interest_tax', kicker: 'Restricted stock', description: '限售股、债券利息及客户类个人所得申报。' },
       { key: 'reconciliation_imports', label: '核对数据导入', icon: Files, kicker: 'Reconciliation imports', description: '银行流水、申报结果和账务数据结构化入库。' },
       { key: 'pit_reconciliation', label: '个税核对底稿', icon: DocumentChecked, kicker: 'PIT reconciliation', description: '缴款前、缴款后独立工作区，按阶段管理重算、提交与复核状态。' },
+      { key: 'pit_review', label: '个税底稿复核', icon: DocumentChecked, kicker: 'PIT review', description: '查询固定提交版本并执行复核通过或退回。' },
     ],
   },
   {

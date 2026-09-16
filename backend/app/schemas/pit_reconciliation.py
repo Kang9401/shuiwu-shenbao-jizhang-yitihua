@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -51,3 +51,7 @@ class PitDifferenceDetailRead(BaseModel):
 
 class PitRecalculateRequest(BaseModel):
     force: bool = True
+
+
+class PitReasonAggregationRequest(BaseModel):
+    mode: Literal["fill_empty", "refresh_generated"] = "fill_empty"

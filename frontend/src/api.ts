@@ -470,6 +470,8 @@ export const workflowApi = {
   artifactDownloadUrl: (artifactId: number) => companyUrl(`/api/artifacts/${artifactId}/download`),
   batchDownloadUrl: (jobId: number) => companyUrl(`/api/jobs/${jobId}/download-all`),
   downloadArtifact: (artifactId: number) => api.get<Blob>(`/artifacts/${artifactId}/download`, { responseType: 'blob' }),
+  downloadAll: (jobId: number) => api.get<Blob>(`/jobs/${jobId}/download-all`, { responseType: 'blob' }),
+  saveAll: (jobId: number, directory: string) => api.post<{ saved_count: number; directory: string; files: string[] }>(`/jobs/${jobId}/save-all`, { directory }),
   internTemplateUrl: () => companyUrl('/api/workflows/intern-tax/template'),
 }
 
@@ -582,6 +584,8 @@ export const pitReconciliationApi = {
   getOverview: (periodId: number, stage: PitStage) => api.get<PitOverviewResponse>('/pit-reconciliations/overview', { params: { period_id: periodId, stage } }),
   getReadiness: (periodId: number, stage: PitStage) => api.get<PitReadinessItem[]>('/pit-reconciliations/readiness', { params: { period_id: periodId, stage } }),
   recalculate: (periodId: number, stage: 'pre_payment' | 'post_payment' = 'pre_payment') => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId, stage }, timeout: 120000 }),
+  aggregateReasons: (periodId: number, stage: 'pre_payment' | 'post_payment', mode: 'fill_empty' | 'refresh_generated') =>
+    api.post('/pit-reconciliations/aggregate-reasons', { mode }, { params: { period_id: periodId, stage } }),
   getSummary: (periodId: number, stage: PitStage) => api.get<PitOrgSummary[]>('/pit-reconciliations/org-summaries', { params: { period_id: periodId, stage } }),
   getTaxAmountChecks: (periodId: number, stage: PitStage, params: PitListParams = {}) => api.get<PitTaxAmountCheck[]>('/pit-reconciliations/tax-amount-checks', { params: { period_id: periodId, stage, ...params } }),
   getOccurrenceChecks: (periodId: number, stage: PitStage, params: PitListParams = {}) => api.get<PitOccurrenceCheck[]>('/pit-reconciliations/occurrence-checks', { params: { period_id: periodId, stage, ...params } }),

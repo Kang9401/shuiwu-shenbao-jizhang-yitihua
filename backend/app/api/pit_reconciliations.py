@@ -12,11 +12,12 @@ from app.api.dependencies import require_company, require_period
 from app.core.company_context import current_company_id
 from app.db.session import get_db
 from app.models.pit_reconciliation import (PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck, PitReconciliationDifferenceDetail, PitReconciliationOrgSummary, PitReconciliationSource, PitReconciliationWorkpaper, PitTaxAmountCheck)
-from app.schemas.pit_reconciliation import PitManualUpdate, PitOccurrenceCheckUpdate, PitSummaryUpdate, PitTaxAmountCheckUpdate
+from app.schemas.pit_reconciliation import PitManualUpdate, PitOccurrenceCheckUpdate, PitReasonAggregationRequest, PitSummaryUpdate, PitTaxAmountCheckUpdate
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService
 from app.services.pit_reconciliation.exporter import sheet_names_for_stage, build_pit_workpaper_sheets, build_pit_workpaper_xlsx
+from app.services.pit_reconciliation.reason_aggregation import aggregate_reasons
 
 router=APIRouter(prefix="/pit-reconciliations",tags=["pit-reconciliations"],dependencies=[Depends(require_company)])
 
@@ -86,6 +87,37 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
         workpaper.last_error=str(exc)
         db.commit()
         raise HTTPException(status_code=400,detail=f"个税底稿计算失败：{exc}") from exc
+
+
+@router.post("/aggregate-reasons")
+def aggregate_reason_fields(
+    payload: PitReasonAggregationRequest,
+    period_id: int = Query(...),
+    stage: Literal["pre_payment", "post_payment"] = Query(...),
+    db: Session = Depends(get_db),
+):
+    if stage != "pre_payment":
+        raise HTTPException(status_code=400, detail="缴款后没有下级人工原因结构，不能汇总")
+    workpaper = _workpaper(db, period_id, stage)
+    if workpaper.workflow_status in {"submitted", "reviewed"}:
+        raise HTTPException(status_code=409, detail="当前底稿已锁定，不能汇总原因")
+    result = aggregate_reasons(db, workpaper, payload.mode)
+    if result.changed:
+        if workpaper.workflow_status == "returned":
+            workpaper.workflow_status = "pending_submission"
+        workpaper.draft_revision += 1
+        db.commit()
+        db.refresh(workpaper)
+    return {
+        "changed": result.changed,
+        "draft_revision": workpaper.draft_revision,
+        "updated_counts": result.updated_counts,
+        "skipped_manual_fields": result.skipped_manual_fields,
+        "message": (
+            f"已补齐{sum(result.updated_counts.values())}项空白汇总原因，保留{result.skipped_manual_fields}项人工填写内容"
+            if result.changed else "没有需要更新的汇总原因"
+        ),
+    }
 
 def _list(model,period_id,stage,db):
     row=_workpaper(db,period_id,stage); return [_payload(item) for item in db.query(model).filter_by(workpaper_id=row.id,company_id=current_company_id()).all()]
