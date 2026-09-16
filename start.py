@@ -1,90 +1,115 @@
-"""
-一键启动前后端服务
+"""Start the local API and Vite server on verified available ports."""
+from __future__ import annotations
 
-用法:
-    python start.py                  # 同时启动前后端
-    python start.py backend          # 仅启动后端
-    python start.py frontend         # 仅启动前端
-"""
+import argparse
+import os
+import socket
 import subprocess
 import sys
-import os
 import time
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 默认使用启动本脚本的 Python；开发者可以通过环境变量覆盖。
+ROOT = Path(__file__).resolve().parent
 PYTHON = os.environ.get("TAX_WORKBENCH_PYTHON", sys.executable)
 
 
-def run_backend():
-    """启动 FastAPI 后端 (port 8000)"""
-    backend_dir = os.path.join(ROOT, "backend")
-
-    # 先初始化数据库
-    print("[后端] 初始化数据库...")
-    init_cmd = [PYTHON, "-m", "app.db.init_db"]
-    subprocess.run(init_cmd, cwd=backend_dir, capture_output=True)
-
-    cmd = [
-        PYTHON, "-m", "uvicorn", "app.main:app",
-        "--host", "127.0.0.1",
-        "--port", "8000",
-        "--reload",
-    ]
-    print(f"[后端] 启动中... http://127.0.0.1:8000")
-    print(f"[后端] API 文档: http://127.0.0.1:8000/docs")
-    return subprocess.Popen(cmd, cwd=backend_dir)
+def find_available_port(preferred: int, fallback_range: range) -> int:
+    for port in (preferred, *fallback_range):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", port))
+            return port
+        except OSError:
+            continue
+    raise RuntimeError(f"{preferred}-{fallback_range.stop - 1}端口均不可用，请检查Windows保留端口、防火墙或残留进程。")
 
 
-def run_frontend():
-    """启动 Vite 前端 (port 5173)"""
-    frontend_dir = os.path.join(ROOT, "frontend")
-    # 使用 npx 确保能找到 vite
-    cmd = ["npx.cmd" if os.name == "nt" else "npx", "vite", "--host", "127.0.0.1", "--port", "5173"]
-    print(f"[前端] 启动中... http://127.0.0.1:5173")
-    return subprocess.Popen(cmd, cwd=frontend_dir)
+def backend_command(port: int, reload_enabled: bool) -> list[str]:
+    command = [PYTHON, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)]
+    if reload_enabled:
+        command.append("--reload")
+    return command
 
 
-def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "all"
-    processes = []
+def frontend_command(port: int) -> list[str]:
+    return ["npx.cmd" if os.name == "nt" else "npx", "vite", "--host", "127.0.0.1", "--port", str(port)]
+
+
+def wait_for_health(port: int, process: subprocess.Popen, timeout_seconds: float = 20) -> None:
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("后端进程在健康检查前退出")
+        try:
+            with urlopen(url, timeout=1) as response:
+                if response.status == 200:
+                    return
+        except (URLError, OSError):
+            time.sleep(0.25)
+    raise RuntimeError(f"后端未在 {timeout_seconds:g} 秒内通过健康检查：{url}")
+
+
+def initialize_database() -> None:
+    result = subprocess.run([PYTHON, "-m", "app.db.init_db"], cwd=ROOT / "backend")
+    if result.returncode:
+        raise RuntimeError("数据库初始化失败")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mode", nargs="?", choices=("all", "backend", "frontend"), default="all")
+    parser.add_argument("--reload", action="store_true", help="启用 Uvicorn 热重载")
+    args = parser.parse_args()
+    reload_enabled = args.reload or os.environ.get("TAX_WORKBENCH_RELOAD") == "1"
+    processes: list[tuple[str, subprocess.Popen]] = []
+    backend_port: int | None = None
+    frontend_port: int | None = None
 
     try:
-        if mode in ("all", "backend"):
-            processes.append(("后端", run_backend()))
+        if args.mode in ("all", "backend"):
+            print("[后端] 初始化数据库...")
+            initialize_database()
+            backend_port = find_available_port(8000, range(8001, 8011))
+            backend = subprocess.Popen(backend_command(backend_port, reload_enabled), cwd=ROOT / "backend")
+            processes.append(("后端", backend))
+            print(f"[后端] 启动中... http://127.0.0.1:{backend_port}")
+            wait_for_health(backend_port, backend)
 
-        if mode in ("all", "frontend"):
-            time.sleep(1)  # 等后端先启动
-            processes.append(("前端", run_frontend()))
+        if args.mode in ("all", "frontend"):
+            frontend_port = find_available_port(5173, range(5174, 5176))
+            environment = os.environ.copy()
+            if backend_port is not None:
+                environment["TAX_WORKBENCH_BACKEND_URL"] = f"http://127.0.0.1:{backend_port}"
+            frontend = subprocess.Popen(frontend_command(frontend_port), cwd=ROOT / "frontend", env=environment)
+            processes.append(("前端", frontend))
+            print(f"[前端] 启动中... http://127.0.0.1:{frontend_port}")
 
-        if not processes:
-            print("用法: python start.py [backend|frontend|all]")
-            return
-
-        print(f"\n{'=' * 50}")
-        if mode == "all":
-            print("前后端已启动!")
-            print("  前端: http://127.0.0.1:5173")
-            print("  后端: http://127.0.0.1:8000")
-            print("  API:  http://127.0.0.1:8000/docs")
-        print("按 Ctrl+C 停止所有服务")
-        print(f"{'=' * 50}\n")
-
-        # 等待进程结束
-        for _, proc in processes:
-            proc.wait()
-
+        print("\n" + "=" * 50)
+        if frontend_port is not None:
+            print(f"前端: http://127.0.0.1:{frontend_port}")
+        if backend_port is not None:
+            print(f"后端: http://127.0.0.1:{backend_port}")
+            print(f"API:  http://127.0.0.1:{backend_port}/docs")
+        print("按 Ctrl+C 停止本次启动的服务")
+        print("=" * 50 + "\n")
+        for _, process in processes:
+            process.wait()
     except KeyboardInterrupt:
-        print("\n正在停止服务...")
-        for name, proc in processes:
-            print(f"  停止 {name}...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        print("已停止所有服务")
+        print("\n正在停止本次启动的服务...")
+    except RuntimeError as error:
+        print(f"启动失败：{error}", file=sys.stderr)
+    finally:
+        for _, process in processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
 
 
 if __name__ == "__main__":

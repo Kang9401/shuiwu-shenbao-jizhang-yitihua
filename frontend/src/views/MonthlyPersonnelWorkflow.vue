@@ -30,7 +30,7 @@
         <p>黄色单元格需要补录。已填写的数据会保留；上传后请重新核对。更换收入资料后须重新进行首轮核对。</p>
         <div v-if="metrics.finalized" class="download-grid">
           <a v-for="file in declarationFiles" :key="file.id" class="download-item" :href="workflowApi.artifactDownloadUrl(file.id)">{{ file.file_name }}</a>
-          <a class="btn btn-primary" :href="workflowApi.batchDownloadUrl(job.id)">批量下载申报文件</a>
+          <el-button type="primary" :loading="batchDownloading" @click="batchDownload">批量下载申报文件</el-button>
         </div>
       </div>
     </section>
@@ -41,11 +41,13 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { workflowApi, type Workflow, type Job } from '../api'
+import { downloadJobArtifacts } from '../services/desktopDownload'
 const props = defineProps<{workflow: Workflow; periodId:number|null}>()
 const incomeFiles = ref<File[]>([])
 const changeFile = ref<File|null>(null)
 const job = ref<Job|null>(null)
 const busy = ref(false)
+const batchDownloading = ref(false)
 let revision = 0
 const metrics = computed(() => job.value?.result_summary || {})
 const issues = computed(() => Array.isArray(metrics.value.issue_details) ? metrics.value.issue_details : [])
@@ -75,5 +77,10 @@ async function run(operation: 'initial'|'recheck'|'generate') {
     if (data.status==='failed') ElMessage.error(data.error_message || '处理失败')
     else ElMessage[data.status==='needs_review'?'warning':'success'](data.status==='needs_review'?'请查看并处理核对问题':operation==='generate'?'申报文件已生成':'核对完成')
   } catch(e:any) { ElMessage.error(e?.response?.data?.detail || '处理失败') } finally { busy.value=false }
+}
+async function batchDownload() {
+  if (!job.value || batchDownloading.value) return
+  batchDownloading.value = true
+  try { await downloadJobArtifacts(job.value.id) } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '批量下载失败，请重试') } finally { batchDownloading.value = false }
 }
 </script>

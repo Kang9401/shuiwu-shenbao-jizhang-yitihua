@@ -40,6 +40,10 @@ class JobCreate(BaseModel):
     operation: Literal["generate", "reconcile", "initial", "recheck"] = "generate"
 
 
+class JobSaveAllRequest(BaseModel):
+    directory: str = Field(min_length=1)
+
+
 class JobRead(ORMModel):
     id: int
     workflow_code: str

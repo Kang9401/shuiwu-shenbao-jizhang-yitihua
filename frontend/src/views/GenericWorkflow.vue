@@ -101,11 +101,11 @@
           <button
             v-if="isRestrictedStockInterest && restrictedStep === 3"
             class="btn btn-outline btn-lg"
-            :disabled="!generationJob"
+            :disabled="!generationJob || batchDownloading"
             @click="batchDownloadRestricted"
           >
             <el-icon><Download /></el-icon>
-            批量下载
+            {{ batchDownloading ? '正在下载' : '批量下载' }}
           </button>
           <button v-if="isRestrictedStockInterest && restrictedStep === 2" class="btn btn-primary btn-lg" :disabled="running" @click="runRestrictedWorkflow('reconcile')">
             <span v-if="running" class="spinner"></span>
@@ -257,7 +257,7 @@
             </a>
           </div>
           <div v-if="autoDownloadArtifacts.length" class="action-bar compact-actions">
-            <button class="btn btn-primary" @click="batchDownloadAuto"><el-icon><Download /></el-icon>批量下载</button>
+            <button class="btn btn-primary" :disabled="batchDownloading" @click="batchDownloadAuto"><el-icon><Download /></el-icon>{{ batchDownloading ? '正在下载' : '批量下载' }}</button>
           </div>
         </template>
 
@@ -300,6 +300,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, VideoPlay } from '@element-plus/icons-vue'
 import { workflowApi, type Job, type Workflow } from '../api'
+import { downloadJobArtifacts } from '../services/desktopDownload'
 
 const props = defineProps<{
   workflow: Workflow
@@ -309,6 +310,7 @@ const props = defineProps<{
 const selectedFiles = reactive<Record<string, File | null>>({})
 const job = ref<Job | null>(null)
 const running = ref(false)
+const batchDownloading = ref(false)
 const folderInput = ref<HTMLInputElement | null>(null)
 const restrictedStep = ref(1)
 const partTimeStep = ref(1)
@@ -530,32 +532,7 @@ function returnToRestrictedReconciliation() {
 
 async function batchDownloadRestricted() {
   if (!generationJob.value) return
-  await downloadArtifactsToFolder(generationArtifacts.value, generationJob.value.id)
-}
-
-async function downloadArtifactsToFolder(artifacts: any[], jobId: number) {
-  const browserWindow = window as any
-  if (!artifacts.length) {
-    ElMessage.warning('没有可下载的申报文件')
-    return
-  }
-  if (!browserWindow.showDirectoryPicker) {
-    window.location.href = workflowApi.batchDownloadUrl(jobId)
-    return
-  }
-  try {
-    const directory = await browserWindow.showDirectoryPicker()
-    for (const artifact of artifacts) {
-      const response = await workflowApi.downloadArtifact(artifact.id)
-      const file = await directory.getFileHandle(artifact.file_name, { create: true })
-      const writable = await file.createWritable()
-      await writable.write(response.data)
-      await writable.close()
-    }
-    ElMessage.success(`已保存 ${artifacts.length} 个文件`)
-  } catch (error: any) {
-    if (error?.name !== 'AbortError') ElMessage.error('批量下载失败，请重试')
-  }
+  await batchDownload(generationJob.value.id)
 }
 
 async function uploadRestrictedFiles() {
@@ -725,6 +702,11 @@ async function runWorkflow(operation = 'generate') {
 }
 
 async function batchDownloadAuto() {
-  if (job.value) await downloadArtifactsToFolder(autoDownloadArtifacts.value, job.value.id)
+  if (job.value) await batchDownload(job.value.id)
+}
+async function batchDownload(jobId: number) {
+  if (batchDownloading.value) return
+  batchDownloading.value = true
+  try { await downloadJobArtifacts(jobId) } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '批量下载失败，请重试') } finally { batchDownloading.value = false }
 }
 </script>
