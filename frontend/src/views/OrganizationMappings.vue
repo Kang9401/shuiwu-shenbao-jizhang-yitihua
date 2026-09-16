@@ -2,34 +2,48 @@
   <section class="card workflow-card">
     <div class="card-header">
       <div>
-        <strong>机构映射维护</strong>
-        <p>全局长期复用，不随所属期间变化。实习生导入优先使用填写的5位机构代码。</p>
+        <strong>机构名称维护表</strong>
+        <p>全局长期复用。启用 RPA 后，营业部全称将作为 RPA 原机构名称。</p>
       </div>
       <a class="btn btn-sm btn-outline" :href="organizationMappingApi.exportUrl()" target="_blank">
-        <el-icon><Download /></el-icon>导出映射
+        <el-icon><Download /></el-icon>导出维护表
       </a>
     </div>
     <div class="card-body">
       <div class="master-controls">
         <label><span>营业部名称</span><input v-model.trim="draft.branch_name" class="text-input" placeholder="请输入营业部名称" /></label>
         <label><span>5位机构代码</span><input v-model.trim="draft.org_code" class="text-input" maxlength="5" placeholder="例如 10301" /></label>
+        <label><span>机构纳税人识别号</span><input v-model.trim="draft.taxpayer_id" class="text-input" placeholder="用于匹配工资单扣缴义务人" /></label>
         <label><span>状态</span><select v-model="draft.active" class="period-native-select"><option :value="true">启用</option><option :value="false">停用</option></select></label>
-        <button class="btn btn-primary" :disabled="saving || !canSave" @click="saveDraft">{{ editingId ? '保存修改' : '新增映射' }}</button>
+        <label><span>是否启用 RPA</span><el-switch v-model="draft.rpa_enabled" inline-prompt active-text="是" inactive-text="否" /></label>
+        <label><span>营业部全称</span><input v-model.trim="draft.rpa_org_name" class="text-input" :disabled="!draft.rpa_enabled" placeholder="RPA 原机构名称" /></label>
+        <label><span>RPA 搜索结果序号</span><input v-model.number="draft.rpa_search_result_index" type="number" min="1" step="1" class="text-input" :disabled="!draft.rpa_enabled" placeholder="默认第 1 条" /></label>
+        <label><span>所属分公司</span><input v-model.trim="draft.parent_branch" class="text-input" :disabled="!draft.rpa_enabled" placeholder="请输入所属分公司" /></label>
+        <label><span>银行子目</span><input v-model.trim="draft.bank_subaccount" class="text-input" maxlength="120" placeholder="可含前导 0 或点号" /></label>
+        <label><span>银行账号</span><input v-model.trim="draft.bank_account" class="text-input" maxlength="120" placeholder="完整银行账号，保留前导零" /></label>
+        <button class="btn btn-primary" :disabled="saving || !canSave" @click="saveDraft">{{ editingId ? '保存修改' : '新增机构' }}</button>
         <button v-if="editingId" class="btn btn-outline" @click="resetDraft">取消</button>
       </div>
 
       <div class="upload-item workflow-upload-item" :class="{ 'has-file': importFile }">
-        <label>批量导入映射</label>
+        <label>批量导入维护表</label>
         <input type="file" accept=".xlsx,.xls" @change="onImportPicked" />
-        <span class="upload-status" :class="importFile ? 'ready' : 'empty'">{{ importFile?.name || '需包含营业部名称、机构代码' }}</span>
-        <button class="btn btn-sm btn-outline" :disabled="!importFile || saving" @click="importMappings">导入并覆盖</button>
+        <span class="upload-status" :class="importFile ? 'ready' : 'empty'">{{ importFile?.name || '必填：营业部名称、机构代码；可选：机构纳税人识别号、RPA信息' }}</span>
+        <button class="btn btn-sm btn-outline" :disabled="!importFile || saving" @click="importMappings">清空并导入</button>
       </div>
 
       <el-table :data="mappings" size="small" style="width: 100%" max-height="520">
         <el-table-column prop="org_code" label="机构代码" width="120" />
         <el-table-column prop="branch_name" label="营业部名称" min-width="260" />
+        <el-table-column prop="taxpayer_id" label="机构纳税人识别号" min-width="210" show-overflow-tooltip />
+        <el-table-column label="启用 RPA" width="110"><template #default="{ row }"><span class="tag" :class="row.rpa_enabled ? 'tag-success' : 'tag-info'">{{ row.rpa_enabled ? '是' : '否' }}</span></template></el-table-column>
+        <el-table-column prop="rpa_org_name" label="营业部全称" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="rpa_search_result_index" label="搜索结果序号" width="120" />
+        <el-table-column prop="parent_branch" label="所属分公司" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="bank_account" label="银行账号" min-width="190" />
+        <el-table-column prop="bank_subaccount" label="银行子目" min-width="130" show-overflow-tooltip />
         <el-table-column label="状态" width="100"><template #default="{ row }"><span class="tag" :class="row.active ? 'tag-success' : 'tag-info'">{{ row.active ? '启用' : '停用' }}</span></template></el-table-column>
-        <el-table-column label="操作" width="100"><template #default="{ row }"><button class="btn btn-xs btn-ghost" @click="editRow(row)">编辑</button></template></el-table-column>
+        <el-table-column label="操作" width="130"><template #default="{ row }"><button class="btn btn-xs btn-ghost" @click="editRow(row)">编辑</button><el-tooltip content="删除机构" placement="top"><el-button link type="danger" :icon="Delete" :disabled="saving" aria-label="删除机构" @click="deleteRow(row)" /></el-tooltip></template></el-table-column>
       </el-table>
     </div>
   </section>
@@ -37,16 +51,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Download } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Download } from '@element-plus/icons-vue'
 import { organizationMappingApi, type OrganizationMapping } from '../api'
 
 const mappings = ref<OrganizationMapping[]>([])
 const editingId = ref<number | null>(null)
 const importFile = ref<File | null>(null)
 const saving = ref(false)
-const draft = reactive({ branch_name: '', org_code: '', active: true })
-const canSave = computed(() => !!draft.branch_name && /^\d{5}$/.test(draft.org_code))
+const emptyDraft = () => ({ branch_name: '', org_code: '', taxpayer_id: '', active: true, rpa_enabled: false, rpa_org_name: '', rpa_search_result_index: 1, parent_branch: '', bank_subaccount: '', bank_account: '' })
+const draft = reactive(emptyDraft())
+const canSave = computed(() => !!draft.branch_name && /^\d{5}$/.test(draft.org_code) && (!draft.rpa_enabled || (!!draft.rpa_org_name && !!draft.parent_branch && Number.isInteger(draft.rpa_search_result_index) && draft.rpa_search_result_index >= 1)))
 
 onMounted(loadMappings)
 
@@ -57,12 +72,23 @@ async function loadMappings() {
 
 function resetDraft() {
   editingId.value = null
-  Object.assign(draft, { branch_name: '', org_code: '', active: true })
+  Object.assign(draft, emptyDraft())
 }
 
 function editRow(row: OrganizationMapping) {
   editingId.value = row.id
-  Object.assign(draft, { branch_name: row.branch_name, org_code: row.org_code, active: row.active })
+  Object.assign(draft, {
+    branch_name: row.branch_name,
+    org_code: row.org_code,
+    taxpayer_id: row.taxpayer_id,
+    active: row.active,
+    rpa_enabled: row.rpa_enabled,
+    rpa_org_name: row.rpa_org_name,
+    rpa_search_result_index: row.rpa_search_result_index || 1,
+    parent_branch: row.parent_branch,
+    bank_subaccount: row.bank_subaccount || '',
+    bank_account: row.bank_account || '',
+  })
 }
 
 async function saveDraft() {
@@ -72,11 +98,11 @@ async function saveDraft() {
     const payload = { ...draft }
     if (editingId.value) await organizationMappingApi.update(editingId.value, payload)
     else await organizationMappingApi.create(payload)
-    ElMessage.success('机构映射已保存')
+    ElMessage.success('机构名称维护表已保存')
     resetDraft()
     await loadMappings()
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '机构映射保存失败')
+    ElMessage.error(error?.response?.data?.detail || '机构名称维护表保存失败')
   } finally {
     saving.value = false
   }
@@ -88,14 +114,38 @@ function onImportPicked(event: Event) {
 
 async function importMappings() {
   if (!importFile.value) return
+  try {
+    await ElMessageBox.confirm('导入会先清空当前分公司的全部机构，再以所选文件重建。是否继续？', '确认清空并导入', { type: 'warning', confirmButtonText: '清空并导入', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
   saving.value = true
   try {
     const { data } = await organizationMappingApi.importFile(importFile.value)
-    ElMessage.success(`已更新 ${data.updated} 条机构映射`)
+    ElMessage.success(`已清空 ${data.deleted} 条并导入 ${data.updated} 条机构信息`)
     importFile.value = null
     await loadMappings()
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '机构映射导入失败')
+    ElMessage.error(error?.response?.data?.detail || '机构名称维护表导入失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function deleteRow(row: OrganizationMapping) {
+  try {
+    await ElMessageBox.confirm(`确定删除机构“${row.branch_name}（${row.org_code}）”吗？`, '删除机构', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
+  saving.value = true
+  try {
+    await organizationMappingApi.delete(row.id)
+    if (editingId.value === row.id) resetDraft()
+    await loadMappings()
+    ElMessage.success('机构已删除')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '机构删除失败')
   } finally {
     saving.value = false
   }

@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.dependencies import require_company, require_period
 from app.services.personnel_master import (
     PersonnelMasterValidationError,
     get_personnel_master_artifact,
@@ -16,7 +17,7 @@ from app.services.personnel_master import (
     list_personnel_master_status,
 )
 
-router = APIRouter(prefix="/personnel-masters", tags=["personnel-masters"])
+router = APIRouter(prefix="/personnel-masters", tags=["personnel-masters"], dependencies=[Depends(require_company)])
 
 
 def _artifact_payload(artifact) -> dict:
@@ -46,6 +47,7 @@ def import_master(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
+    require_period(db, period_id)
     try:
         artifact = import_personnel_master(
             db,
@@ -66,6 +68,7 @@ def status(
     person_type: str = Query(...),
     db: Session = Depends(get_db),
 ) -> list[dict]:
+    require_period(db, period_id)
     return [_artifact_payload(artifact) for artifact in list_personnel_master_status(db, period_id, person_type)]
 
 
@@ -75,6 +78,7 @@ def batches(
     person_type: str = Query(...),
     db: Session = Depends(get_db),
 ) -> list[dict]:
+    require_period(db, period_id)
     return [
         {
             "id": batch.id,
@@ -99,6 +103,7 @@ def export_master(
     scope_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> FileResponse:
+    require_period(db, period_id)
     artifact = get_personnel_master_artifact(db, period_id, person_type, scope_type, scope_code)
     if not artifact:
         raise HTTPException(status_code=404, detail="该人员主数据尚未初始化")

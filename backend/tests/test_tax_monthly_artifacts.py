@@ -63,6 +63,8 @@ def test_monthly_working_sheet_is_overwritten_per_period(tmp_path: Path, monkeyp
     artifacts = db.query(TaxMonthlyArtifact).all()
     assert len(artifacts) == 1
     assert artifacts[0].source_round_number == 2
+    assert artifacts[0].file_content == second.read_bytes()
+    assert artifacts[0].content_sha256
     saved = pd.read_excel(artifacts[0].stored_path)
     assert saved.iloc[0]["value"] == "second"
     db.close()
@@ -280,6 +282,64 @@ def test_recheck_with_staff_change_uses_previous_employee_master(tmp_path: Path)
 
     assert resolved == str(previous_path)
     db.close()
+
+
+def test_employee_id_update_after_staff_change_removes_old_id_departure(tmp_path: Path):
+    from app.services.personnel_master import materialize_employee_id_updates
+    from app.services.verification import (
+        build_working_sheet,
+        check_personnel_changes,
+        detect_employee_id_only_changes,
+    )
+
+    active_path = tmp_path / "updated_staff.xlsx"
+    history_path = tmp_path / "updated_staff_history.xlsx"
+    payroll_path = tmp_path / "payroll.xlsx"
+    active = pd.DataFrame([{
+        "员工编号": "3357654",
+        "*姓名": "温玉玲",
+        "证件号码": "360724199009034568",
+        "机构代码": "12106",
+        "人员状态": "正常",
+    }])
+    history = pd.concat([
+        active,
+        pd.DataFrame([{
+            "员工编号": "10001",
+            "*姓名": "历史人员",
+            "证件号码": "360724198001010011",
+            "机构代码": "12106",
+            "人员状态": "非正常",
+        }]),
+    ], ignore_index=True)
+    payroll = pd.DataFrame([{
+        "员工编号": "46203",
+        "*姓名": "温玉玲",
+        "机构代码": "12106",
+        "应发工资": 1000,
+        "累计预扣预缴应纳税所得额": 0,
+        "本期应预扣预缴税额SUM": 0,
+        "个人所得税 SUM": 0,
+    }])
+    active.to_excel(active_path, index=False)
+    history.to_excel(history_path, index=False)
+    payroll.to_excel(payroll_path, index=False)
+
+    review_sheet, review_staff = build_working_sheet(
+        [("rank_salary", str(payroll_path))], str(active_path), ""
+    )
+    changes = detect_employee_id_only_changes(review_sheet, review_staff)
+    assert [(item["old_employee_id"], item["new_employee_id"]) for item in changes] == [("3357654", "46203")]
+
+    result = materialize_employee_id_updates(history_path, changes, tmp_path / "employee_id_updates", 2025, 2)
+    sheet, staff = build_working_sheet(
+        [("rank_salary", str(payroll_path))], result["updated_staff_path"], ""
+    )
+
+    assert check_personnel_changes(sheet, staff_df=staff, year=2025, month=2)["items"] == []
+    saved_history = pd.read_excel(result["full_staff_path"], dtype=str).fillna("")
+    assert saved_history.loc[saved_history["*姓名"] == "温玉玲", "员工编号"].iloc[0] == "46203"
+    assert saved_history.loc[saved_history["*姓名"] == "历史人员", "人员状态"].iloc[0] == "非正常"
 
 
 def test_latest_result_restores_saved_report_and_declarations(tmp_path: Path, monkeypatch):

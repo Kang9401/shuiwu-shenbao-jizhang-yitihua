@@ -59,8 +59,10 @@ def _format_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         if col not in result.columns:
             result[col] = ""
             continue
-        parsed = pd.to_datetime(result[col], errors="coerce")
-        result[col] = parsed.dt.strftime("%Y-%m-%d").fillna("")
+        parsed = result[col].map(lambda value: pd.to_datetime(value, errors="coerce"))
+        # The eTax personnel-collection template validates dates using the
+        # hyphenated example shown by the UI (for example, 2015-12-12).
+        result[col] = pd.Series(parsed, index=result.index).dt.strftime("%Y-%m-%d").fillna("")
     return result
 
 
@@ -185,13 +187,19 @@ def build_personnel_collection_files(
         "任职受雇从业类型": "*任职受雇从业类型",
     })
 
-    template = pd.DataFrame(columns=PERSONNEL_COLLECTION_COLUMNS)
+    # A transform may carry declaration-only fields (for example the intern
+    # workflow also needs *所得项目 and 本期收入).  Personnel collection
+    # files must always follow the tax bureau's single personnel template, so
+    # explicitly project the data to the template columns before writing.
+    org_col = "机构代码(人员信息表)"
+    template_columns = [*PERSONNEL_COLLECTION_COLUMNS, org_col]
+    work = work.reindex(columns=template_columns, fill_value="")
+    template = pd.DataFrame(columns=template_columns)
     work = pd.concat([template, work], axis=0, ignore_index=True)
     work = work.drop(columns=["人员状态"], errors="ignore")
     work = _format_date_columns(work, ["*出生日期", "任职受雇从业日期", "离职日期"])
 
     files: list[str] = []
-    org_col = "机构代码(人员信息表)"
     if org_col not in work.columns:
         return files
 

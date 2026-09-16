@@ -74,7 +74,10 @@
             <h4>必填资料</h4>
             <div v-for="item in requiredFiles" :key="item.role" class="upload-item" :class="{ 'has-file': files[item.role] }">
               <label>{{ item.label }}</label>
-              <input :key="`${item.role}-${inputVersion}`" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              <label class="btn btn-sm btn-outline file-picker-button">
+                选择文件
+                <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              </label>
               <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
                 {{ files[item.role] || '未选择' }}
               </span>
@@ -86,28 +89,18 @@
             <h4>可选工资资料</h4>
             <div v-for="item in optionalFiles" :key="item.role" class="upload-item" :class="{ 'has-file': files[item.role] }">
               <label>{{ item.label }}</label>
-              <input :key="`${item.role}-${inputVersion}`" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              <label class="btn btn-sm btn-outline file-picker-button">
+                选择文件
+                <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
+              </label>
               <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
                 {{ files[item.role] || '未选择' }}
               </span>
               <button class="btn btn-xs btn-ghost" :disabled="!files[item.role]" @click="clearFile(item.role)">清除</button>
             </div>
           </div>
-        </div>
 
-        <div class="upload-section deduction-section">
-          <h4>专项附加扣除</h4>
-          <div class="upload-item full-width" :class="{ 'has-file': deductionFiles.length }">
-            <label>扣除表文件</label>
-            <input :key="`deductions-${inputVersion}`" type="file" accept=".xlsx,.xls" multiple @change="pickDeductions" />
-            <span class="upload-status" :class="deductionFiles.length ? 'ready' : 'empty'">
-              {{ deductionFiles.length ? `已选择 ${deductionFiles.length} 个文件` : '未选择' }}
-            </span>
-            <button class="btn btn-xs btn-ghost" :disabled="!deductionFiles.length" @click="clearDeductions">清除</button>
-          </div>
-          <div v-if="deductionFiles.length" class="selected-file-list">
-            <span v-for="file in deductionFiles" :key="fileIdentity(file)" class="selected-file-chip">{{ file.name }}</span>
-          </div>
+
         </div>
 
         <div class="action-bar">
@@ -213,38 +206,49 @@
         </div>
       </section>
 
-      <section v-if="hasDeductionWarnings" class="card">
+      <section v-if="report.taxpayer_org_mapping?.has_issues" class="card">
         <div class="card-header">
-          <strong>专项附加扣除异常</strong>
-          <span class="tag tag-danger">
-            重复人员 {{ report.deduction_warnings.duplicates.length }} 名，缺失机构 {{ report.deduction_warnings.missing_orgs.length }} 个，需补全证件号 {{ deductionMatchWarnings.length }} 人
+          <strong>工资机构识别号映射异常</strong>
+          <span class="tag tag-danger">{{ report.taxpayer_org_mapping.items.length }} 项阻断</span>
+        </div>
+        <div class="card-body">
+          <el-table :data="report.taxpayer_org_mapping.items" size="small" max-height="260">
+            <el-table-column prop="payroll_type" label="工资单类型" min-width="150" />
+            <el-table-column prop="name" label="姓名" width="100" />
+            <el-table-column prop="employee_id" label="员工编号" width="120" />
+            <el-table-column prop="taxpayer_id" label="扣缴义务人纳税人识别号" min-width="220" />
+            <el-table-column prop="message" label="提示" min-width="260" />
+          </el-table>
+        </div>
+      </section>
+
+      <section v-if="report.retirement_welfare?.items.length" class="card">
+        <div class="card-header">
+          <strong>退休福利慰问核对</strong>
+          <span class="tag" :class="report.retirement_welfare.items.some((item) => item.blocking) ? 'tag-danger' : 'tag-warning'">
+            {{ report.retirement_welfare.items.length }} 人
           </span>
         </div>
         <div class="card-body">
-          <el-table v-if="report.deduction_warnings.duplicates.length" :data="report.deduction_warnings.duplicates" size="small" max-height="260">
-            <el-table-column type="expand">
+          <el-table :data="retirementWelfareItems" size="small" max-height="260">
+            <el-table-column prop="name" label="姓名" width="100" />
+            <el-table-column prop="org_code" label="机构代码" width="120" />
+            <el-table-column prop="id_number" label="身份证号" min-width="170" />
+            <el-table-column prop="payroll_exists" label="本月工资" width="100">
+              <template #default="{ row }">{{ row.payroll_exists ? '已存在' : '不存在' }}</template>
+            </el-table-column>
+            <el-table-column prop="personnel_status" label="人员状态" width="100" />
+            <el-table-column prop="match_method" label="匹配方式" min-width="140" />
+            <el-table-column prop="welfare_column" label="慰问金额列" min-width="180" />
+            <el-table-column prop="welfare_amount" label="慰问金额" width="110" />
+            <el-table-column prop="payroll_taxable_adjustment" label="工资调增应纳税所得额" min-width="170" />
+            <el-table-column prop="status" label="核对结果" min-width="140">
               <template #default="{ row }">
-                <el-table :data="row.details" size="small" style="width:100%">
-                  <el-table-column prop="file_name" label="来源表" min-width="200" />
-                  <el-table-column prop="deduction_summary" label="专项扣除明细" min-width="360" />
-                </el-table>
+                <span v-if="row.status === '福利费待核对'" class="tag tag-warning">{{ row.status }}</span>
+                <span v-else>{{ row.status }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="name" label="重复人员" width="120" />
-            <el-table-column prop="id_number" label="证件号码" min-width="170" />
-            <el-table-column prop="file_names" label="重复来源表" min-width="260" />
-            <el-table-column prop="file_count" label="出现次数" width="100" />
-          </el-table>
-          <el-table v-if="deductionMissingOrgRows.length" :data="deductionMissingOrgRows" size="small" max-height="260" style="margin-top:16px">
-            <el-table-column prop="org_code" label="机构代码" width="140" />
-            <el-table-column prop="message" label="异常说明" min-width="280" />
-          </el-table>
-          <el-table v-if="deductionMatchWarnings.length" :data="deductionMatchWarnings" size="small" max-height="260" style="margin-top:16px">
-            <el-table-column prop="name" label="专项表姓名" width="120" />
-            <el-table-column prop="id_number" label="专项表证件号码" min-width="170" />
-            <el-table-column prop="candidate_count" label="候选人数" width="100" />
-            <el-table-column prop="candidate_id_numbers" label="工资人员候选证件号码" min-width="260" />
-            <el-table-column prop="message" label="处理提示" min-width="360" />
+            <el-table-column prop="action" label="处理说明" min-width="330" />
           </el-table>
         </div>
       </section>
@@ -303,6 +307,22 @@
             <el-table-column prop="机构代码(工资单)" label="工资机构" min-width="120" />
           </el-table>
           <div v-else class="empty-inline" style="margin-top:16px">本轮没有需要补充的雇员信息。</div>
+        </div>
+      </section>
+
+      <section v-if="report.employee_id_changes?.items.length" class="card">
+        <div class="card-header">
+          <strong>员工编号自动更新</strong>
+          <span class="tag tag-warning">{{ report.employee_id_changes.items.length }} 人，仅更新本月主数据</span>
+        </div>
+        <div class="card-body">
+          <el-table :data="report.employee_id_changes.items" size="small" max-height="260">
+            <el-table-column prop="name" label="姓名" width="110" />
+            <el-table-column prop="org_code" label="机构代码" width="110" />
+            <el-table-column prop="old_employee_id" label="原员工编号" width="130" />
+            <el-table-column prop="new_employee_id" label="新员工编号" width="130" />
+            <el-table-column prop="message" label="处理结果" min-width="260" />
+          </el-table>
         </div>
       </section>
 
@@ -380,6 +400,10 @@
             <el-icon v-else><Download /></el-icon>
             {{ batchDownloading ? `下载中 ${batchProgress}/${generatedFiles.length}` : '批量下载全部' }}
           </button>
+          <button class="btn btn-sm btn-outline" :disabled="!generatedFiles.length" @click="clearGeneratedOutput">
+            <el-icon><Delete /></el-icon>
+            一键清空
+          </button>
         </div>
       </div>
       <div class="card-body">
@@ -397,6 +421,9 @@
             <el-icon><RefreshRight /></el-icon>
             开始新的申报
           </button>
+          <button class="btn btn-primary btn-lg" :disabled="!generatedFiles.length" @click="openPreDeclaration">
+            预申报
+          </button>
         </div>
       </div>
     </section>
@@ -405,17 +432,18 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheck,
   Document,
+  Delete,
   Download,
   Finished,
   FolderOpened,
   RefreshRight,
   UploadFilled,
 } from '@element-plus/icons-vue'
-import { taxApi, type GeneratedFile, type TaxSession, type VerifyReport } from '../api'
+import { currentCompanyHeaders, taxApi, type GeneratedFile, type TaxSession, type VerifyReport } from '../api'
 
 const props = defineProps<{
   session: TaxSession | null
@@ -424,6 +452,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'session-updated', session: TaxSession): void
+  (event: 'open-rpa'): void
 }>()
 
 const step = ref(1)
@@ -435,14 +464,15 @@ const report = ref<VerifyReport | null>(null)
 const latestRound = ref(0)
 const generatedFiles = ref<GeneratedFile[]>([])
 const reviewArtifacts = ref<GeneratedFile[]>([])
-const deductionFiles = ref<File[]>([])
 const folderInput = ref<HTMLInputElement | null>(null)
 const staffReimportInput = ref<HTMLInputElement | null>(null)
 const inputVersion = ref(0)
 const importedStaffChangeName = ref('')
+const retirementWelfareColumn = ref('')
 
 const files = reactive<Record<string, string>>({})
 const fileData = reactive<Record<string, File>>({})
+const deductionFiles = ref<File[]>([])
 
 const requiredFiles = [
   { role: 'rank_salary', label: '职级工资单' },
@@ -450,23 +480,19 @@ const requiredFiles = [
 ]
 
 const optionalFiles = [
-  { role: 'branch_salary', label: '机构工资单' },
   { role: 'headquarters_salary', label: '总部工资单' },
-  { role: 'digital_ops_salary', label: '数字化运营工资单' },
-  { role: 'advisor_salary', label: '投顾工资单' },
+  { role: 'retirement_welfare', label: '退休福利慰问表' },
 ]
 
 const requiredFileLabels: Record<string, string> = {
   rank_salary: '职级工资单',
   marketing_salary: '营销工资单',
-  deduction_files: '专项附加扣除',
 }
 
 const missingRequiredLabels = computed(() => {
   const missing: string[] = []
   if (!files.rank_salary) missing.push(requiredFileLabels.rank_salary)
   if (!files.marketing_salary) missing.push(requiredFileLabels.marketing_salary)
-  if (!deductionFiles.value.length) missing.push(requiredFileLabels.deduction_files)
   return missing
 })
 
@@ -475,8 +501,7 @@ const canStartVerify = computed(() => Boolean(props.sessionId && !verifying.valu
 // 已缓存的文件数（跨步骤切换时保留在内存中，避免重复上传）
 const cachedFileCount = computed(() => Object.keys(fileData).length + deductionFiles.value.length)
 const cachedFileList = computed(() => {
-  const names = Object.values(files).filter(Boolean)
-  if (deductionFiles.value.length) names.push(`专项附加扣除×${deductionFiles.value.length}`)
+  const names = [...Object.values(files).filter(Boolean), ...deductionFiles.value.map((file) => file.name)]
   return names.join('、')
 })
 
@@ -491,7 +516,7 @@ const reconciliationReportArtifacts = computed(() =>
 const deductionMissingOrgRows = computed(() =>
   (report.value?.deduction_warnings.missing_orgs || []).map((orgCode) => ({
     org_code: orgCode,
-    message: '该工资机构的专项附加扣除合计为 0',
+    message: '该营业部未匹配到独立专项附加扣除数据，仅提醒，不影响生成',
   }))
 )
 
@@ -500,6 +525,14 @@ const deductionMatchWarnings = computed(() =>
 )
 
 const personnelChangePreview = computed(() => report.value?.personnel_change_review || [])
+
+const retirementWelfareItems = computed(() =>
+  [...(report.value?.retirement_welfare?.items || [])].sort((left, right) => {
+    const leftPending = left.status === '福利费待核对' ? 0 : 1
+    const rightPending = right.status === '福利费待核对' ? 0 : 1
+    return leftPending - rightPending
+  })
+)
 
 const hasDeductionWarnings = computed(() => Boolean(
   report.value && (
@@ -550,23 +583,37 @@ async function restoreLatestResult(sessionId: number) {
 function pickFile(role: string, event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
+  if (role === 'retirement_welfare') retirementWelfareColumn.value = ''
   files[role] = file.name
   fileData[role] = file
 }
 
-function pickDeductions(event: Event) {
-  deductionFiles.value = Array.from((event.target as HTMLInputElement).files || [])
-}
-
 function clearFile(role: string) {
+  if (role === 'retirement_welfare') retirementWelfareColumn.value = ''
   delete files[role]
   delete fileData[role]
   inputVersion.value += 1
 }
 
-function clearDeductions() {
+function pickDeductionFiles(event: Event) {
+  const picked = Array.from((event.target as HTMLInputElement).files || [])
+  deductionFiles.value = mergeUniqueFiles(deductionFiles.value, picked)
+}
+
+function clearDeductionFiles() {
   deductionFiles.value = []
   inputVersion.value += 1
+}
+
+function removeDeductionFile(file: File) {
+  const identity = fileIdentity(file)
+  deductionFiles.value = deductionFiles.value.filter((item) => fileIdentity(item) !== identity)
+}
+
+function mergeUniqueFiles(current: File[], incoming: File[]) {
+  const merged = new Map(current.map((file) => [fileIdentity(file), file]))
+  incoming.forEach((file) => merged.set(fileIdentity(file), file))
+  return Array.from(merged.values())
 }
 
 function openFolderPicker() {
@@ -576,7 +623,14 @@ function openFolderPicker() {
 function pickFolder(event: Event) {
   const picked = Array.from((event.target as HTMLInputElement).files || [])
     .filter((file) => /\.(xlsx|xls)$/i.test(file.name) && !file.name.startsWith('~$'))
-  const classified = classifyFolderFiles(picked)
+  let classified
+  try {
+    classified = classifyFolderFiles(picked)
+  } catch (error: any) {
+    ;(event.target as HTMLInputElement).value = ''
+    ElMessage.error(error.message)
+    return
+  }
   let count = 0
 
   for (const [role, file] of Object.entries(classified.roles)) {
@@ -584,10 +638,7 @@ function pickFolder(event: Event) {
     fileData[role] = file
     count += 1
   }
-  if (classified.deductions.length) {
-    deductionFiles.value = classified.deductions
-    count += classified.deductions.length
-  }
+
   const artifactCount = classified.knownArtifacts.length
 
   inputVersion.value += 1
@@ -600,20 +651,32 @@ function pickFolder(event: Event) {
   } else {
     ElMessage.warning('未识别到可用申报文件')
   }
+  if (classified.duplicateWarnings.length) {
+    ElMessage.warning(`存在多个重复工资文件，已匹配第一个，请确认：${classified.duplicateWarnings.join('；')}`)
+  }
 }
 
 function classifyFolderFiles(fileList: File[]) {
   const roles: Record<string, File> = {}
-  const deductions: File[] = []
   const knownArtifacts: File[] = []
+  const deductionFiles: File[] = []
+  const duplicateWarnings: string[] = []
   for (const file of fileList) {
     const text = normalizeFileText(file)
     const role = detectFileRole(text)
-    if (role === 'deduction_files') deductions.push(file)
+    if (role === 'salary_role_conflict') throw new Error(`文件名同时包含5位和7位标记，无法判断工资类型：${file.name}`)
+    if (role === 'deduction_files') deductionFiles.push(file)
     else if (role === 'personnel_collection' || role === 'updated_staff' || role === 'working_sheet' || role === 'reconciliation_report') knownArtifacts.push(file)
-    else if (role && !roles[role]) roles[role] = file
+    else if (role) {
+      const normalizedRole = ['branch_salary', 'digital_ops_salary', 'advisor_salary'].includes(role) ? 'marketing_salary' : role
+      if (roles[normalizedRole]) {
+        duplicateWarnings.push(`${normalizedRole === 'rank_salary' ? '职级' : normalizedRole === 'marketing_salary' ? '营销' : normalizedRole === 'headquarters_salary' ? '总部' : normalizedRole}：${roles[normalizedRole].name}、${file.name}`)
+        continue
+      }
+      roles[normalizedRole] = file
+    }
   }
-  return { roles, deductions, knownArtifacts }
+  return { roles, knownArtifacts, deductionFiles, duplicateWarnings }
 }
 
 function normalizeFileText(file: File) {
@@ -633,8 +696,15 @@ function detectFileRole(text: string) {
   if (compact.includes('当月人员信息表') || compact.includes('更新后人员信息表')) return 'updated_staff'
   if (compact.includes('专项附加扣除') || compact.includes('专项扣除')) return 'deduction_files'
   if (compact.includes('人员信息变动表雇员') || compact.includes('变动表雇员')) return 'staff_change'
+  if (compact.includes('退休')) return 'retirement_welfare'
+  if (compact.includes('经纪人') || compact.includes('证券经纪')) return 'broker_salary'
+  if (compact.includes('总部')) return 'headquarters_salary'
+  const rankByName = compact.includes('5位') || compact.includes('五位')
+  const marketingByName = compact.includes('7位') || compact.includes('七位')
+  if (rankByName && marketingByName) return 'salary_role_conflict'
+  if (rankByName) return 'rank_salary'
+  if (marketingByName) return 'marketing_salary'
   if (compact.includes('投资顾问') || compact.includes('理财经理') || compact.includes('投顾')) return 'advisor_salary'
-  if (compact.includes('总部代发') || compact.includes('总部工资')) return 'headquarters_salary'
   if (compact.includes('机构业务人员') || compact.includes('机构工资')) return 'branch_salary'
   if (compact.includes('数字化运营')) return 'digital_ops_salary'
   if (compact.includes('营销人员') || compact.includes('营销工资')) return 'marketing_salary'
@@ -664,7 +734,8 @@ async function runVerify() {
       if (role === 'staff_change' && step.value !== 2) continue
       form.append(role, file)
     }
-    for (const file of deductionFiles.value) form.append('deduction_files', file)
+
+    if (retirementWelfareColumn.value) form.append('retirement_welfare_column', retirementWelfareColumn.value)
 
     const { data } = await taxApi.verify(props.sessionId, form)
     report.value = data.report
@@ -681,6 +752,17 @@ async function runVerify() {
       ElMessage.warning(`核对完成，发现 ${data.report.summary.total_issues} 项问题`)
     }
   } catch (error: any) {
+    const detail = error?.response?.data?.detail
+    if (detail?.code === 'retirement_welfare_column_required' && Array.isArray(detail.columns)) {
+      const selected = await selectRetirementWelfareColumn(detail.columns)
+      if (selected) {
+        retirementWelfareColumn.value = selected
+        await runVerify()
+        return
+      }
+      step.value = 1
+      return
+    }
     step.value = 2
     ElMessage.error('核对失败：' + getErrorMessage(error))
   } finally {
@@ -755,12 +837,16 @@ function goToStep(target: number) {
 }
 
 // 批量下载：通过后端打包 zip，浏览器弹出"另存为"对话框让用户选保存路径
+async function openPreDeclaration() {
+  try { await ElMessageBox.confirm('当前操作为预申报，请确认申报数据无误后再进行后续正式申报操作。', '预申报', {confirmButtonText:'进入预申报',cancelButtonText:'取消'}); emit('open-rpa') } catch {}
+}
+
 async function batchDownload() {
   if (!props.sessionId || !generatedFiles.value.length) return
   batchDownloading.value = true
   batchProgress.value = 0
   try {
-    const response = await fetch(`/api/tax/sessions/${props.sessionId}/download-all`)
+    const response = await fetch(`/api/tax/sessions/${props.sessionId}/download-all`, { headers: currentCompanyHeaders() })
     if (!response.ok) throw new Error('下载失败')
     const blob = await response.blob()
     const fileName = `申报文件_${props.sessionId}.zip`
@@ -778,8 +864,11 @@ async function batchDownload() {
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.download = fileName
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
       anchor.click()
-      URL.revokeObjectURL(url)
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 3000)
     }
     const total = generatedFiles.value.length
     for (let i = 0; i < total; i++) {
@@ -795,12 +884,44 @@ async function batchDownload() {
   }
 }
 
+async function selectRetirementWelfareColumn(columns: string[]) {
+  const { value } = await ElMessageBox.prompt(
+    `该退休福利表有多个慰问金额列：${columns.join('、')}`,
+    '选择退休福利金额列',
+    {
+      inputPlaceholder: '请输入上方任一完整列名',
+      inputValidator: (value) => columns.includes(value) || '请输入上方列名之一',
+      confirmButtonText: '确认导入',
+      cancelButtonText: '取消',
+    },
+  ).catch(() => ({ value: '' }))
+  return value
+}
+
+async function clearGeneratedOutput() {
+  if (!props.sessionId) return
+  try {
+    await ElMessageBox.confirm(
+      '确认清空本次生成的全部申报文件？核对报告和人员主数据会保留。',
+      '一键清空',
+      { type: 'warning', confirmButtonText: '确认清空' },
+    )
+    const { data } = await taxApi.clearGeneratedFiles(props.sessionId)
+    generatedFiles.value = []
+    step.value = 2
+    if (props.session) emit('session-updated', { ...props.session, status: data.status })
+    ElMessage.success('生成的申报文件已清空')
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('清空失败：' + getErrorMessage(error))
+  }
+}
+
 function resetAll() {
   clearDisplayedResult()
-  deductionFiles.value = []
   importedStaffChangeName.value = ''
   Object.keys(files).forEach((key) => delete files[key])
   Object.keys(fileData).forEach((key) => delete fileData[key])
+  deductionFiles.value = []
   inputVersion.value += 1
 }
 </script>

@@ -1,0 +1,4827 @@
+{
+  "legacy_mode": "execute",
+  "legacy_sheets": [
+    "汇总税额核对",
+    "自然人电子税务局申报数据",
+    "个税明细税额核对",
+    "其他个税发生额核对",
+    "附A1 工资薪金等个税差异",
+    "附A2 当期工资薪金累计应纳税所得额差异明细",
+    "附A3 客户利息个税差异明细",
+    "附A4 限售股个税差异明细",
+    "科目余额表",
+    "债券利息明细",
+    "限售股明细",
+    "个税完税凭证",
+    "综合所得个税申报表",
+    "分类所得申报表",
+    "限售股所得申报表",
+    "银行流水",
+    "银行流水个税税额明细"
+  ],
+  "compared": true,
+  "company_id": 2,
+  "period_id": 5,
+  "rows": [
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "159289.39",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "155625.05",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "158756.32",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "3664.34",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "1169.08",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "1169.08",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "1169.08",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12040",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "57303.23",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "57766.94",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "57303.23",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "-463.71",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "777.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "777.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "777.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12041",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "100077.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "100077.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "99179.73",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "3829.88",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "3829.88",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "3829.88",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "103309.25",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "103309.25",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "103309.25",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12042",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "19604.77",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "19604.77",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "19604.77",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "67.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "67.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "67.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12068",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "223199.42",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "223199.42",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "223151.50",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "77.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "77.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "77.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12082",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "29024.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "29087.63",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "29024.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "-63.43",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "4.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "4.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "4.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "18589237.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "18589237.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "18589237.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12084",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "40392.73",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "40392.73",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "40057.68",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.44",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.44",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.44",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "49917.56",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "49917.56",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "49917.56",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12085",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "38598.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "38598.16",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "38397.92",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "28714.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "28714.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "28714.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "2789061.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "2789061.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "2789061.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "144.68",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "144.68",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "144.68",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12086",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "6037.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "6037.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "6037.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "284.17",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "284.17",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "284.17",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12087",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "35437.93",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "35437.93",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "35397.93",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "450.72",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "450.72",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "450.72",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12088",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "99974.33",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "99974.33",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "99974.33",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "41.60",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "41.60",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "41.60",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12089",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "28241.13",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "28241.13",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "28183.31",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "20.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "20.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "20.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12090",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "25361.74",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "25361.74",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "25361.74",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "14.40",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "14.40",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "14.40",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "758030.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "758030.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "758030.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12091",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "11000.54",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "11000.54",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "10960.54",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12092",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "198481.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "198481.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "198481.99",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "2414.81",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "2414.81",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "2414.81",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12101",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "11683.59",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "11683.59",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "11683.59",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "408.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "408.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "408.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12102",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "36214.13",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "36214.13",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "36214.13",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "15.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "15.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "15.80",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12103",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "29878.61",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "29878.61",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "29878.61",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "36.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "36.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "36.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "919.01",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "919.01",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "919.01",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12105",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "21126.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "21126.20",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "20437.09",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "12106",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "165334.08",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "credit_amount",
+      "legacy": "165334.08",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "closing_balance",
+      "legacy": "165098.04",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510006"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510008"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510009"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "declared_tax_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "credit_amount",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "current_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "closing_balance",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "cumulative_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    },
+    {
+      "key": [
+        "17023",
+        "21510016"
+      ],
+      "field": "business_declared_difference",
+      "legacy": "0.00",
+      "new": null,
+      "result": "FAIL"
+    }
+  ]
+}

@@ -7,8 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import jobs as jobs_api
+from app.core.config import settings
 from app.db.session import Base
 from app.models.core import Artifact, Job
+from app.schemas.core import JobSaveAllRequest
 
 
 def _db_session():
@@ -49,3 +51,44 @@ def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_p
         f"申报文件/{collection.name}",
     ]
     db.close()
+
+
+def test_desktop_save_all_filters_artifacts_sanitizes_names_and_avoids_overwrite(tmp_path: Path, monkeypatch):
+    db = _db_session()
+    job = Job(workflow_code="broker_tax", input_file_ids=[], status="success")
+    db.add(job)
+    db.commit()
+    source = tmp_path / "source.xlsx"
+    source.write_text("declaration", encoding="utf-8")
+    db.add_all([
+        Artifact(job_id=job.id, artifact_type="declaration", file_name="../申报.xlsx", stored_path=str(source)),
+        Artifact(job_id=job.id, artifact_type="personnel_collection", file_name="申报.xlsx", stored_path=str(source)),
+        Artifact(job_id=job.id, artifact_type="working_sheet", file_name="底稿.xlsx", stored_path=str(source)),
+    ])
+    db.commit()
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(settings, "runtime_mode", "desktop")
+
+    result = jobs_api.save_job_declarations(job.id, JobSaveAllRequest(directory=str(target)), db)
+
+    assert result["saved_count"] == 2
+    assert sorted(path.name for path in target.iterdir()) == ["申报 (1).xlsx", "申报.xlsx"]
+    db.close()
+
+
+def test_save_all_is_rejected_outside_desktop_mode(tmp_path: Path, monkeypatch):
+    db = _db_session()
+    job = Job(workflow_code="broker_tax", input_file_ids=[], status="success")
+    db.add(job)
+    db.commit()
+    monkeypatch.setattr(settings, "runtime_mode", "development")
+
+    from fastapi import HTTPException
+    try:
+        jobs_api.save_job_declarations(job.id, JobSaveAllRequest(directory=str(tmp_path)), db)
+        assert False, "expected desktop-mode rejection"
+    except HTTPException as error:
+        assert error.status_code == 403
+    finally:
+        db.close()

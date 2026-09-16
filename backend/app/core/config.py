@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     backup_root: Path = Field(default_factory=default_backup_root)
     frontend_dist_dir: Path = Field(default_factory=default_frontend_dist)
     allow_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
+    finance_ai_base_url: str = ""
+    finance_ai_api_key: str = ""
+    finance_ai_model: str = ""
+    finance_ai_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

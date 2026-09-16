@@ -12,7 +12,14 @@ def seed_organization_mappings() -> None:
     try:
         if db.query(OrganizationMapping).count() == 0:
             db.add_all([
-                OrganizationMapping(branch_name=name, org_code=code, active=1)
+                OrganizationMapping(
+                    branch_name=name,
+                    org_code=code,
+                    active=1,
+                    rpa_enabled=0,
+                    rpa_org_name="",
+                    parent_branch="",
+                )
                 for name, code in INTERN_ORG_CODE_MAP.items()
             ])
             db.commit()
