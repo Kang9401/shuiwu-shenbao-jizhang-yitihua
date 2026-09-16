@@ -14,11 +14,25 @@ from app.models.core import Artifact, Job, Period
 from app.models.tax import TaxMonthlyArtifact
 
 
-SHEET_NAMES = (
+PRE_PAYMENT_SHEET_NAMES = (
     "汇总税额核对", "申报表汇总数", "个税明细税额核对", "其他个税发生额核对",
     "附A1 工资薪金等个税差异", "附A2 累计应纳税所得额差异明细", "附A3 客户利息个税差异明细", "附A4 限售股个税差异明细",
-    "科目余额", "债券信息明细", "限售股明细", "个税完税凭证", "综合所得个税申报", "分类所得个税申报", "限售股所得申报", "银行流水", "银行流水个税税额明细",
+    "科目余额表", "债券利息明细", "限售股明细", "综合所得申报表", "分类所得申报表", "限售股所得申报表",
 )
+POST_PAYMENT_SHEET_NAMES = ("缴税核对", "个税完税凭证", "银行流水", "银行流水个税税额明细")
+POST_PAYMENT_CHECK_COLUMNS = (
+    "declared_tax_amount", "certificate_tax_amount", "declared_vs_certificate_difference_11",
+    "declared_vs_certificate_reason_11", "bank_tax_amount", "certificate_vs_bank_difference_11",
+    "certificate_vs_bank_reason_11",
+)
+POST_PAYMENT_CHECK_HEADERS = (
+    "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税",
+    "完税证明与银行流水差异金额11", "差异原因11",
+)
+
+
+def sheet_names_for_stage(stage: str) -> tuple[str, ...]:
+    return PRE_PAYMENT_SHEET_NAMES if stage == "pre_payment" else POST_PAYMENT_SHEET_NAMES
 
 
 def _frame(rows: Iterable[dict], columns: list[str] | None = None) -> pd.DataFrame:
@@ -194,13 +208,31 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
         sheets["汇总税额核对"]["营业部简称"] = [row.get("org_name", "") for row in summaries]
     if not sheets["附A1 工资薪金等个税差异"].empty:
         sheets["附A1 工资薪金等个税差异"]["期间"] = f"{period.year}年{period.month:02d}月" if period else str(period_id)
-    return sheets
+    sheets["科目余额表"] = sheets.pop("科目余额")
+    sheets["债券利息明细"] = sheets.pop("债券信息明细")
+    sheets["综合所得申报表"] = sheets.pop("综合所得个税申报")
+    sheets["分类所得申报表"] = sheets.pop("分类所得个税申报")
+    sheets["限售股所得申报表"] = sheets.pop("限售股所得申报")
+    sheets["缴税核对"] = _frame([{
+        "declared_tax_amount": row.get("declared_tax_amount"),
+        "certificate_tax_amount": row.get("certificate_tax_amount"),
+        "declared_vs_certificate_difference_11": row.get("difference_4"),
+        "declared_vs_certificate_reason_11": row.get("difference_4_manual_reason"),
+        "bank_tax_amount": row.get("bank_tax_amount"),
+        "certificate_vs_bank_difference_11": row.get("difference_5"),
+        "certificate_vs_bank_reason_11": row.get("difference_5_manual_reason"),
+    } for row in summaries], list(POST_PAYMENT_CHECK_COLUMNS))
+    return OrderedDict((name, sheets[name]) for name in sheet_names_for_stage(workpaper.stage))
 
 
 def build_pit_workpaper_xlsx(db, company_id: int, period_id: int, workpaper) -> bytes:
     sheets = build_pit_workpaper_sheets(db, company_id, period_id, workpaper)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for sheet_name in SHEET_NAMES:
-            sheets[sheet_name].to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        for sheet_name in sheet_names_for_stage(workpaper.stage):
+            frame = sheets[sheet_name]
+            if sheet_name == "缴税核对":
+                frame.to_excel(writer, sheet_name=sheet_name[:31], index=False, header=list(POST_PAYMENT_CHECK_HEADERS))
+            else:
+                frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
     return output.getvalue()

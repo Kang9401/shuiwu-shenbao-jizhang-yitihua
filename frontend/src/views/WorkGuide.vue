@@ -149,7 +149,7 @@ async function loadStatus() {
       rpaApi.getStatus(),
       rpaApi.listFiles(),
       reconciliationImportApi.list(props.periodId),
-      pitReconciliationApi.getOverview(props.periodId),
+      pitReconciliationApi.getOverview(props.periodId, 'pre_payment'),
       organizationMappingApi.list(),
       systemApi.info(),
     ])

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --configLoader runner",
     "build": "vue-tsc --noEmit && vite build --configLoader runner",
+    "test:pit-preview": "node scripts/pit-preview-smoke.mjs",
     "preview": "vite preview --host 127.0.0.1 --configLoader runner"
   },
   "dependencies": {

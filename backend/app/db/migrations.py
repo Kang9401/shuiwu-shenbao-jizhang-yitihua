@@ -358,6 +358,50 @@ def _migration_12(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE organization_mappings ADD COLUMN bank_account VARCHAR(120) NOT NULL DEFAULT ''")
 
 
+def _migration_13(connection: sqlite3.Connection) -> None:
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pit_reconciliation_workpapers'").fetchone()
+    if table is None:
+        return
+    columns = _table_columns(connection, "pit_reconciliation_workpapers")
+    # SQLite cannot drop the legacy unique constraint in place. Rebuild only this
+    # parent table, retain its primary keys, and keep child workpaper_id links valid.
+    connection.execute("ALTER TABLE pit_reconciliation_workpapers RENAME TO pit_reconciliation_workpapers_legacy_stage")
+    connection.execute("""
+        CREATE TABLE pit_reconciliation_workpapers (
+            id INTEGER NOT NULL PRIMARY KEY, public_id VARCHAR(36) NOT NULL UNIQUE,
+            company_id INTEGER NOT NULL, period_id INTEGER NOT NULL, tax_type VARCHAR(20) NOT NULL DEFAULT 'pit',
+            stage VARCHAR(30) NOT NULL, workflow_status VARCHAR(30) NOT NULL DEFAULT 'data_preparation',
+            draft_revision INTEGER NOT NULL DEFAULT 0, platform_submission_id VARCHAR(120), platform_record_version INTEGER,
+            last_submitted_revision INTEGER, last_submitted_at DATETIME, last_synced_at DATETIME,
+            data_status VARCHAR(30) NOT NULL, calculation_status VARCHAR(30) NOT NULL, rule_version VARCHAR(50) NOT NULL,
+            missing_sources_json JSON, source_snapshot_json JSON, last_calculated_at DATETIME, last_error TEXT,
+            created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_pit_workpaper_company_period_type_stage UNIQUE(company_id, period_id, tax_type, stage)
+        )
+    """)
+    def value(name: str, fallback: str) -> str:
+        return name if name in columns else fallback
+    connection.execute(f"""
+        INSERT INTO pit_reconciliation_workpapers (
+            id, public_id, company_id, period_id, tax_type, stage, workflow_status, draft_revision,
+            platform_submission_id, platform_record_version, last_submitted_revision, last_submitted_at, last_synced_at,
+            data_status, calculation_status, rule_version, missing_sources_json, source_snapshot_json,
+            last_calculated_at, last_error, created_at, updated_at
+        )
+        SELECT id, public_id, company_id, period_id, tax_type, COALESCE(stage, 'pre_payment'),
+               {value('workflow_status', "CASE WHEN calculation_status = 'success' THEN 'pending_submission' ELSE 'data_preparation' END")},
+               {value('draft_revision', '0')}, {value('platform_submission_id', 'NULL')}, {value('platform_record_version', 'NULL')},
+               {value('last_submitted_revision', 'NULL')}, {value('last_submitted_at', 'NULL')}, {value('last_synced_at', 'NULL')},
+               data_status, calculation_status, rule_version, missing_sources_json, source_snapshot_json,
+               last_calculated_at, last_error, created_at, updated_at
+        FROM pit_reconciliation_workpapers_legacy_stage
+    """)
+    connection.execute("DROP TABLE pit_reconciliation_workpapers_legacy_stage")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_pit_reconciliation_workpapers_company_id ON pit_reconciliation_workpapers (company_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_pit_reconciliation_workpapers_period_id ON pit_reconciliation_workpapers (period_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_pit_reconciliation_workpapers_stage ON pit_reconciliation_workpapers (stage)")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -371,6 +415,7 @@ MIGRATIONS = {
     10: _migration_10,
     11: _migration_11,
     12: _migration_12,
+    13: _migration_13,
 }
 
 

@@ -57,7 +57,7 @@ def test_subset_sum_handles_large_no_solution_pool_without_combinatorial_search(
 
 def test_recalculate_keeps_single_workpaper_and_manual_reason():
     db=_db(); company=Company(name="测试公司",code="TEST",operator_name="测试"); db.add(company); db.flush(); period=Period(company_id=company.id,year=2026,month=8,name="2026-08"); db.add(period); db.commit()
-    repository=PitReconciliationRepository(db,company.id,period.id); workpaper=repository.get_or_create_workpaper(); engine=PitReconciliationEngine()
+    repository=PitReconciliationRepository(db,company.id,period.id,"pre_payment"); workpaper=repository.get_or_create_workpaper(); engine=PitReconciliationEngine()
     repository.replace(workpaper,engine.calculate(_bundle())); db.commit()
     check=db.query(PitTaxAmountCheck).filter_by(workpaper_id=workpaper.id,subject_code="21510006").one(); assert check.business_tax_amount==Decimal("100.00")
     check.business_declared_manual_reason="工资补发造成"; db.commit()

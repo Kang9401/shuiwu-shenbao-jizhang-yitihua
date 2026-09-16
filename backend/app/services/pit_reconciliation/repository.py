@@ -7,10 +7,10 @@ from .constants import RULE_VERSION
 
 
 class PitReconciliationRepository:
-    def __init__(self, db, company_id: int, period_id: int): self.db,self.company_id,self.period_id=db,company_id,period_id
+    def __init__(self, db, company_id: int, period_id: int, stage: str): self.db,self.company_id,self.period_id,self.stage=db,company_id,period_id,stage
     def get_or_create_workpaper(self):
-        row=self.db.query(PitReconciliationWorkpaper).filter_by(company_id=self.company_id,period_id=self.period_id,tax_type="pit").first()
-        if row is None: row=PitReconciliationWorkpaper(company_id=self.company_id,period_id=self.period_id,tax_type="pit",stage="pre_payment",data_status="incomplete",calculation_status="idle",rule_version=RULE_VERSION); self.db.add(row); self.db.flush()
+        row=self.db.query(PitReconciliationWorkpaper).filter_by(company_id=self.company_id,period_id=self.period_id,tax_type="pit",stage=self.stage).first()
+        if row is None: row=PitReconciliationWorkpaper(company_id=self.company_id,period_id=self.period_id,tax_type="pit",stage=self.stage,workflow_status="data_preparation",data_status="incomplete",calculation_status="idle",rule_version=RULE_VERSION); self.db.add(row); self.db.flush()
         return row
     def _manual(self, model, keys, fields, workpaper_id):
         result={}
@@ -37,5 +37,6 @@ class PitReconciliationRepository:
                     values.setdefault("org_name", "")
                 if natural_key and model in manual: values.update(manual[model].get(tuple(values[field] for field in natural_key),{}))
                 self.db.add(model(**values))
-        workpaper.stage=result["stage"]; workpaper.data_status=result["data_status"]; workpaper.calculation_status="success"; workpaper.missing_sources_json=result["missing_sources"]; workpaper.source_snapshot_json={row["source_type"]:row for row in result["sources"]}; workpaper.last_calculated_at=datetime.utcnow(); workpaper.last_error=None
+        if result.get("stage") != workpaper.stage: raise ValueError("重算阶段与底稿阶段不一致")
+        workpaper.data_status=result["data_status"]; workpaper.calculation_status="success"; workpaper.workflow_status="pending_submission"; workpaper.draft_revision += 1; workpaper.missing_sources_json=result["missing_sources"]; workpaper.source_snapshot_json={row["source_type"]:row for row in result["sources"]}; workpaper.last_calculated_at=datetime.utcnow(); workpaper.last_error=None
         self.db.flush(); return workpaper

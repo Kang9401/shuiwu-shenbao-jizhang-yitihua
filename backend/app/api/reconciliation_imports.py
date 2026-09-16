@@ -46,9 +46,7 @@ def clear_imports(payload: ClearImports, db: Session = Depends(get_db)) -> dict:
     deleted_rows = db.query(ReconciliationImportRow).filter(ReconciliationImportRow.company_id == current_company_id(), ReconciliationImportRow.batch_id.in_(ids)).delete(synchronize_session=False)
     query.delete(synchronize_session=False)
     if ids:
-        for workpaper in db.query(PitReconciliationWorkpaper).filter_by(company_id=current_company_id(), period_id=payload.period_id):
-            workpaper.calculation_status = "stale"
-            workpaper.last_error = "核对来源已清空，请重新核对"
+        _mark_pit_workpapers_stale(db, payload.period_id, "核对来源已清空，请重新核对", payload.import_type)
     db.commit()
     return {"deleted_batches": len(ids), "deleted_rows": deleted_rows}
 
@@ -67,12 +65,28 @@ def _batch_payload(batch: ReconciliationImportBatch) -> dict:
     }
 
 
+def _mark_pit_workpapers_stale(db: Session, period_id: int, message: str, import_type: str | None = None) -> None:
+    """Source imports invalidate drafts only; remote locked snapshots stay immutable."""
+    for workpaper in db.query(PitReconciliationWorkpaper).filter_by(
+        company_id=current_company_id(), period_id=period_id, tax_type="pit"
+    ):
+        if import_type in {"tax_certificate", "bank_statement"} and workpaper.stage != "post_payment":
+            continue
+        if workpaper.workflow_status in {"submitted", "reviewed"}:
+            continue
+        workpaper.calculation_status = "stale"
+        workpaper.workflow_status = "data_preparation"
+        workpaper.last_error = message
+    db.commit()
+
+
 def _import(import_type: str, period_id: int, file: UploadFile, db: Session) -> dict:
     require_period(db, period_id)
     try:
         batch = import_reconciliation_file(db, period_id=period_id, import_type=import_type, file=file)
     except ReconciliationImportValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.issues) from exc
+    _mark_pit_workpapers_stale(db, period_id, "核对来源已更新，请重新核对", import_type)
     return _batch_payload(batch)
 
 
@@ -117,6 +131,7 @@ def import_pit_declaration(period_id: int = Query(...), file: UploadFile = File(
     require_period(db, period_id)
     try: batch = import_pit_declaration_file(db, period_id=period_id, file=file)
     except ReconciliationImportValidationError as exc: raise HTTPException(status_code=400, detail=exc.issues) from exc
+    _mark_pit_workpapers_stale(db, period_id, "个税申报来源已更新，请重新核对", "pit_declaration")
     return _batch_payload(batch)
 
 
@@ -127,6 +142,7 @@ def import_pit_declarations(period_id: int = Query(...), files: list[UploadFile]
         batch = import_pit_declaration_files(db, period_id=period_id, files=files)
     except ReconciliationImportValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.issues) from exc
+    _mark_pit_workpapers_stale(db, period_id, "个税申报来源已更新，请重新核对", "pit_declaration")
     return _batch_payload(batch)
 
 
@@ -135,6 +151,7 @@ def import_tax_certificates(period_id: int = Query(...), files: list[UploadFile]
     require_period(db, period_id)
     try: batch = import_tax_certificate_files(db, period_id=period_id, files=files)
     except ReconciliationImportValidationError as exc: raise HTTPException(status_code=400, detail=exc.issues) from exc
+    _mark_pit_workpapers_stale(db, period_id, "完税凭证来源已更新，请重新核对", "tax_certificate")
     return _batch_payload(batch)
 
 

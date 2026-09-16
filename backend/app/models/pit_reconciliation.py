@@ -27,9 +27,16 @@ class _PitBase:
 
 class PitReconciliationWorkpaper(_PitBase, Base):
     __tablename__ = "pit_reconciliation_workpapers"
-    __table_args__ = (UniqueConstraint("company_id", "period_id", "tax_type", name="uq_pit_workpaper_company_period_type"),)
+    __table_args__ = (UniqueConstraint("company_id", "period_id", "tax_type", "stage", name="uq_pit_workpaper_company_period_type_stage"),)
     tax_type: Mapped[str] = mapped_column(String(20), default="pit", nullable=False)
     stage: Mapped[str] = mapped_column(String(30), default="pre_payment", nullable=False)
+    workflow_status: Mapped[str] = mapped_column(String(30), default="data_preparation", nullable=False)
+    draft_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    platform_submission_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    platform_record_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_submitted_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_status: Mapped[str] = mapped_column(String(30), default="incomplete", nullable=False)
     calculation_status: Mapped[str] = mapped_column(String(30), default="idle", nullable=False)
     rule_version: Mapped[str] = mapped_column(String(50), default="pit_legacy_v1", nullable=False)

@@ -9,7 +9,7 @@
       <span class="brand-mark company-entry-brand-mark">
         <img class="brand-logo" src="/gf-logo.jpg" alt="广发证券" />
       </span>
-      <div><h1>广发证券财务工作台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
+      <div><h1>广发证券智能税务平台</h1><p>选择已有分公司，或创建一个新的核算主体。</p></div>
     </header>
     <div class="company-entry-grid">
       <section class="company-entry-list">
@@ -39,7 +39,7 @@
         </span>
         <div class="brand-text">
           <strong>广发证券</strong>
-          <small>财务工作台</small>
+          <small>智能税务平台</small>
         </div>
       </div>
 
@@ -156,7 +156,7 @@
           :period-label="selectedPeriodLabel"
         />
 
-        <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
+        <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :company-id="selectedCompany?.id" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
 
         <MonthlyPersonnelWorkflow
           v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
@@ -322,7 +322,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
       { key: 'intern_tax', label: '实习生申报', icon: User, workflowCode: 'intern_tax', kicker: 'Intern tax', description: '实习生补贴个税申报与人员采集。' },
       { key: 'restricted_stock_interest_tax', label: '限售股/利息税', icon: Coin, workflowCode: 'restricted_stock_interest_tax', kicker: 'Restricted stock', description: '限售股、债券利息及客户类个人所得申报。' },
       { key: 'reconciliation_imports', label: '核对数据导入', icon: Files, kicker: 'Reconciliation imports', description: '银行流水、申报结果和账务数据结构化入库。' },
-      { key: 'pit_reconciliation', label: '个税核对底稿', icon: DocumentChecked, kicker: 'PIT reconciliation', description: '以数据库保存的月度个税申报、账务、完税与银行核对底稿。' },
+      { key: 'pit_reconciliation', label: '个税核对底稿', icon: DocumentChecked, kicker: 'PIT reconciliation', description: '缴款前、缴款后独立工作区，按阶段管理重算、提交与复核状态。' },
     ],
   },
   {
