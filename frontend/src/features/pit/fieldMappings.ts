@@ -10,7 +10,7 @@ export const PIT_FIELD_MAPPINGS = [
   { code: 'pre.broker_payroll_vs_occurrence_detail', label: '缴款前发生额差异9', legacyField: 'broker_occurrence_difference' },
   { code: 'pre.declared_income_vs_expected', label: '缴款前发生额差异10', legacyField: 'declared_income_difference' },
   { code: 'post.declared_vs_certificate', label: '申报表与完税证明差异金额11', legacyField: 'difference_4' },
-  { code: 'post.certificate_vs_bank', label: '完税证明与银行流水差异金额11', legacyField: 'difference_5' },
+  { code: 'post.certificate_vs_bank', label: '完税证明与银行流水差异金额12', legacyField: 'difference_5' },
 ] as const
 
 export const POST_PAYMENT_DIFFERENCE_CODES = {

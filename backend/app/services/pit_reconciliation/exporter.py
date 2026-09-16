@@ -22,12 +22,12 @@ PRE_PAYMENT_SHEET_NAMES = (
 POST_PAYMENT_SHEET_NAMES = ("缴税核对", "个税完税凭证", "银行流水", "银行流水个税税额明细")
 POST_PAYMENT_CHECK_COLUMNS = (
     "org_code", "org_full_name", "declared_tax_amount", "certificate_tax_amount", "declared_vs_certificate_difference_11",
-    "declared_vs_certificate_reason_11", "bank_tax_amount", "certificate_vs_bank_difference_11",
-    "certificate_vs_bank_reason_11",
+    "declared_vs_certificate_reason_11", "bank_tax_amount", "certificate_vs_bank_difference_12",
+    "certificate_vs_bank_reason_12",
 )
 POST_PAYMENT_CHECK_HEADERS = (
     "机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税",
-    "完税证明与银行流水差异金额11", "差异原因11",
+    "完税证明与银行流水差异金额12", "差异原因12",
 )
 
 
@@ -220,8 +220,8 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
         "declared_vs_certificate_difference_11": row.get("difference_4"),
         "declared_vs_certificate_reason_11": row.get("difference_4_manual_reason"),
         "bank_tax_amount": row.get("bank_tax_amount"),
-        "certificate_vs_bank_difference_11": row.get("difference_5"),
-        "certificate_vs_bank_reason_11": row.get("difference_5_manual_reason"),
+        "certificate_vs_bank_difference_12": row.get("difference_5"),
+        "certificate_vs_bank_reason_12": row.get("difference_5_manual_reason"),
     } for row in summaries], list(POST_PAYMENT_CHECK_COLUMNS))
     return OrderedDict((name, sheets[name]) for name in sheet_names_for_stage(workpaper.stage))
 

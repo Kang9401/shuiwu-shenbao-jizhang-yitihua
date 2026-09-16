@@ -93,7 +93,7 @@ def _column_map(import_type: str, df: pd.DataFrame) -> dict[str, Optional[str]]:
         "summary": _first_existing(columns, ["摘要", "凭证摘要", "说明"]),
         "amount": _first_existing(columns, ["金额", "本位币金额", "借方金额", "贷方金额", "贷方金额(N)", "发生额"]),
         "account_code": _first_existing(columns, ["科目编码", "会计科目", "科目代码"]),
-        "account_name": _first_existing(columns, ["科目名称", "会计科目名称", "科目"]),
+        "account_name": _first_existing(columns, ["科目名称", "会计科目名称", "科目", "描述"]),
         "auxiliary": _first_existing(columns, ["辅助核算", "辅助项", "往来单位"]),
         "debit_credit": _first_existing(columns, ["借贷方向", "方向", "借贷"]),
         "voucher_no": _first_existing(columns, ["凭证号", "凭证编号", "单据号"]),

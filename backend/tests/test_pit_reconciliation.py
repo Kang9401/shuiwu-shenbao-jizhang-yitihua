@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -14,6 +15,7 @@ from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.money import money_or_none
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService, _org_code
+from app.services.reconciliation_import import _column_map
 from app.services.pit_reconciliation.rules.occurrence import calc_vat
 from app.services.pit_reconciliation.rules.payment import find_subset_sum
 from app.services.pit_reconciliation.rules.bond_interest import bond_interest_details
@@ -180,6 +182,24 @@ def test_engine_emits_all_tax_and_occurrence_subjects():
     result = PitReconciliationEngine().calculate(bundle)
     assert {row["subject_code"] for row in result["tax_checks"]} == {"21510006", "21510008", "21510009", "21510016"}
     assert {row["subject_code"] for row in result["occurrence_checks"]} == {"21131042", "45019006", "21210037", "21210038", "21210012"}
+
+
+def test_subject_descriptions_use_real_balance_description_then_standard_fallback():
+    bundle = _bundle()
+    bundle.balance.rows[0] = BalanceRow("10001", "21510006", "21510006", description="某真实描述", credit_amount=Decimal("180"), closing_balance=Decimal("180"))
+
+    result = PitReconciliationEngine().calculate(bundle)
+
+    tax_rows = {row["subject_code"]: row for row in result["tax_checks"]}
+    occurrence_rows = {row["subject_code"]: row for row in result["occurrence_checks"]}
+    assert tax_rows["21510006"]["subject_name"] == "某真实描述"
+    assert tax_rows["21510008"]["subject_name"]
+    assert occurrence_rows["21131042"]["subject_name"]
+
+
+def test_balance_sheet_import_recognizes_description_as_account_name():
+    mapping = _column_map("balance_sheet", pd.DataFrame(columns=["会计科目", "公司段", "金额", "描述"]))
+    assert mapping["account_name"] == "描述"
 
 
 def test_detail_json_contains_a1_a2_a3_a4_display_values():

@@ -90,7 +90,38 @@ def test_submitted_and_reviewed_workpapers_reject_patch_and_recalculate():
         app.dependency_overrides.clear()
 
 
-def test_post_payment_export_has_only_post_sheets_and_preserves_duplicate_visible_reason_header():
+def test_post_payment_summary_reasons_are_editable_and_returned_becomes_pending_submission():
+    client, session_local, period_id = _client_with_stages()
+    try:
+        row = client.get("/api/pit-reconciliations/org-summaries", params={"period_id": period_id, "stage": "post_payment"}).json()[0]
+        with session_local() as db:
+            db.query(PitReconciliationWorkpaper).filter_by(period_id=period_id, stage="post_payment").one().workflow_status = "returned"
+            db.commit()
+        for field, value in (("difference_4_manual_reason", "凭证日期差异"), ("difference_5_manual_reason", "银行到账差异")):
+            response = client.patch(
+                f"/api/pit-reconciliations/org-summaries/{row['id']}",
+                params={"period_id": period_id, "stage": "post_payment"}, json={field: value},
+            )
+            assert response.status_code == 200
+            assert response.json()[field] == value
+        reread = client.get("/api/pit-reconciliations/org-summaries", params={"period_id": period_id, "stage": "post_payment"}).json()[0]
+        assert reread["difference_4_manual_reason"] == "凭证日期差异"
+        assert reread["difference_5_manual_reason"] == "银行到账差异"
+        with session_local() as db:
+            assert db.query(PitReconciliationWorkpaper).filter_by(period_id=period_id, stage="post_payment").one().workflow_status == "pending_submission"
+            for status in ("submitted", "reviewed"):
+                db.query(PitReconciliationWorkpaper).filter_by(period_id=period_id, stage="post_payment").one().workflow_status = status
+                db.commit()
+                locked = client.patch(
+                    f"/api/pit-reconciliations/org-summaries/{row['id']}",
+                    params={"period_id": period_id, "stage": "post_payment"}, json={"difference_4_manual_reason": "不应保存"},
+                )
+                assert locked.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_post_payment_export_has_only_post_sheets_and_uses_11_12_headers():
     client, _, period_id = _client_with_stages()
     try:
         response = client.get("/api/pit-reconciliations/export", params={"period_id": period_id, "stage": "post_payment"})
@@ -102,6 +133,21 @@ def test_post_payment_export_has_only_post_sheets_and_preserves_duplicate_visibl
         workbook = openpyxl.load_workbook(io.BytesIO(response.content), read_only=True)
         assert workbook.sheetnames == list(POST_PAYMENT_SHEET_NAMES)
         header = list(next(workbook["缴税核对"].values))
-        assert header == ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额11", "差异原因11"]
+        assert header == ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额12", "差异原因12"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_post_payment_sheet_data_uses_11_12_visible_headers():
+    client, _, period_id = _client_with_stages()
+    try:
+        response = client.get("/api/pit-reconciliations/sheet-data", params={
+            "period_id": period_id, "stage": "post_payment", "sheet_name": "缴税核对",
+        })
+        assert response.status_code == 200
+        assert response.json()["column_labels"] == [
+            "机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11",
+            "银行流水个税", "完税证明与银行流水差异金额12", "差异原因12",
+        ]
     finally:
         app.dependency_overrides.clear()

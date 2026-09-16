@@ -155,7 +155,7 @@ def sheet_data(
     rows = json.loads(frame.iloc[start:start + page_size].to_json(orient="records", date_format="iso", force_ascii=False))
     column_labels = list(frame.columns)
     if sheet_name == "缴税核对":
-        column_labels = ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额11", "差异原因11"]
+        column_labels = ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额12", "差异原因12"]
     return {"sheet_name": sheet_name, "columns": list(frame.columns), "column_labels": column_labels, "rows": rows, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/export")

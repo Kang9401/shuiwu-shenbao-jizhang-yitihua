@@ -24,7 +24,7 @@ const preSheets: StageSheetDefinition[] = [
 ]
 
 const postSheets: StageSheetDefinition[] = [
-  { sheetCode: 'post_payment_check', sheetName: '缴税核对', group: 'result', columns: columns(['declared_tax', '申报表', 'money'], ['certificate_tax', '完税证明', 'money'], ['post.declared_vs_certificate', '申报表与完税证明差异金额11', 'money'], ['declared_vs_certificate_reason', '申报表与完税证明差异原因11', 'text'], ['bank_tax', '银行流水个税', 'money'], ['post.certificate_vs_bank', '完税证明与银行流水差异金额11', 'money'], ['certificate_vs_bank_reason', '完税证明与银行流水差异原因11', 'text']) },
+  { sheetCode: 'post_payment_check', sheetName: '缴税核对', group: 'result', columns: columns(['declared_tax', '申报表', 'money'], ['certificate_tax', '完税证明', 'money'], ['post.declared_vs_certificate', '申报表与完税证明差异金额11', 'money'], ['declared_vs_certificate_reason_11', '差异原因11', 'text'], ['bank_tax', '银行流水个税', 'money'], ['post.certificate_vs_bank', '完税证明与银行流水差异金额12', 'money'], ['certificate_vs_bank_reason_12', '差异原因12', 'text']) },
   { sheetCode: 'post_tax_certificate', sheetName: '个税完税凭证', group: 'source', columns: source },
   { sheetCode: 'post_bank_statement', sheetName: '银行流水', group: 'source', columns: source },
   { sheetCode: 'post_bank_tax_detail', sheetName: '银行流水个税税额明细', group: 'source', columns: source },
