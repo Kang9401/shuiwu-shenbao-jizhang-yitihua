@@ -31,6 +31,11 @@ def _workpaper(db: Session, period_id: int, stage: Literal["pre_payment", "post_
 def _payload(row):
     return {column.name:getattr(row,column.name) for column in row.__table__.columns}
 
+
+def _stage_sources(bundle, stage: str):
+    sources = (bundle.organizations, bundle.salary, bundle.declarations, bundle.balance, bundle.broker, bundle.bond_interest, bundle.restricted_stock) if stage == "pre_payment" else (bundle.certificates, bundle.bank)
+    return [{"source_type": source.source_type, "source_status": source.status, "required": True, "row_count": len(source.rows), "source_kind": source.source_kind, "source_id": source.source_id, "source_ref": source.source_ref, "issues_json": source.issues} for source in sources]
+
 @router.get("/overview")
 def overview(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"]=Query(...),db:Session=Depends(get_db)):
     try: row=_workpaper(db,period_id,stage,allow_stale=True)
@@ -41,13 +46,9 @@ def overview(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"
 
 @router.get("/readiness")
 def readiness(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"]=Query(...),db:Session=Depends(get_db)):
-    try: row=_workpaper(db,period_id,stage)
-    except HTTPException as exc:
-        if exc.status_code==404:
-            bundle=PitSourceService(db,current_company_id(),period_id).load_bundle()
-            return [{"source_type":source.source_type,"source_status":source.status,"required":source.required,"row_count":len(source.rows),"issues_json":source.issues} for source in (bundle.organizations,bundle.salary,bundle.declarations,bundle.balance,bundle.broker,bundle.bond_interest,bundle.restricted_stock,bundle.certificates,bundle.bank)]
-        raise
-    return [_payload(item) for item in db.query(PitReconciliationSource).filter_by(workpaper_id=row.id).order_by(PitReconciliationSource.source_type).all()]
+    require_period(db, period_id)
+    # Readiness describes today's source data, not the prior calculation snapshot.
+    return _stage_sources(PitSourceService(db,current_company_id(),period_id).load_bundle(), stage)
 
 @router.post("/recalculate")
 def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"] = Query(...),db:Session=Depends(get_db)):
@@ -67,6 +68,10 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
             raise ValueError("扣款后核对需要先导入银行流水")
         result=PitReconciliationEngine().calculate(bundle)
         result["stage"] = stage
+        stage_sources = _stage_sources(bundle, stage)
+        complete = all(item["source_status"] in {"ready", "ready_empty", "not_applicable"} and not item["issues_json"] for item in stage_sources)
+        result["data_status"] = "ready" if complete else "incomplete"
+        result["missing_sources"] = [item["source_type"] for item in stage_sources if item["source_status"] in {"missing", "invalid"} or item["issues_json"]]
         workpaper=repository.replace(workpaper,result); db.commit(); db.refresh(workpaper); return {"workpaper":_payload(workpaper),"message":"已覆盖更新同一份月度个税核对底稿"}
     except Exception as exc:
         db.rollback()
@@ -123,6 +128,9 @@ def sheet_data(
     period_id: int = Query(...),
     stage: Literal["pre_payment", "post_payment"] = Query(...),
     sheet_name: str = Query(...),
+    keyword: str | None = Query(None),
+    org_code: str | None = Query(None),
+    display_mode: Literal["all", "difference", "missing"] = Query("all"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -131,12 +139,23 @@ def sheet_data(
     if sheet_name not in sheet_names_for_stage(stage):
         raise HTTPException(status_code=404, detail="底稿工作表不存在")
     frame = build_pit_workpaper_sheets(db, current_company_id(), period_id, workpaper)[sheet_name]
+    if org_code and "机构代码" in frame.columns:
+        frame = frame[frame["机构代码"].astype(str) == org_code]
+    if keyword:
+        needle = keyword.strip().lower()
+        if needle:
+            frame = frame[frame.astype(str).apply(lambda row: row.str.lower().str.contains(needle, regex=False).any(), axis=1)]
+    difference_columns = [column for column in frame.columns if "差异" in str(column)]
+    if display_mode == "difference" and difference_columns:
+        frame = frame[frame[difference_columns].apply(lambda row: any(value not in (None, "", 0, 0.0) and abs(float(value)) > 0.01 if str(value).replace(".", "", 1).replace("-", "", 1).isdigit() else False for value in row), axis=1)]
+    if display_mode == "missing":
+        frame = frame[frame.isna().any(axis=1) | frame.eq("").any(axis=1)]
     total = len(frame)
     start = (page - 1) * page_size
     rows = json.loads(frame.iloc[start:start + page_size].to_json(orient="records", date_format="iso", force_ascii=False))
     column_labels = list(frame.columns)
     if sheet_name == "缴税核对":
-        column_labels = ["申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额11", "差异原因11"]
+        column_labels = ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额11", "差异原因11"]
     return {"sheet_name": sheet_name, "columns": list(frame.columns), "column_labels": column_labels, "rows": rows, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/export")

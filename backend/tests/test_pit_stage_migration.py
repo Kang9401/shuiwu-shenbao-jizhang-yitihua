@@ -1,6 +1,6 @@
 import sqlite3
 
-from app.db.migrations import _migration_13
+from app.db.migrations import _PIT_WORKPAPER_CHILD_TABLES, _migration_13, _migration_14
 
 
 def test_pit_workpaper_migration_keeps_legacy_stage_and_allows_second_stage():
@@ -27,3 +27,14 @@ def test_pit_workpaper_migration_keeps_legacy_stage_and_allows_second_stage():
     """)
     rows = connection.execute("SELECT stage, workflow_status FROM pit_reconciliation_workpapers ORDER BY stage").fetchall()
     assert rows == [("post_payment", "data_preparation"), ("pre_payment", "pending_submission")]
+
+
+def test_migration_14_repairs_all_pit_child_workpaper_foreign_keys():
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE pit_reconciliation_workpapers (id INTEGER PRIMARY KEY)")
+    for table in _PIT_WORKPAPER_CHILD_TABLES:
+        connection.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, workpaper_id INTEGER REFERENCES pit_reconciliation_workpapers_legacy_stage(id))")
+    _migration_14(connection)
+    for table in _PIT_WORKPAPER_CHILD_TABLES:
+        foreign_keys = connection.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+        assert [(row[3], row[2]) for row in foreign_keys] == [("workpaper_id", "pit_reconciliation_workpapers")]

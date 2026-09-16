@@ -38,5 +38,5 @@ class PitReconciliationRepository:
                 if natural_key and model in manual: values.update(manual[model].get(tuple(values[field] for field in natural_key),{}))
                 self.db.add(model(**values))
         if result.get("stage") != workpaper.stage: raise ValueError("重算阶段与底稿阶段不一致")
-        workpaper.data_status=result["data_status"]; workpaper.calculation_status="success"; workpaper.workflow_status="pending_submission"; workpaper.draft_revision += 1; workpaper.missing_sources_json=result["missing_sources"]; workpaper.source_snapshot_json={row["source_type"]:row for row in result["sources"]}; workpaper.last_calculated_at=datetime.utcnow(); workpaper.last_error=None
+        workpaper.data_status=result["data_status"]; workpaper.calculation_status="success"; workpaper.workflow_status="pending_submission" if result["data_status"] == "ready" else "data_preparation"; workpaper.draft_revision += 1; workpaper.missing_sources_json=result["missing_sources"]; workpaper.source_snapshot_json={row["source_type"]:row for row in result["sources"]}; workpaper.last_calculated_at=datetime.utcnow(); workpaper.last_error=None
         self.db.flush(); return workpaper

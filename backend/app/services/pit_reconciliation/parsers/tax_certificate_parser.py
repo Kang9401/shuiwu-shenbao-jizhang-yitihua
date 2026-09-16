@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 _PERIOD = r"(?:\d{4}[年./-]\d{1,2}(?:月|[./-])\d{1,2}(?:日)?(?:至|-|—)\d{4}[年./-]\d{1,2}(?:月|[./-])\d{1,2}(?:日)?)"
-_DETAIL = re.compile(rf"个人所得税\s+(?P<item>.+?)\s+(?P<period>{_PERIOD})\s+(?P<amount>[\d,]+(?:\.\d{{1,2}})?)")
+_DETAIL = re.compile(rf"个人所得税\s+(?P<item>.+?)\s+(?P<period>{_PERIOD})\s+(?P<payment_date>\d{{4}}[./-]\d{{1,2}}[./-]\d{{1,2}})?\s*(?P<amount>[\d,]+(?:\.\d{{1,2}})?)")
 
 
 def _text(value: str) -> str:
@@ -29,7 +29,9 @@ def parse_tax_certificate_pdf(path: str | Path) -> tuple[list[dict], list[dict]]
 
     taxpayer_match = re.search(r"纳税人名称\s*[：:]?\s*(.+?)(?=\s+(?:原凭证号|税种|品目名称|税款所属)|$)", text)
     taxpayer_name = taxpayer_match.group(1).strip() if taxpayer_match else ""
-    org_match = re.match(r"(\d{5})[-_]", Path(path).name)
+    taxpayer_id_match = re.search(r"纳税人识别号\s*[：:]?\s*([A-Za-z0-9]{10,})", text)
+    taxpayer_id = taxpayer_id_match.group(1) if taxpayer_id_match else ""
+    org_match = re.search(r"(?<!\d)(\d{5})(?!\d)", Path(path).stem)
     org_code = org_match.group(1) if org_match else ""
 
     rows: list[dict] = []
@@ -38,9 +40,11 @@ def parse_tax_certificate_pdf(path: str | Path) -> tuple[list[dict], list[dict]]
         rows.append({
             "org_code": org_code,
             "taxpayer_name": taxpayer_name,
+            "taxpayer_id": taxpayer_id,
             "tax_type": "个人所得税",
             "income_item": match.group("item").strip(),
             "tax_period": match.group("period").replace(" ", ""),
+            "payment_date": (match.group("payment_date") or "").replace(" ", ""),
             "amount": amount,
         })
     if not rows:
@@ -56,4 +60,4 @@ def parse_tax_certificate_pdf(path: str | Path) -> tuple[list[dict], list[dict]]
                 "issue_type": "certificate_total_mismatch",
                 "message": f"完税凭证解析校验失败：明细合计 {detail_total:.2f} 与 PDF 总金额 {declared_total:.2f} 不一致（容差 0.01）",
             })
-    return rows, issues
+    return ([] if any(issue["issue_type"] == "certificate_total_mismatch" for issue in issues) else rows), issues

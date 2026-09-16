@@ -365,7 +365,11 @@ def _migration_13(connection: sqlite3.Connection) -> None:
     columns = _table_columns(connection, "pit_reconciliation_workpapers")
     # SQLite cannot drop the legacy unique constraint in place. Rebuild only this
     # parent table, retain its primary keys, and keep child workpaper_id links valid.
+    # Keep child FK targets at the logical parent name while the parent is rebuilt.
+    # SQLite otherwise rewrites them to the temporary table name.
+    connection.execute("PRAGMA legacy_alter_table = ON")
     connection.execute("ALTER TABLE pit_reconciliation_workpapers RENAME TO pit_reconciliation_workpapers_legacy_stage")
+    connection.execute("PRAGMA legacy_alter_table = OFF")
     connection.execute("""
         CREATE TABLE pit_reconciliation_workpapers (
             id INTEGER NOT NULL PRIMARY KEY, public_id VARCHAR(36) NOT NULL UNIQUE,
@@ -402,6 +406,31 @@ def _migration_13(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS ix_pit_reconciliation_workpapers_stage ON pit_reconciliation_workpapers (stage)")
 
 
+_PIT_WORKPAPER_CHILD_TABLES = (
+    "pit_reconciliation_sources", "pit_declaration_summaries", "pit_tax_amount_checks",
+    "pit_occurrence_checks", "pit_reconciliation_org_summaries",
+    "pit_reconciliation_difference_details", "pit_bank_tax_matches",
+)
+
+
+def _migration_14(connection: sqlite3.Connection) -> None:
+    """Repair FK targets rewritten by the original migration 13 rename."""
+    affected = []
+    for table in _PIT_WORKPAPER_CHILD_TABLES:
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            continue
+        foreign_keys = connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()
+        if any(row[3] == "workpaper_id" and row[2] == "pit_reconciliation_workpapers_legacy_stage" for row in foreign_keys):
+            affected.append(table)
+    if not affected:
+        return
+    # First retain legacy references, then let SQLite rewrite legacy -> current.
+    connection.execute("PRAGMA legacy_alter_table = ON")
+    connection.execute("ALTER TABLE pit_reconciliation_workpapers RENAME TO pit_reconciliation_workpapers_legacy_stage")
+    connection.execute("PRAGMA legacy_alter_table = OFF")
+    connection.execute("ALTER TABLE pit_reconciliation_workpapers_legacy_stage RENAME TO pit_reconciliation_workpapers")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -416,6 +445,7 @@ MIGRATIONS = {
     11: _migration_11,
     12: _migration_12,
     13: _migration_13,
+    14: _migration_14,
 }
 
 

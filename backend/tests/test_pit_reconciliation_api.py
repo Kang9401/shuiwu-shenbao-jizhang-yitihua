@@ -1,4 +1,5 @@
 from decimal import Decimal
+import pandas as pd
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -173,5 +174,55 @@ def test_failed_recalculation_keeps_previous_detail_rows(monkeypatch):
         after = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()
         assert response.status_code == 400
         assert [(row["subject_code"], row["business_tax_amount"]) for row in after] == [(row["subject_code"], row["business_tax_amount"]) for row in before]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_readiness_is_stage_specific_and_stale_workpaper_can_read_latest_sources(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready"), SourceResult("salary", "ready_empty"), SourceResult("pit_declaration", "ready_empty"), SourceResult("balance_sheet", "ready_empty"),
+        SourceResult("broker", "ready_empty"), SourceResult("bond_interest", "ready_empty"), SourceResult("restricted_stock", "ready_empty"),
+        SourceResult("tax_certificate", "ready"), SourceResult("bank_statement", "missing"),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        pre = client.get("/api/pit-reconciliations/readiness", params={"period_id": period_id, "stage": "pre_payment"})
+        post = client.get("/api/pit-reconciliations/readiness", params={"period_id": period_id, "stage": "post_payment"})
+        assert pre.status_code == post.status_code == 200
+        assert {item["source_type"] for item in pre.json()} == {"organization_mapping", "salary", "pit_declaration", "balance_sheet", "broker", "bond_interest", "restricted_stock"}
+        assert {item["source_type"] for item in post.json()} == {"tax_certificate", "bank_statement"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_sheet_data_filters_before_pagination(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    from collections import OrderedDict
+    rows = [{"机构代码": "10001", "姓名": f"人员{index}", "差异金额": 0} for index in range(100)] + [{"机构代码": "10002", "姓名": "跨页目标", "差异金额": 10}]
+    monkeypatch.setattr(pit_api, "build_pit_workpaper_sheets", lambda *_: OrderedDict({"汇总税额核对": pd.DataFrame(), "申报表汇总数": pd.DataFrame(), "个税明细税额核对": pd.DataFrame(rows), "其他个税发生额核对": pd.DataFrame(), "附A1 工资薪金等个税差异": pd.DataFrame(), "附A2 累计应纳税所得额差异明细": pd.DataFrame(), "附A3 客户利息个税差异明细": pd.DataFrame(), "附A4 限售股个税差异": pd.DataFrame(), "科目余额表": pd.DataFrame(), "债券利息明细": pd.DataFrame(), "限售股明细": pd.DataFrame(), "综合所得申报表": pd.DataFrame(), "分类所得申报表": pd.DataFrame(), "限售股所得申报表": pd.DataFrame()}))
+    try:
+        response = client.get("/api/pit-reconciliations/sheet-data", params={"period_id": period_id, "stage": "pre_payment", "sheet_name": "个税明细税额核对", "keyword": "跨页目标", "org_code": "10002", "display_mode": "difference", "page": 1, "page_size": 100})
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert response.json()["rows"][0]["姓名"] == "跨页目标"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_successful_recalculation_with_incomplete_stage_sources_stays_in_data_preparation(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready", [OrganizationRow("10001", "测试营业部", "测试营业部")]),
+        SourceResult("salary", "ready_empty"), SourceResult("pit_declaration", "ready_empty"), SourceResult("balance_sheet", "ready_empty"),
+        SourceResult("broker", "missing"), SourceResult("bond_interest", "ready_empty"), SourceResult("restricted_stock", "ready_empty"),
+        SourceResult("tax_certificate", "ready_empty"), SourceResult("bank_statement", "ready_empty"),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        response = client.post("/api/pit-reconciliations/recalculate", params={"period_id": period_id, "stage": "pre_payment"})
+        assert response.status_code == 200
+        assert response.json()["workpaper"]["data_status"] == "incomplete"
+        assert response.json()["workpaper"]["workflow_status"] == "data_preparation"
     finally:
         app.dependency_overrides.clear()

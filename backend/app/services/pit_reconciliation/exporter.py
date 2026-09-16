@@ -21,12 +21,12 @@ PRE_PAYMENT_SHEET_NAMES = (
 )
 POST_PAYMENT_SHEET_NAMES = ("缴税核对", "个税完税凭证", "银行流水", "银行流水个税税额明细")
 POST_PAYMENT_CHECK_COLUMNS = (
-    "declared_tax_amount", "certificate_tax_amount", "declared_vs_certificate_difference_11",
+    "org_code", "org_full_name", "declared_tax_amount", "certificate_tax_amount", "declared_vs_certificate_difference_11",
     "declared_vs_certificate_reason_11", "bank_tax_amount", "certificate_vs_bank_difference_11",
     "certificate_vs_bank_reason_11",
 )
 POST_PAYMENT_CHECK_HEADERS = (
-    "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税",
+    "机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税",
     "完税证明与银行流水差异金额11", "差异原因11",
 )
 
@@ -214,6 +214,7 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
     sheets["分类所得申报表"] = sheets.pop("分类所得个税申报")
     sheets["限售股所得申报表"] = sheets.pop("限售股所得申报")
     sheets["缴税核对"] = _frame([{
+        "org_code": row.get("org_code"), "org_full_name": row.get("org_full_name"),
         "declared_tax_amount": row.get("declared_tax_amount"),
         "certificate_tax_amount": row.get("certificate_tax_amount"),
         "declared_vs_certificate_difference_11": row.get("difference_4"),

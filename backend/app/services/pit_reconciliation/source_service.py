@@ -120,12 +120,16 @@ class PitSourceService:
     def load_declaration_source(self) -> SourceResult:
         batch, rows = self._batch_rows("pit_declaration")
         if batch is None: return SourceResult("pit_declaration", "missing")
-        result=[]
+        result=[]; issues=[]
         for row in rows:
-            raw=row.raw_data or {}; org=_text(_pick(raw,"机构代码","分支机构代码") or row.organization_code); agent=_text(_pick(raw,"agent_name","扣缴义务人名称","withholding_agent_name")); agent_id=_text(_pick(raw,"agent_id","扣缴义务人纳税人识别号（统一社会信用代码）","扣缴义务人编码")); resolved=self.resolver.resolve_by_taxpayer_id(agent_id) or self.resolver.resolve_by_full_name(agent) or self.resolver.resolve_by_branch_name(agent)
-            org=org or (resolved.org_code if resolved else "")
-            result.append(DeclarationRow(org, _text(_pick(raw,"sheet_name","申报类型","申报表类型") or row.declaration_type), agent, agent_id, _text(_pick(raw,"纳税人姓名","姓名","*姓名") or row.taxpayer_name), _text(_pick(raw,"证件号码","身份证号码","*证件号码")), _text(_pick(raw,"所得项目","*所得项目") or row.declaration_type), money_or_none(_pick(raw,"收入额","本期收入","收入") or row.income_amount), money_or_none(_pick(raw,"应补退税额","扣缴税额","税额") or row.tax_amount), _text(_pick(raw,"税率/预扣率","税率","预扣率")), money_or_none(_pick(raw,"累计应纳税所得额")), money_or_none(_pick(raw,"累计减除费用")), money_or_none(_pick(raw,"累计专项扣除")), money_or_none(_pick(raw,"子女教育")), money_or_none(_pick(raw,"赡养老人")), money_or_none(_pick(raw,"住房贷款利息")), money_or_none(_pick(raw,"住房租金")), money_or_none(_pick(raw,"继续教育")), money_or_none(_pick(raw,"婴幼儿照护","3岁以下婴幼儿照护","3岁以下婴幼儿")), money_or_none(_pick(raw,"累计个人养老金","个人养老金")), money_or_none(_pick(raw,"累计其他扣除","其他扣除")), money_or_none(_pick(raw,"住房公积金调整")), _text(_pick(raw,"tax_period","税款所属期") or row.tax_period), raw))
-        return SourceResult("pit_declaration", "ready_empty" if not result else "ready", result, source_kind="reconciliation_import_batch", source_id=batch.id, source_ref=batch.stored_path)
+            raw=row.raw_data or {}; declared_org=_text(_pick(raw,"机构代码","分支机构代码") or row.organization_code); file_org=_text(_pick(raw,"file_org_code")); agent=_text(_pick(raw,"agent_name","扣缴义务人名称","withholding_agent_name")); agent_id=_text(_pick(raw,"agent_id","扣缴义务人纳税人识别号（统一社会信用代码）","扣缴义务人编码")); tax_org=self.resolver.resolve_by_taxpayer_id(agent_id); name_org=self.resolver.resolve_by_full_name(agent) or self.resolver.resolve_by_branch_name(agent)
+            candidates={candidate.org_code for candidate in (tax_org, name_org) if candidate} | {value for value in (declared_org, file_org) if value}
+            if len(candidates) > 1:
+                issues.append({"issue_type":"declaration_organization_conflict", "message":f"申报文件机构归属冲突：税号/营业部/文件名识别结果为 {', '.join(sorted(candidates))}", "row_id":row.id})
+            resolved=tax_org or name_org
+            org=resolved.org_code if resolved else (declared_org or file_org)
+            result.append(DeclarationRow(org, _text(_pick(raw,"sheet_name","申报类型","申报表类型") or row.declaration_type), agent, agent_id, _text(_pick(raw,"纳税人姓名","姓名","*姓名") or row.taxpayer_name), _text(_pick(raw,"身份证件号码","证件号码","身份证号码","*证件号码")), _text(_pick(raw,"所得项目","*所得项目") or row.declaration_type), money_or_none(_pick(raw,"收入额","本期收入","收入") or row.income_amount), money_or_none(_pick(raw,"应补退税额","应补/退税额","扣缴税额","税额") or row.tax_amount), _text(_pick(raw,"税率/预扣率","税率","预扣率")), money_or_none(_pick(raw,"累计应纳税所得额")), money_or_none(_pick(raw,"累计减除费用")), money_or_none(_pick(raw,"累计专项扣除")), money_or_none(_pick(raw,"子女教育")), money_or_none(_pick(raw,"赡养老人")), money_or_none(_pick(raw,"住房贷款利息")), money_or_none(_pick(raw,"住房租金")), money_or_none(_pick(raw,"继续教育")), money_or_none(_pick(raw,"婴幼儿照护","3岁以下婴幼儿照护","3岁以下婴幼儿")), money_or_none(_pick(raw,"累计个人养老金","个人养老金")), money_or_none(_pick(raw,"累计其他扣除","其他扣除")), money_or_none(_pick(raw,"住房公积金调整")), _text(_pick(raw,"tax_period","税款所属期") or row.tax_period), raw))
+        return SourceResult("pit_declaration", "ready_empty" if not result else "ready", result, source_kind="reconciliation_import_batch", source_id=batch.id, source_ref=batch.stored_path, issues=issues)
 
     def load_salary_source(self) -> SourceResult:
         artifact=self.db.query(TaxMonthlyArtifact).filter(TaxMonthlyArtifact.company_id == self.company_id, TaxMonthlyArtifact.period_id == self.period_id, TaxMonthlyArtifact.artifact_type == "working_sheet").first()

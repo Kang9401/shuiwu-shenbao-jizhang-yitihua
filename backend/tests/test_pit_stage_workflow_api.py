@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import Base, get_db
 from app.main import app
 from app.models.core import Company, Period
-from app.models.pit_reconciliation import PitReconciliationWorkpaper, PitTaxAmountCheck
+from app.models.pit_reconciliation import PitReconciliationOrgSummary, PitReconciliationWorkpaper, PitTaxAmountCheck
 
 
 def _client_with_stages():
@@ -34,6 +34,7 @@ def _client_with_stages():
             PitTaxAmountCheck(workpaper_id=pre.id, company_id=company.id, period_id=period.id, org_code="10001", org_name="机构", subject_code="21510006", subject_name="个税", check_status="ok"),
             PitTaxAmountCheck(workpaper_id=post.id, company_id=company.id, period_id=period.id, org_code="10001", org_name="机构", subject_code="21510006", subject_name="个税", check_status="ok"),
         ])
+        db.add(PitReconciliationOrgSummary(workpaper_id=post.id, company_id=company.id, period_id=period.id, org_code="10001", org_name="机构", org_full_name="机构全称", check_status="ok"))
         db.commit()
         period_id = period.id
 
@@ -100,6 +101,7 @@ def test_post_payment_export_has_only_post_sheets_and_preserves_duplicate_visibl
 
         workbook = openpyxl.load_workbook(io.BytesIO(response.content), read_only=True)
         assert workbook.sheetnames == list(POST_PAYMENT_SHEET_NAMES)
-        assert list(next(workbook["缴税核对"].values))[-1] == "差异原因11"
+        header = list(next(workbook["缴税核对"].values))
+        assert header == ["机构代码", "营业部全称", "申报表", "完税证明", "申报表与完税证明差异金额11", "差异原因11", "银行流水个税", "完税证明与银行流水差异金额11", "差异原因11"]
     finally:
         app.dependency_overrides.clear()

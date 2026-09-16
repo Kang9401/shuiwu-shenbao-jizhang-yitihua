@@ -103,6 +103,26 @@ def test_summary_keeps_available_business_tax_when_another_business_source_is_mi
     assert summary["payroll_business_tax_amount"] == Decimal("100.00")
 
 
+def test_occurrence_declaration_difference_is_counted_once_per_income_type():
+    bundle = _bundle()
+    bundle.declarations = SourceResult("pit_declaration", "ready", [
+        DeclarationRow("10001", "综合所得", income_item="证券经纪人佣金收入", income_amount=Decimal("645.87")),
+    ])
+    bundle.balance = SourceResult("balance_sheet", "ready", [
+        BalanceRow("10001", "21131042", "21131042", debit_amount=Decimal("500.00")),
+        BalanceRow("10001", "45019006", "45019006", debit_amount=Decimal("552.91")),
+    ])
+    bundle.broker = SourceResult("broker", "ready", [
+        BrokerRow("10001", gross_before_topup=Decimal("558.49"), vat_amount=Decimal("5.58")),
+    ])
+    result = PitReconciliationEngine().calculate(bundle)
+    rows = [row for row in result["occurrence_checks"] if row["income_type"] == "证券经纪人佣金收入"]
+    assert sum((row["expected_declared_income"] or Decimal("0.00") for row in rows), Decimal("0.00")) == Decimal("1052.91")
+    assert sum((row["actual_declared_income"] or Decimal("0.00") for row in rows), Decimal("0.00")) == Decimal("645.87")
+    assert sum((row["declared_income_difference"] or Decimal("0.00") for row in rows), Decimal("0.00")) == Decimal("-407.04")
+    assert result["org_summaries"][0]["other_income_difference"] == Decimal("-407.04")
+
+
 def test_vat_boundaries_match_legacy_threshold():
     assert [calc_vat(Decimal(value)) for value in ("0", "1000", "1009.99", "1010", "1010.01", "10000")] == [
         Decimal("0.00"), Decimal("0.00"), Decimal("0.00"), Decimal("10.00"), Decimal("10.00"), Decimal("99.01"),
