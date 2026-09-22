@@ -10,11 +10,13 @@ class CompanyPayload(BaseModel):
     code: str = Field(min_length=1, max_length=60)
     operator_name: str = Field(min_length=1, max_length=120)
     notes: str = Field(default="", max_length=500)
+    fmss_branch_code: str | None = Field(default=None, max_length=60)
+    fmss_branch_name: str | None = Field(default=None, max_length=255)
 
-    @field_validator("name", "code", "operator_name", "notes")
+    @field_validator("name", "code", "operator_name", "notes", "fmss_branch_code", "fmss_branch_name")
     @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
+    def strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
     @field_validator("name", "code", "operator_name")
     @classmethod

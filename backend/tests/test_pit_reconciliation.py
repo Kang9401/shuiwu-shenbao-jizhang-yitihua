@@ -13,6 +13,7 @@ from app.models.pit_reconciliation import PitReconciliationWorkpaper, PitTaxAmou
 from app.services.pit_reconciliation.domain import (BalanceRow, BankRow, BondInterestRow, BrokerRow, DeclarationRow, OrganizationRow, PitSourceBundle, RestrictedStockRow, SalaryRow, SourceResult, TaxCertificateRow)
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.money import money_or_none
+from app.services.pit_reconciliation.organization_resolver import PitOrganizationResolver
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService, _org_code
 from app.services.reconciliation_import import _column_map
@@ -49,6 +50,19 @@ def test_money_distinguishes_missing_from_real_zero():
 def test_artifact_organization_code_removes_excel_numeric_suffix():
     assert _org_code(13201.0) == "13201"
     assert _org_code("13201") == "13201"
+
+
+def test_organization_resolver_matches_pdf_wrapped_name_after_normalization():
+    db = _db()
+    company = Company(name="机构匹配测试", code="ORG_MATCH", operator_name="测试")
+    db.add(company); db.flush()
+    db.add(OrganizationMapping(
+        company_id=company.id, org_code="13301", branch_name="佛山顺德大良保利国际金融中心证券营业部",
+        rpa_org_name="广发证券股份有限公司佛山顺德大良保利国际金融中心证券营业部",
+    ))
+    db.commit()
+    resolver = PitOrganizationResolver(db, company.id)
+    assert resolver.resolve_by_full_name("广发证券股份有限公司佛山顺德大良保利国际金融中心证\n券营业部").org_code == "13301"
 
 
 def test_subset_sum_handles_large_no_solution_pool_without_combinatorial_search():
@@ -182,6 +196,10 @@ def test_engine_emits_all_tax_and_occurrence_subjects():
     result = PitReconciliationEngine().calculate(bundle)
     assert {row["subject_code"] for row in result["tax_checks"]} == {"21510006", "21510008", "21510009", "21510016"}
     assert {row["subject_code"] for row in result["occurrence_checks"]} == {"21131042", "45019006", "21210037", "21210038", "21210012"}
+    names = {row["detail_type"]: row["org_name"] for row in result["details"]}
+    assert names["salary_tax"] == "测试营业部"
+    assert names["bond_interest_tax"] == "测试营业部"
+    assert names["restricted_stock_tax"] == "测试营业部"
 
 
 def test_subject_descriptions_use_real_balance_description_then_standard_fallback():

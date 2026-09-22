@@ -85,6 +85,11 @@ class PitReconciliationEngine:
         if bundle.salary.status=="ready" and bundle.declarations.status=="ready": details += salary_tax_details(bundle.salary.rows,bundle.declarations.rows)+salary_taxable_income_details(bundle.salary.rows,bundle.declarations.rows)
         if bundle.bond_interest.status=="ready" and bundle.declarations.status=="ready": details += bond_interest_details(bundle.bond_interest.rows,bundle.declarations.rows)
         if bundle.restricted_stock.status=="ready" and bundle.declarations.status=="ready": details += restricted_stock_details(bundle.restricted_stock.rows,bundle.declarations.rows)
+        # Detail rules deliberately stay data-source focused. Apply the canonical
+        # organization name once here so every attachment has a consistent branch name.
+        for detail in details:
+            org = orgs.get(detail["org_code"])
+            detail["org_name"] = org.org_name if org else ""
         summaries=[]; bank_matches=[]; details_by_org=defaultdict(lambda:Decimal("0.00"))
         for detail in details:
             if detail["detail_type"]=="salary_taxable_income": details_by_org[detail["org_code"]]+=detail["difference"]

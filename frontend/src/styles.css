@@ -1413,6 +1413,23 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
+.fmss-topbar-status {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fmss-topbar-status strong { color: var(--text); }
+.fmss-env-tag { color: var(--el-color-primary); font-weight: 800; }
+
 .action-bar > * {
   min-width: 0;
 }

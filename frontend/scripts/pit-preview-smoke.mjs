@@ -22,7 +22,8 @@ const development = await loadEntry(`
   import { MockReviewService } from './src/services/pit/mockReviewService'
   import { latestMockSubmissionPayload } from './src/services/pit/mockWorkpaperState'
   import { usePlatformSessionCache } from './src/composables/usePlatformSessionCache'
-  export { effectScope, PIT_STAGE_CONFIG, MockWorkpaperService, MockReviewService, latestMockSubmissionPayload, usePlatformSessionCache }
+  import { displayReason, isGeneratedReason, stripAutoPrefix } from './src/features/pit/reasonDisplay'
+  export { effectScope, PIT_STAGE_CONFIG, MockWorkpaperService, MockReviewService, latestMockSubmissionPayload, usePlatformSessionCache, displayReason, isGeneratedReason, stripAutoPrefix }
 `, true)
 
 assert.equal(development.PIT_STAGE_CONFIG.pre_payment.sheets.length, 14, '缴款前应包含 14 张表')
@@ -30,6 +31,11 @@ assert.equal(development.PIT_STAGE_CONFIG.post_payment.sheets.length, 4, '缴款
 const postColumns = development.PIT_STAGE_CONFIG.post_payment.sheets[0].columns.map((column) => column.code)
 assert.ok(postColumns.includes('post.declared_vs_certificate'))
 assert.ok(postColumns.includes('post.certificate_vs_bank'))
+
+const automaticReason = '【自动汇总】\n一、工资薪金\n1）张三：补发工资导致差异'
+assert.equal(development.isGeneratedReason(automaticReason), true)
+assert.equal(development.stripAutoPrefix(automaticReason), '一、工资薪金\n1）张三：补发工资导致差异')
+assert.equal(development.displayReason(automaticReason), '一、工资薪金\n1）张三：补发工资导致差异')
 
 const workpapers = new development.MockWorkpaperService()
 const preContext = { localCompanyId: 1, localPeriodId: 1, companyName: '合成机构', taxPeriod: '2026-08', stage: 'pre_payment' }

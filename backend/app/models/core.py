@@ -19,6 +19,9 @@ class Company(Base):
     code: Mapped[str] = mapped_column(String(60), nullable=False, unique=True, index=True)
     operator_name: Mapped[str] = mapped_column(String(120), nullable=False)
     notes: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    # This is an FMSS declaration branch, not the local organisation code.
+    fmss_branch_code: Mapped[Optional[str]] = mapped_column(String(60), nullable=True, unique=True, index=True)
+    fmss_branch_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     active: Mapped[int] = mapped_column(Integer, default=1, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -11,9 +11,13 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 
-os.environ.setdefault("APP_RUNTIME_MODE", "desktop")
+# The packaged launcher is the authority for the backend runtime.  Do not let a
+# development value inherited from a parent shell turn a desktop session into a
+# browser session after settings are constructed.
+os.environ["APP_RUNTIME_MODE"] = "desktop"
 
 import httpx
 import uvicorn
@@ -26,10 +30,51 @@ from app.main import app
 
 _mutex_handle = None
 _monitor_window = None
+_fmss_window = None
 _desktop_exiting = False
 
 
 class DesktopWindowManager:
+    def open_fmss_login(self) -> dict:
+        global _fmss_window
+        import webview
+        from app.integrations.fmss.browser_auth import FmssBrowserAuthBridge, capture_script
+
+        def on_connected() -> None:
+            if _fmss_window is not None:
+                _fmss_window.hide()
+
+        if _fmss_window is None:
+            _fmss_window = webview.create_window(
+                "FMSS登录",
+                settings.fmss_login_url,
+                width=1100,
+                height=800,
+                text_select=True,
+                js_api=FmssBrowserAuthBridge(on_connected=on_connected),
+            )
+            _fmss_window.events.loaded += lambda: _fmss_window.evaluate_js(capture_script(urlparse(settings.fmss_api_base_url).path.rstrip("/") + "/"))
+        else:
+            _fmss_window.show()
+        return {"opened": True}
+
+    def close_fmss_login(self) -> dict:
+        global _fmss_window
+        if _fmss_window is not None:
+            _fmss_window.hide()
+        return {"closed": True}
+
+    def clear_fmss_login(self) -> dict:
+        """Clear only the dedicated FMSS WebView session before account switch."""
+        global _fmss_window
+        if _fmss_window is not None:
+            try:
+                _fmss_window.clear_cookies()
+            finally:
+                _fmss_window.destroy()
+                _fmss_window = None
+        return {"cleared": True}
+
     def open_rpa_monitor(self) -> dict:
         if _monitor_window is None:
             return {"opened": False, "message": "监控窗口尚未初始化"}

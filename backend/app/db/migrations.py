@@ -431,6 +431,18 @@ def _migration_14(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE pit_reconciliation_workpapers_legacy_stage RENAME TO pit_reconciliation_workpapers")
 
 
+def _migration_15(connection: sqlite3.Connection) -> None:
+    table = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'companies'").fetchone()
+    if table is None:
+        return
+    columns = _table_columns(connection, "companies")
+    if "fmss_branch_code" not in columns:
+        connection.execute('ALTER TABLE companies ADD COLUMN "fmss_branch_code" VARCHAR(60)')
+    if "fmss_branch_name" not in columns:
+        connection.execute('ALTER TABLE companies ADD COLUMN "fmss_branch_name" VARCHAR(255)')
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_fmss_branch_code ON companies (fmss_branch_code)")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -446,6 +458,7 @@ MIGRATIONS = {
     12: _migration_12,
     13: _migration_13,
     14: _migration_14,
+    15: _migration_15,
 }
 
 

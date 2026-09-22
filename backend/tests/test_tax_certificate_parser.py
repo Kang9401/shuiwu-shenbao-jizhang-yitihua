@@ -39,3 +39,15 @@ def test_certificate_total_mismatch_does_not_return_rows(monkeypatch, tmp_path):
     rows, issues = parse_tax_certificate_pdf(path)
     assert rows == []
     assert [issue["issue_type"] for issue in issues] == ["certificate_total_mismatch"]
+
+
+def test_certificate_parser_normalizes_wrapped_branch_name(monkeypatch, tmp_path):
+    class Page:
+        def extract_text(self):
+            return "纳税人名称：广发证券股份有限公司佛山顺德大良保利国际金融中心证\n券营业部 原凭证号 税种 品目名称 税款所属时期 入（退）库日期 实缴（退）金额 个人所得税 限售股转让所得 2026.08.01-2026.08.31 2026.09.04 1,863.54"
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=lambda _: SimpleNamespace(pages=[Page()])))
+    path = tmp_path / "2026-08_10615_xxx.pdf"
+    path.write_bytes(b"synthetic")
+    rows, issues = parse_tax_certificate_pdf(path)
+    assert issues == []
+    assert rows[0]["taxpayer_name"] == "广发证券股份有限公司佛山顺德大良保利国际金融中心证券营业部"

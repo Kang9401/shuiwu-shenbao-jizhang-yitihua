@@ -44,6 +44,12 @@ function scopeDownloadUrls(value: any): void {
 api.interceptors.response.use((response) => {
   scopeDownloadUrls(response.data)
   return response
+}, (error) => {
+  const url = String(error?.config?.url || '')
+  if (error?.response?.status === 401 && url.startsWith('/fmss')) {
+    window.dispatchEvent(new CustomEvent('fmss-session-expired'))
+  }
+  return Promise.reject(error)
 })
 
 export interface Company {
@@ -52,12 +58,14 @@ export interface Company {
   code: string
   operator_name: string
   notes: string
+  fmss_branch_code: string | null
+  fmss_branch_name: string | null
   active: boolean
   created_at: string
   updated_at: string
 }
 
-export type CompanyPayload = Pick<Company, 'name' | 'code' | 'operator_name' | 'notes'>
+export type CompanyPayload = Pick<Company, 'name' | 'code' | 'operator_name' | 'notes' | 'fmss_branch_code' | 'fmss_branch_name'>
 
 export const companyApi = {
   list: (includeInactive = false) => api.get<Company[]>('/companies', { params: { include_inactive: includeInactive } }),
@@ -594,10 +602,29 @@ export const pitReconciliationApi = {
   getBankMatches: (periodId: number, stage: PitStage, params: PitListParams = {}) => api.get<PitBankTaxMatch[]>('/pit-reconciliations/bank-matches', { params: { period_id: periodId, stage, ...params } }),
   getSheetData: (periodId: number, stage: PitStage, sheetName: string, page = 1, pageSize = 100, filters: { keyword?: string; org_code?: string; display_mode?: 'all' | 'difference' | 'missing' } = {}) => api.get<PitSheetData>('/pit-reconciliations/sheet-data', { params: { period_id: periodId, stage, sheet_name: sheetName, page, page_size: pageSize, ...filters }, timeout: 120000 }),
   exportUrl: (periodId: number, stage: PitStage) => companyUrl(`/api/pit-reconciliations/export?period_id=${periodId}&stage=${stage}`),
+  exportOccurrenceDescriptions: (periodId: number, stage: PitStage) => api.get<Blob>('/pit-reconciliations/occurrence-descriptions/export', { params: { period_id: periodId, stage }, responseType: 'blob' }),
+  importOccurrenceDescriptions: (periodId: number, stage: PitStage, file: File) => { const data = new FormData(); data.append('file', file); return api.post<{ updated_count: number; unmatched_count: number; draft_revision: number }>('/pit-reconciliations/occurrence-descriptions/import', data, { params: { period_id: periodId, stage } }) },
   updateSummary: (periodId: number, stage: PitStage, id: number, payload: Partial<Pick<PitOrgSummary, 'difference_1_manual_reason' | 'difference_2_manual_reason' | 'difference_3_manual_reason' | 'difference_4_manual_reason' | 'difference_5_manual_reason' | 'difference_6_manual_reason' | 'difference_7_manual_reason' | 'remark'>>) => api.patch<PitOrgSummary>(`/pit-reconciliations/org-summaries/${id}`, payload, { params: { period_id: periodId, stage } }),
   updateTaxAmountCheck: (periodId: number, stage: PitStage, id: number, payload: Partial<Pick<PitTaxAmountCheck, 'current_manual_reason' | 'cumulative_manual_reason' | 'business_declared_manual_reason' | 'remark'>>) => api.patch<PitTaxAmountCheck>(`/pit-reconciliations/tax-amount-checks/${id}`, payload, { params: { period_id: periodId, stage } }),
   updateOccurrenceCheck: (periodId: number, stage: PitStage, id: number, payload: Partial<Pick<PitOccurrenceCheck, 'broker_occurrence_manual_reason' | 'declared_income_manual_reason' | 'remark'>>) => api.patch<PitOccurrenceCheck>(`/pit-reconciliations/occurrence-checks/${id}`, payload, { params: { period_id: periodId, stage } }),
   updateDifference: (periodId: number, stage: PitStage, id: number, payload: { manual_reason?: string; remark?: string }) => api.patch<PitDifferenceDetail>(`/pit-reconciliations/difference-details/${id}`, payload, { params: { period_id: periodId, stage } }),
+}
+
+export interface FmssSession { connected: boolean; environment: string; username: string | null; displayName: string | null }
+export interface FmssBranch { branchCode?: string; branchName?: string; code?: string; name?: string }
+export interface FmssSheetDefinition { key: string; title: string; headers: string[] }
+export const fmssApi = {
+  session: (validate = false) => api.get<FmssSession>('/fmss/session', { params: { validate: validate || undefined } }),
+  logout: () => api.post<{ cleared: boolean }>('/fmss/logout'),
+  openLogin: () => api.post<{ opened: boolean }>('/fmss/login/open'),
+  branches: () => api.get<FmssBranch[] | { rows?: FmssBranch[] }>('/fmss/iit/branches'),
+  sheets: (stage: 'PRE' | 'POST') => api.get<FmssSheetDefinition[]>('/fmss/iit/sheets', { params: { stage } }),
+  declaration: (periodId: number, stage: PitStage) => api.get<{ status: string; declaration: unknown; declaration_id: string | null }>('/fmss/iit/declaration', { params: { period_id: periodId, stage } }),
+  approvalLog: (periodId: number) => api.get<{ rows?: any[]; canManage?: boolean }>('/fmss/iit/approval-log', { params: { period_id: periodId } }),
+  review: (declarationId: string) => api.get<any>(`/fmss/iit/review/${encodeURIComponent(declarationId)}`),
+  reviewers: (periodId: number) => api.get<any>('/fmss/iit/reviewers', { params: { period_id: periodId } }),
+  submit: (periodId: number, reviewer: string, stage: PitStage) => api.post<any>('/fmss/iit/submit', { period_id: periodId, reviewer, stage }),
+  decision: (declarationId: string, passed: boolean, comment: string) => api.post<any>('/fmss/iit/decision', { id: declarationId, passed, comment }),
 }
 
 export const financeAIApi = {

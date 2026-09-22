@@ -135,6 +135,11 @@ def test_pit_workpaper_export_contains_reference_template_sheets():
         workbook = openpyxl.load_workbook(io.BytesIO(response.content), read_only=True)
         from app.services.pit_reconciliation.exporter import PRE_PAYMENT_SHEET_NAMES
         assert workbook.sheetnames == list(PRE_PAYMENT_SHEET_NAMES)
+        assert list(next(workbook["汇总税额核对"].values)) == [
+            "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差异1", "差异原因1",
+            "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
+            "当期工资薪金累计应纳税所得额差异3", "差异原因3", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
+        ]
     finally:
         app.dependency_overrides.clear()
 
@@ -174,6 +179,50 @@ def test_failed_recalculation_keeps_previous_detail_rows(monkeypatch):
         after = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()
         assert response.status_code == 400
         assert [(row["subject_code"], row["business_tax_amount"]) for row in after] == [(row["subject_code"], row["business_tax_amount"]) for row in before]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_occurrence_description_export_and_import_only_updates_description():
+    client, period_id = _client_with_workpaper()
+    try:
+        import io
+        import openpyxl
+
+        exported = client.get("/api/pit-reconciliations/occurrence-descriptions/export", params={"period_id": period_id, "stage": "pre_payment"})
+        assert exported.status_code == 200
+        workbook = openpyxl.load_workbook(io.BytesIO(exported.content), read_only=True)
+        assert "发生额应申报收入说明" in next(workbook.active.values)
+
+        occurrence = client.get("/api/pit-reconciliations/occurrence-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()[0]
+        before_revision = client.get("/api/pit-reconciliations/overview", params={"period_id": period_id, "stage": "pre_payment"}).json()["workpaper"]["draft_revision"]
+        spreadsheet = io.BytesIO()
+        pd.DataFrame([{
+            "机构代码": occurrence["org_code"], "会计科目": occurrence["subject_code"], "对应税种": occurrence["income_type"],
+            "发生额应申报收入说明": "导入说明", "借方金额": 999999,
+        }]).to_excel(spreadsheet, index=False)
+        response = client.post(
+            "/api/pit-reconciliations/occurrence-descriptions/import",
+            params={"period_id": period_id, "stage": "pre_payment"},
+            files={"file": ("说明.xlsx", spreadsheet.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert response.status_code == 200
+        assert response.json()["updated_count"] == 1
+        assert response.json()["draft_revision"] == before_revision + 1
+        current = client.get("/api/pit-reconciliations/occurrence-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()[0]
+        assert current["expected_income_description"] == "导入说明"
+        assert current["debit_amount"] == occurrence["debit_amount"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_a1_api_keeps_engine_branch_name():
+    client, period_id = _client_with_workpaper()
+    try:
+        response = client.get("/api/pit-reconciliations/difference-details", params={"period_id": period_id, "stage": "pre_payment", "detail_type": "salary_tax"})
+        assert response.status_code == 200
+        assert response.json()[0]["org_code"] == "10001"
+        assert response.json()[0]["org_name"] == "测试营业部"
     finally:
         app.dependency_overrides.clear()
 

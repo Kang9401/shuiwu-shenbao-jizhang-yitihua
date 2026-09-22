@@ -27,6 +27,16 @@ def _ensure_unique(db: Session, payload: CompanyPayload, exclude_id: int | None 
     raise HTTPException(status_code=409, detail=f"分公司{field}已存在")
 
 
+def _ensure_unique_fmss_branch(db: Session, payload: CompanyPayload, exclude_id: int | None = None) -> None:
+    if not payload.fmss_branch_code:
+        return
+    query = db.query(Company).filter(Company.fmss_branch_code == payload.fmss_branch_code)
+    if exclude_id is not None:
+        query = query.filter(Company.id != exclude_id)
+    if query.first() is not None:
+        raise HTTPException(status_code=409, detail="该FMSS申报分公司已绑定到另一家本地分公司")
+
+
 @router.get("", response_model=list[CompanyRead])
 def list_companies(include_inactive: bool = False, db: Session = Depends(get_db)) -> list[Company]:
     query = db.query(Company)
@@ -38,6 +48,7 @@ def list_companies(include_inactive: bool = False, db: Session = Depends(get_db)
 @router.post("", response_model=CompanyRead, status_code=201)
 def create_company(payload: CompanyPayload, db: Session = Depends(get_db)) -> Company:
     _ensure_unique(db, payload)
+    _ensure_unique_fmss_branch(db, payload)
     item = Company(**payload.model_dump(), active=1)
     db.add(item)
     try:
@@ -70,6 +81,7 @@ def update_company(company_id: int, payload: CompanyPayload, db: Session = Depen
     if item is None:
         raise HTTPException(status_code=404, detail="分公司不存在")
     _ensure_unique(db, payload, exclude_id=company_id)
+    _ensure_unique_fmss_branch(db, payload, exclude_id=company_id)
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
     db.commit()

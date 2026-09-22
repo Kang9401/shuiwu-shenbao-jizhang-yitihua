@@ -4,6 +4,8 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
+from ..name_normalization import normalize_organization_name
+
 
 _PERIOD = r"(?:\d{4}[年./-]\d{1,2}(?:月|[./-])\d{1,2}(?:日)?(?:至|-|—)\d{4}[年./-]\d{1,2}(?:月|[./-])\d{1,2}(?:日)?)"
 _DETAIL = re.compile(rf"个人所得税\s+(?P<item>.+?)\s+(?P<period>{_PERIOD})\s+(?P<payment_date>\d{{4}}[./-]\d{{1,2}}[./-]\d{{1,2}})?\s*(?P<amount>[\d,]+(?:\.\d{{1,2}})?)")
@@ -28,7 +30,7 @@ def parse_tax_certificate_pdf(path: str | Path) -> tuple[list[dict], list[dict]]
         return [], [{"issue_type": "pdf_read_error", "message": str(exc)}]
 
     taxpayer_match = re.search(r"纳税人名称\s*[：:]?\s*(.+?)(?=\s+(?:原凭证号|税种|品目名称|税款所属)|$)", text)
-    taxpayer_name = taxpayer_match.group(1).strip() if taxpayer_match else ""
+    taxpayer_name = normalize_organization_name(taxpayer_match.group(1)) if taxpayer_match else ""
     taxpayer_id_match = re.search(r"纳税人识别号\s*[：:]?\s*([A-Za-z0-9]{10,})", text)
     taxpayer_id = taxpayer_id_match.group(1) if taxpayer_id_match else ""
     org_match = re.search(r"(?<!\d)(\d{5})(?!\d)", Path(path).stem)

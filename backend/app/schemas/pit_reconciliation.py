@@ -54,4 +54,4 @@ class PitRecalculateRequest(BaseModel):
 
 
 class PitReasonAggregationRequest(BaseModel):
-    mode: Literal["fill_empty", "refresh_generated"] = "fill_empty"
+    mode: Literal["fill_empty", "refresh_generated"] = "refresh_generated"

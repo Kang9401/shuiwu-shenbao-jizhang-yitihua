@@ -1,5 +1,10 @@
 <template>
   <RpaMonitor v-if="isRpaMonitor" />
+  <div v-else-if="fmssChecking" class="company-entry company-entry-loading">
+    <el-icon class="company-entry-spinner"><Loading /></el-icon>
+    <strong>正在验证 FMSS 登录状态</strong>
+  </div>
+  <FmssLoginGate v-else-if="!fmssReady" @connected="handleFmssConnected" />
   <div v-else-if="initializingCompanies" class="company-entry company-entry-loading">
     <el-icon class="company-entry-spinner"><Loading /></el-icon>
     <strong>正在加载分公司</strong>
@@ -26,6 +31,7 @@
         <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" placeholder="例如：广州分公司" /></label>
         <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" placeholder="例如：17001" /></label>
         <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" placeholder="请输入使用人" /></label>
+        <label>FMSS申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录FMSS后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
         <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" placeholder="选填" /></label>
         <el-button type="primary" :loading="savingCompany" @click="saveCompany(true)">创建并进入</el-button>
       </section>
@@ -67,6 +73,12 @@
           <p>{{ activeMeta.description }}</p>
         </div>
         <div class="topbar-right">
+          <div class="fmss-topbar-status" title="FMSS连接状态">
+            <span class="fmss-env-tag">{{ fmssEnvironment.toUpperCase() }}</span>
+            <span>FMSS已连接</span>
+            <strong>{{ fmssIdentity.displayName || fmssIdentity.username || '当前用户' }}</strong>
+            <el-button link type="primary" @click="switchFmssAccount">切换账号</el-button>
+          </div>
           <div class="company-control">
             <span>当前分公司</span>
             <div class="company-picker-actions">
@@ -158,7 +170,7 @@
 
         <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :company-id="selectedCompany?.id" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
 
-        <PitReview v-else-if="activeView === 'pit_review'" />
+        <PitReview v-else-if="activeView === 'pit_review'" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" />
 
         <MonthlyPersonnelWorkflow
           v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
@@ -219,6 +231,7 @@
         <el-table-column prop="name" label="分公司" min-width="150" />
         <el-table-column prop="code" label="编码" width="110" />
         <el-table-column prop="operator_name" label="使用人" width="120" />
+        <el-table-column label="FMSS申报分公司" min-width="160"><template #default="{ row }">{{ row.fmss_branch_name || row.fmss_branch_code || '未绑定' }}</template></el-table-column>
         <el-table-column label="状态" width="80"><template #default="{ row }"><span class="tag" :class="row.active ? 'tag-success' : 'tag-info'">{{ row.active ? '启用' : '停用' }}</span></template></el-table-column>
         <el-table-column label="操作" width="180"><template #default="{ row }"><el-button link type="primary" @click="openCompanyEditor(row)">编辑</el-button><el-button link :type="row.active ? 'danger' : 'success'" @click="toggleCompany(row)">{{ row.active ? '停用' : '启用' }}</el-button></template></el-table-column>
       </el-table>
@@ -229,6 +242,7 @@
         <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" /></label>
         <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" /></label>
         <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" /></label>
+        <label>FMSS申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录FMSS后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
         <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" /></label>
       </div>
       <template #footer><el-button @click="companyEditorVisible = false">取消</el-button><el-button type="primary" :loading="savingCompany" @click="saveCompany(false)">保存</el-button></template>
@@ -237,7 +251,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   ArrowRight,
@@ -271,7 +285,8 @@ import SystemMaintenance from './views/SystemMaintenance.vue'
 import FinanceSkill from './views/FinanceSkill.vue'
 import TaskCenter from './views/TaskCenter.vue'
 import RpaMonitor from './views/RpaMonitor.vue'
-import { api, COMPANY_STORAGE_KEY, companyApi, taxApi, workflowApi, type Company, type Period, type TaxSession, type Workflow } from './api'
+import FmssLoginGate from './components/FmssLoginGate.vue'
+import { api, COMPANY_STORAGE_KEY, companyApi, fmssApi, taxApi, workflowApi, type Company, type Period, type TaxSession, type Workflow } from './api'
 
 type ViewKey =
   | 'work_guide'
@@ -370,8 +385,13 @@ const companyManagerVisible = ref(false)
 const companyEditorVisible = ref(false)
 const editingCompanyId = ref<number | null>(null)
 const savingCompany = ref(false)
-const emptyCompanyDraft = () => ({ name: '', code: '', operator_name: '', notes: '' })
+const emptyCompanyDraft = () => ({ name: '', code: '', operator_name: '', notes: '', fmss_branch_code: null as string | null, fmss_branch_name: null as string | null })
 const companyDraft = reactive(emptyCompanyDraft())
+const fmssBranches = ref<Array<{ code: string; name: string }>>([])
+const fmssReady = ref(false)
+const fmssChecking = ref(!isRpaMonitor)
+const fmssEnvironment = ref('dev')
+const fmssIdentity = reactive<{ username: string | null; displayName: string | null }>({ username: null, displayName: null })
 
 const flatItems = computed(() => navSections.flatMap((section) => section.items))
 const activeItem = computed(() => flatItems.value.find((item) => item.key === activeView.value) || flatItems.value[0])
@@ -402,11 +422,12 @@ const activeMeta = computed(() => ({
 
 onMounted(async () => {
   if (isRpaMonitor) return
-  await loadCompanies()
-  const storedId = Number(window.localStorage.getItem(COMPANY_STORAGE_KEY))
-  if (companies.value.some((item) => item.id === storedId)) await selectCompany(storedId, false)
-  initializingCompanies.value = false
+  window.addEventListener('fmss-session-expired', handleFmssExpired)
+  if (await validateFmssSession()) await initializeWorkspace()
+  fmssChecking.value = false
 })
+
+onBeforeUnmount(() => window.removeEventListener('fmss-session-expired', handleFmssExpired))
 
 watch(selectedPeriodId, async (periodId) => {
   if (periodId) await createSession(periodId)
@@ -481,11 +502,96 @@ async function openCompanyManager() {
   companyManagerVisible.value = true
 }
 
+function normalizeFmssBranches(value: unknown): Array<{ code: string; name: string }> {
+  const rows = Array.isArray(value) ? value : (value && typeof value === 'object' && Array.isArray((value as any).rows) ? (value as any).rows : [])
+  return rows.map((row: any) => ({
+    code: String(row?.branchCode || row?.code || '').trim(),
+    name: String(row?.branchName || row?.name || row?.branchCode || row?.code || '').trim(),
+  })).filter((row: { code: string }) => row.code)
+}
+
+async function validateFmssSession(): Promise<boolean> {
+  try {
+    const { data } = await fmssApi.session(true)
+    if (!data.connected) {
+      fmssReady.value = false
+      return false
+    }
+    const { data: branchData } = await fmssApi.branches()
+    fmssEnvironment.value = data.environment || 'dev'
+    fmssIdentity.username = data.username
+    fmssIdentity.displayName = data.displayName
+    fmssBranches.value = normalizeFmssBranches(branchData)
+    fmssReady.value = true
+    return true
+  } catch {
+    fmssReady.value = false
+    fmssBranches.value = []
+    fmssIdentity.username = null
+    fmssIdentity.displayName = null
+    return false
+  }
+}
+
+async function initializeWorkspace() {
+  await loadCompanies()
+  const storedId = Number(window.localStorage.getItem(COMPANY_STORAGE_KEY))
+  if (companies.value.some((item) => item.id === storedId)) await selectCompany(storedId, false)
+  initializingCompanies.value = false
+}
+
+async function handleFmssConnected() {
+  fmssChecking.value = true
+  if (await validateFmssSession()) await initializeWorkspace()
+  fmssChecking.value = false
+}
+
+function handleFmssExpired() {
+  fmssReady.value = false
+  fmssBranches.value = []
+  fmssIdentity.username = null
+  fmssIdentity.displayName = null
+  session.value = null
+  const bridge = (window as any).pywebview?.api
+  if (bridge?.clear_fmss_login) void bridge.clear_fmss_login()
+}
+
+async function switchFmssAccount() {
+  try {
+    await fmssApi.logout()
+  } catch {
+    // The local session is cleared below even when the API request fails.
+  }
+  const bridge = (window as any).pywebview?.api
+  if (bridge?.clear_fmss_login) await bridge.clear_fmss_login()
+  fmssReady.value = false
+  fmssBranches.value = []
+  fmssIdentity.username = null
+  fmssIdentity.displayName = null
+  session.value = null
+  if (bridge?.open_fmss_login) await bridge.open_fmss_login()
+}
+
+async function loadFmssBranches() {
+  if (fmssBranches.value.length) return
+  try {
+    const { data } = await fmssApi.branches()
+    fmssBranches.value = normalizeFmssBranches(data)
+  } catch {
+    fmssBranches.value = []
+  }
+}
+
+function selectFmssBranch(code: string | null) {
+  companyDraft.fmss_branch_name = fmssBranches.value.find((item) => item.code === code)?.name || null
+}
+
 function openCompanyEditor(company?: Company) {
   resetCompanyDraft()
+  void loadFmssBranches()
   if (company) {
     editingCompanyId.value = company.id
-    Object.assign(companyDraft, { name: company.name, code: company.code, operator_name: company.operator_name, notes: company.notes })
+    Object.assign(companyDraft, { name: company.name, code: company.code, operator_name: company.operator_name, notes: company.notes, fmss_branch_code: company.fmss_branch_code, fmss_branch_name: company.fmss_branch_name })
   }
   companyEditorVisible.value = true
 }

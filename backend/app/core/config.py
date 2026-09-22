@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import Field, model_validator
@@ -10,7 +11,7 @@ from app.core.version import PRODUCT_NAME
 class Settings(BaseSettings):
     app_name: str = PRODUCT_NAME
     api_prefix: str = "/api"
-    runtime_mode: str = "development"
+    runtime_mode: str = Field(default_factory=lambda: os.getenv("APP_RUNTIME_MODE", "development"))
     storage_root: Path = Field(default_factory=default_storage_root)
     database_url: str = ""
     backup_root: Path = Field(default_factory=default_backup_root)
@@ -20,6 +21,17 @@ class Settings(BaseSettings):
     finance_ai_api_key: str = ""
     finance_ai_model: str = ""
     finance_ai_timeout_seconds: float = 60.0
+    # FMSS endpoints are deliberately explicit.  The test host happens to use a
+    # prod-api gateway; do not derive this value from the hostname.
+    fmss_login_url: str = "https://fmssdev.gf.com.cn/fmss/login"
+    fmss_api_base_url: str = "https://fmssdev.gf.com.cn/fmss/prod-api"
+    fmss_environment: str = "dev"
+    # Leave empty until FMSS confirms the real current-user endpoint.  The
+    # identity resolver deliberately makes no speculative user-info calls.
+    fmss_current_user_path: str = ""
+    fmss_write_enabled: bool = False
+    fmss_post_write_enabled: bool = False
+    fmss_production_write_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

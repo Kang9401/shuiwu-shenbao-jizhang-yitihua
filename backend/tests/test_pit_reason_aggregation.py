@@ -11,7 +11,7 @@ from app.models.pit_reconciliation import (
     PitReconciliationWorkpaper,
     PitTaxAmountCheck,
 )
-from app.services.pit_reconciliation.reason_aggregation import AUTO_PREFIX, MAX_REASON_LENGTH, _render, aggregate_reasons
+from app.services.pit_reconciliation.reason_aggregation import AUTO_PREFIX, MAX_REASON_LENGTH, _render, aggregate_reasons, generated_reason_count, parse_generated_reason
 
 
 def _db():
@@ -88,3 +88,31 @@ def test_aggregation_render_never_silently_truncates():
     assert rendered is not None
     assert len(rendered) <= MAX_REASON_LENGTH
     assert "另有" in rendered
+
+
+def test_refresh_generated_rebuilds_without_nested_prefix_and_keeps_manual_values():
+    db = _db(); workpaper = _workpaper(db)
+    check = db.query(PitTaxAmountCheck).filter_by(org_code="10001", subject_code="21510006").one()
+    check.business_declared_manual_reason = f"{AUTO_PREFIX}\n1、旧自动原因"
+    summary = db.query(PitReconciliationOrgSummary).filter_by(org_code="10001").one()
+    summary.difference_2_manual_reason = "人工保留"
+    db.commit()
+
+    result = aggregate_reasons(db, workpaper, "refresh_generated")
+
+    assert result.changed is True
+    assert check.business_declared_manual_reason.startswith(AUTO_PREFIX)
+    assert "工资资料待补" in check.business_declared_manual_reason
+    assert summary.difference_2_manual_reason == "人工保留"
+    assert summary.difference_1_manual_reason.count(AUTO_PREFIX) == 1
+
+
+def test_generated_reason_parser_counts_real_items_not_group_headers():
+    value = f"{AUTO_PREFIX}\n一、工资薪金\n1）张三：原因A\n2）李四：原因B\n二、债券利息\n1）王五：原因C"
+    assert parse_generated_reason(value) == ["张三：原因A", "李四：原因B", "王五：原因C"]
+    assert generated_reason_count(value) == 3
+
+
+def test_generated_reason_parser_discards_legacy_nested_automatic_headers():
+    value = f"{AUTO_PREFIX}\n一、工资薪金：{AUTO_PREFIX}\n1、张三：原因A"
+    assert parse_generated_reason(value) == ["张三：原因A"]

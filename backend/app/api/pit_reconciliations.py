@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+import pandas as pd
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from typing import Literal
 from urllib.parse import quote
 from sqlalchemy.orm import Session
@@ -16,8 +18,10 @@ from app.schemas.pit_reconciliation import PitManualUpdate, PitOccurrenceCheckUp
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService
-from app.services.pit_reconciliation.exporter import sheet_names_for_stage, build_pit_workpaper_sheets, build_pit_workpaper_xlsx
+from app.services.pit_reconciliation.exporter import build_occurrence_descriptions_xlsx, sheet_names_for_stage, build_pit_workpaper_sheets, build_pit_workpaper_xlsx
 from app.services.pit_reconciliation.reason_aggregation import aggregate_reasons
+from app.integrations.fmss.errors import FmssError
+from app.services.pit_online_service import PitOnlineService
 
 router=APIRouter(prefix="/pit-reconciliations",tags=["pit-reconciliations"],dependencies=[Depends(require_company)])
 
@@ -31,6 +35,17 @@ def _workpaper(db: Session, period_id: int, stage: Literal["pre_payment", "post_
 
 def _payload(row):
     return {column.name:getattr(row,column.name) for column in row.__table__.columns}
+
+
+def _ensure_online_editable(db: Session, workpaper: PitReconciliationWorkpaper) -> None:
+    """FMSS is authoritative once a local workpaper is linked to a declaration."""
+    if not workpaper.platform_submission_id:
+        return
+    try:
+        PitOnlineService(db).enforce_editable(workpaper)
+    except FmssError as exc:
+        # A failed state lookup must not unlock a workpaper that is already online.
+        raise HTTPException(status_code=409, detail=exc.user_message if exc.user_message else "该底稿存在FMSS线上关联，连接FMSS后才能继续修改。") from exc
 
 
 def _stage_sources(bundle, stage: str):
@@ -54,6 +69,7 @@ def readiness(period_id:int=Query(...),stage:Literal["pre_payment","post_payment
 @router.post("/recalculate")
 def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"] = Query(...),db:Session=Depends(get_db)):
     require_period(db,period_id); repository=PitReconciliationRepository(db,current_company_id(),period_id,stage); workpaper=repository.get_or_create_workpaper()
+    _ensure_online_editable(db, workpaper)
     if workpaper.workflow_status in {"submitted", "reviewed"}: raise HTTPException(status_code=409,detail="当前底稿已锁定，不能重新计算")
     previous_calculation_status = workpaper.calculation_status
     previous_workflow_status = workpaper.workflow_status
@@ -99,6 +115,7 @@ def aggregate_reason_fields(
     if stage != "pre_payment":
         raise HTTPException(status_code=400, detail="缴款后没有下级人工原因结构，不能汇总")
     workpaper = _workpaper(db, period_id, stage)
+    _ensure_online_editable(db, workpaper)
     if workpaper.workflow_status in {"submitted", "reviewed"}:
         raise HTTPException(status_code=409, detail="当前底稿已锁定，不能汇总原因")
     result = aggregate_reasons(db, workpaper, payload.mode)
@@ -114,7 +131,7 @@ def aggregate_reason_fields(
         "updated_counts": result.updated_counts,
         "skipped_manual_fields": result.skipped_manual_fields,
         "message": (
-            f"已补齐{sum(result.updated_counts.values())}项空白汇总原因，保留{result.skipped_manual_fields}项人工填写内容"
+            f"已更新{sum(result.updated_counts.values())}项自动汇总，保留{result.skipped_manual_fields}项人工填写"
             if result.changed else "没有需要更新的汇总原因"
         ),
     }
@@ -197,8 +214,73 @@ def export_workpaper(period_id: int = Query(...), stage: Literal["pre_payment", 
     filename = f"个税核对底稿_{period_id}_{'缴款前' if stage == 'pre_payment' else '缴款后'}.xlsx"
     return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
 
+
+def _occurrence_import_key(value: object) -> str:
+    text = "" if value is None or pd.isna(value) else str(value).strip()
+    return text[:-2] if text.endswith(".0") and text[:-2].isdigit() else text
+
+
+@router.get("/occurrence-descriptions/export")
+def export_occurrence_descriptions(period_id: int = Query(...), stage: Literal["pre_payment", "post_payment"] = Query(...), db: Session = Depends(get_db)):
+    if stage != "pre_payment":
+        raise HTTPException(status_code=400, detail="发生额应申报收入说明仅适用于缴款前底稿")
+    workpaper = _workpaper(db, period_id, stage)
+    content = build_occurrence_descriptions_xlsx(db, current_company_id(), period_id, workpaper)
+    filename = f"其他个税发生额核对说明_{period_id}.xlsx"
+    return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+
+
+@router.post("/occurrence-descriptions/import")
+async def import_occurrence_descriptions(
+    period_id: int = Query(...),
+    stage: Literal["pre_payment", "post_payment"] = Query(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if stage != "pre_payment":
+        raise HTTPException(status_code=400, detail="发生额应申报收入说明仅适用于缴款前底稿")
+    workpaper = _workpaper(db, period_id, stage)
+    _ensure_online_editable(db, workpaper)
+    if workpaper.workflow_status in {"submitted", "reviewed"}:
+        raise HTTPException(status_code=409, detail="当前底稿已锁定，不能导入说明")
+    try:
+        frame = pd.read_excel(io.BytesIO(await file.read()), dtype=object)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"说明导入文件无法读取：{exc}") from exc
+    required_columns = {"机构代码", "会计科目", "发生额应申报收入说明"}
+    missing = required_columns - set(frame.columns)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"说明导入文件缺少列：{'、'.join(sorted(missing))}")
+    rows = db.query(PitOccurrenceCheck).filter_by(workpaper_id=workpaper.id, company_id=current_company_id()).all()
+    by_key = {(row.org_code, row.subject_code): row for row in rows}
+    updated = 0
+    unmatched = 0
+    for record in frame.to_dict(orient="records"):
+        description = _occurrence_import_key(record.get("发生额应申报收入说明"))
+        if not description:
+            continue
+        row = by_key.get((_occurrence_import_key(record.get("机构代码")), _occurrence_import_key(record.get("会计科目"))))
+        if row is None:
+            unmatched += 1
+            continue
+        income_type = _occurrence_import_key(record.get("对应税种"))
+        if income_type and income_type != row.income_type:
+            unmatched += 1
+            continue
+        if row.expected_income_description != description:
+            row.expected_income_description = description
+            updated += 1
+    if updated:
+        if workpaper.workflow_status == "returned":
+            workpaper.workflow_status = "pending_submission"
+        workpaper.draft_revision += 1
+        db.commit()
+        db.refresh(workpaper)
+    return {"updated_count": updated, "unmatched_count": unmatched, "draft_revision": workpaper.draft_revision, "workflow_status": workpaper.workflow_status}
+
 def _patch(model,record_id:int,period_id:int,stage,values,db:Session,manual_field:str|None=None):
     workpaper = _workpaper(db, period_id,stage)
+    _ensure_online_editable(db, workpaper)
     if workpaper.workflow_status in {"submitted", "reviewed"}:
         raise HTTPException(status_code=409, detail="当前底稿已锁定，不能修改")
     row=db.query(model).filter_by(id=record_id,company_id=current_company_id(),period_id=period_id,workpaper_id=workpaper.id).first()

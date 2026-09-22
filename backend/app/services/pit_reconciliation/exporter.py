@@ -134,10 +134,9 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
     bank_matches = payload(PitBankTaxMatch)
 
     summary_columns = [
-        "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差额1", "差异原因1",
-        "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差额2", "差异原因2",
-        "当期工资薪金累计应纳税所得额差异3", "差异原因3", "完税证明税额", "申报表与完税证明税额差额4", "差异原因4",
-        "银行流水个税税额", "完税证明与银行流水税额差额5", "差异原因5", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
+        "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差异1", "差异原因1",
+        "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
+        "当期工资薪金累计应纳税所得额差异3", "差异原因3", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
     ]
     period = db.query(Period).filter_by(id=period_id, company_id=company_id).first()
     tax_period = f"{period.year}.{period.month:02d}.01-{period.year}.{period.month:02d}.{pd.Timestamp(period.year, period.month, 1).days_in_month:02d}" if period else str(period_id)
@@ -145,10 +144,9 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
     for row in summaries:
         summary_rows.append({
             "机构代码": row["org_code"], "营业部全称": row.get("org_full_name") or row.get("org_name", ""), "税款所属期": tax_period,
-            "申报表税额": row.get("declared_tax_amount"), "科目余额表期末余额税额": row.get("balance_tax_amount"), "申报表与余额表税额差额1": row.get("difference_1"), "差异原因1": row.get("difference_1_manual_reason"),
+            "申报表税额": row.get("declared_tax_amount"), "科目余额表期末余额税额": row.get("balance_tax_amount"), "申报表与余额表税额差异1": row.get("difference_1"), "差异原因1": row.get("difference_1_manual_reason"),
             "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）": row.get("scoped_declared_tax_amount"), "工资表、支撑平台税额": row.get("payroll_business_tax_amount"), "申报表与工资表、支撑平台税额差额2": row.get("difference_2"), "差异原因2": row.get("difference_2_manual_reason"),
-            "当期工资薪金累计应纳税所得额差异3": row.get("taxable_income_difference"), "差异原因3": row.get("difference_3_manual_reason"), "完税证明税额": row.get("certificate_tax_amount"), "申报表与完税证明税额差额4": row.get("difference_4"), "差异原因4": row.get("difference_4_manual_reason"),
-            "银行流水个税税额": row.get("bank_tax_amount"), "完税证明与银行流水税额差额5": row.get("difference_5"), "差异原因5": row.get("difference_5_manual_reason"), "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6": row.get("broker_occurrence_difference"), "差异原因6": row.get("difference_6_manual_reason"), "部分税种发生额差异7": row.get("other_income_difference"), "差异原因7": row.get("difference_7_manual_reason"),
+            "当期工资薪金累计应纳税所得额差异3": row.get("taxable_income_difference"), "差异原因3": row.get("difference_3_manual_reason"), "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6": row.get("broker_occurrence_difference"), "差异原因6": row.get("difference_6_manual_reason"), "部分税种发生额差异7": row.get("other_income_difference"), "差异原因7": row.get("difference_7_manual_reason"),
         })
 
     def detail_rows(detail_type: str, columns: list[str]) -> list[dict]:
@@ -200,12 +198,10 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
         "个税完税凭证": _frame(_certificate_display_rows(certificates), CERTIFICATE_COLUMNS), "综合所得个税申报": _frame(_declaration_display_rows(declaration_rows, COMPREHENSIVE_DECLARATION_COLUMNS), COMPREHENSIVE_DECLARATION_COLUMNS), "分类所得个税申报": _frame(_declaration_display_rows(classification_rows), DECLARATION_COLUMNS), "限售股所得申报": _frame(restricted_declaration_rows, RESTRICTED_DECLARATION_COLUMNS),
         "银行流水": _frame(banks, BANK_COLUMNS), "银行流水个税税额明细": _frame([{"机构代码": row.get("org_code"), "营业部全称": row.get("org_full_name"), "本方账号": row.get("bank_account"), "交易时间": row.get("transaction_time"), "交易摘要": row.get("transaction_summary"), "借方金额": row.get("debit_amount")} for row in bank_matches], ["机构代码", "营业部全称", "本方账号", "交易时间", "交易摘要", "借方金额"]),
     })
-    summary_renames = {'营业部全称': '营业部简称', '申报表税额': '申报表', '科目余额表期末余额税额': '科目余额表期末余额', '申报表与余额表税额差额1': '申报表与余额表差异金额1', '申报表与工资表、支撑平台税额差额2': '申报表与工资表、支撑平台差异金额2', '当期工资薪金累计应纳税所得额差异3': '当期工资薪金累计应纳税所得额差异金额3', '完税证明税额': '完税证明', '申报表与完税证明税额差额4': '申报表与完税证明差异金额4', '银行流水个税税额': '银行流水个税', '完税证明与银行流水税额差额5': '完税证明与银行流水差异金额5', '科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6': '经纪人支出当期发生额与工资表差异金额6', '部分税种发生额差异7': '部分税种发生额差异金额7'}
+    summary_renames = {}
     detail_renames = {'本期差异8': '本期差异金额8（申报表-余额表贷方）', '累计差异9': '累计差异金额9（申报表-余额表期末余额）', '差异10': '差异金额10（申报表-工资表、支撑平台税额）', '差异11': '差异金额11（工资表应发-余额表发生额）', '差异12': '差异金额12（申报表申报收入-应申报收入）', '差异': '差异金额', '（工资表-申报表）累计应纳税所得额差异': '累计应纳税所得额差异（工资表-申报表）', '（工资表-申报表）累计专项扣除差异': '累计专项扣除差异（工资表-申报表）', '（工资表-申报表）累计专项附加扣除差异（含个人养老金）': '累计专项附加扣除差异（含个人养老金）（工资表-申报表）', '（工资表-申报表）其它差异': '其它差异（工资表-申报表）', '（工资表-申报表）应纳税额差异': '应纳税额差异（工资表-申报表）'}
     for name, columns in HEADERS.items():
         sheets[name] = sheets[name].rename(columns=summary_renames if name == "汇总税额核对" else detail_renames).reindex(columns=columns)
-    if not sheets["汇总税额核对"].empty:
-        sheets["汇总税额核对"]["营业部简称"] = [row.get("org_name", "") for row in summaries]
     if not sheets["附A1 工资薪金等个税差异"].empty:
         sheets["附A1 工资薪金等个税差异"]["期间"] = f"{period.year}年{period.month:02d}月" if period else str(period_id)
     sheets["科目余额表"] = sheets.pop("科目余额")
@@ -236,4 +232,13 @@ def build_pit_workpaper_xlsx(db, company_id: int, period_id: int, workpaper) -> 
                 frame.to_excel(writer, sheet_name=sheet_name[:31], index=False, header=list(POST_PAYMENT_CHECK_HEADERS))
             else:
                 frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    return output.getvalue()
+
+
+def build_occurrence_descriptions_xlsx(db, company_id: int, period_id: int, workpaper) -> bytes:
+    """Export the full occurrence check sheet while allowing only its description field to be reimported."""
+    frame = build_pit_workpaper_sheets(db, company_id, period_id, workpaper)["其他个税发生额核对"]
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="其他个税发生额核对", index=False)
     return output.getvalue()

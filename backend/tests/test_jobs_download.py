@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import jobs as jobs_api
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.db.session import Base
 from app.models.core import Artifact, Job
 from app.schemas.core import JobSaveAllRequest
@@ -92,3 +92,9 @@ def test_save_all_is_rejected_outside_desktop_mode(tmp_path: Path, monkeypatch):
         assert error.status_code == 403
     finally:
         db.close()
+
+
+def test_settings_uses_desktop_launcher_runtime_mode(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MODE", raising=False)
+    monkeypatch.setenv("APP_RUNTIME_MODE", "desktop")
+    assert Settings().runtime_mode == "desktop"
