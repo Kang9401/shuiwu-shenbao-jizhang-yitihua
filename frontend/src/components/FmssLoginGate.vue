@@ -18,6 +18,7 @@ const emit = defineEmits<{ connected: [] }>()
 const opening = ref(false)
 const status = ref('当前登录状态：未登录')
 let pollTimer: number | undefined
+let pollStartedAt = 0
 
 async function openLogin() {
   opening.value = true
@@ -30,6 +31,7 @@ async function openLogin() {
     }
     await bridge.open_fmss_login()
     status.value = '当前登录状态：等待 FMSS 登录'
+    pollStartedAt = Date.now()
   } catch {
     status.value = '当前登录状态：登录窗口打开失败'
   } finally {
@@ -38,6 +40,11 @@ async function openLogin() {
 }
 
 async function checkSession() {
+  if (pollStartedAt && Date.now() - pollStartedAt > 180000) {
+    stopPolling()
+    status.value = '当前登录状态：登录超时，请重新点击登录 FMSS'
+    return
+  }
   try {
     const { data } = await fmssApi.session(true)
     if (!data.connected) return

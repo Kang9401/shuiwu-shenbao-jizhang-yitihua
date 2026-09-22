@@ -11,7 +11,6 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from urllib.parse import urlparse
 
 
 # The packaged launcher is the authority for the backend runtime.  Do not let a
@@ -38,11 +37,10 @@ class DesktopWindowManager:
     def open_fmss_login(self) -> dict:
         global _fmss_window
         import webview
-        from app.integrations.fmss.browser_auth import FmssBrowserAuthBridge, capture_script
-
-        def on_connected() -> None:
-            if _fmss_window is not None:
-                _fmss_window.hide()
+        from app.integrations.fmss.browser_auth import extract_admin_token, is_fmss_business_page
+        from app.integrations.fmss.client import FmssClient
+        from app.integrations.fmss.errors import FmssError
+        from app.integrations.fmss.session import fmss_session
 
         if _fmss_window is None:
             _fmss_window = webview.create_window(
@@ -51,9 +49,32 @@ class DesktopWindowManager:
                 width=1100,
                 height=800,
                 text_select=True,
-                js_api=FmssBrowserAuthBridge(on_connected=on_connected),
             )
-            _fmss_window.events.loaded += lambda: _fmss_window.evaluate_js(capture_script(urlparse(settings.fmss_api_base_url).path.rstrip("/") + "/"))
+            def on_loaded() -> None:
+                global _fmss_window
+                window = _fmss_window
+                if window is None:
+                    return
+                try:
+                    page_url = window.get_current_url() or ""
+                    if not is_fmss_business_page(page_url):
+                        return
+                    token = extract_admin_token(window.get_cookies())
+                    if not token:
+                        return
+                    fmss_session.connect(token)
+                    FmssClient(fmss_session).sheets("PRE")
+                except FmssError:
+                    fmss_session.clear()
+                    return
+                except Exception:
+                    fmss_session.clear()
+                    return
+                window.hide()
+                window.destroy()
+                _fmss_window = None
+
+            _fmss_window.events.loaded += on_loaded
         else:
             _fmss_window.show()
         return {"opened": True}
@@ -65,14 +86,12 @@ class DesktopWindowManager:
         return {"closed": True}
 
     def clear_fmss_login(self) -> dict:
-        """Clear only the dedicated FMSS WebView session before account switch."""
+        """Close the dedicated login window without touching system Chrome cookies."""
         global _fmss_window
         if _fmss_window is not None:
-            try:
-                _fmss_window.clear_cookies()
-            finally:
-                _fmss_window.destroy()
-                _fmss_window = None
+            _fmss_window.hide()
+            _fmss_window.destroy()
+            _fmss_window = None
         return {"cleared": True}
 
     def open_rpa_monitor(self) -> dict:

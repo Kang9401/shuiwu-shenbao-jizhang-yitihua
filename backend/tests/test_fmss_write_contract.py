@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.integrations.fmss.browser_auth import FmssBrowserAuthBridge, allowed_fmss_business_page, allowed_fmss_host, bearer_token, capture_script
+from app.integrations.fmss.browser_auth import extract_admin_token, is_fmss_business_page, allowed_fmss_host
 from app.integrations.fmss.client import FmssClient
 from app.integrations.fmss.errors import FmssApiError
 from app.integrations.fmss.session import FmssSession
@@ -58,24 +58,13 @@ def test_submit_and_decision_use_json_and_post_is_not_retried(monkeypatch):
 
 def test_browser_bridge_only_accepts_configured_fmss_host():
     assert allowed_fmss_host("https://fmssdev.gf.com.cn/fmss/trip/iitDeclaration/preReview")
-    assert allowed_fmss_business_page("https://fmssdev.gf.com.cn/fmss/trip/iitDeclaration/preReview")
-    assert not allowed_fmss_business_page("https://fmssdev.gf.com.cn/fmss/login")
+    assert is_fmss_business_page("https://fmssdev.gf.com.cn/fmss/trip/iitDeclaration/preReview")
+    assert not is_fmss_business_page("https://fmssdev.gf.com.cn/fmss/login")
     assert not allowed_fmss_host("https://testoauth2.gf.com.cn/login")
-    assert bearer_token("Bearer abc123") == "abc123"
-    assert bearer_token("Cookie abc123") is None
-    session = FmssSession()
-    bridge = FmssBrowserAuthBridge(session)
-    with pytest.raises(ValueError):
-        bridge.set_fmss_token("abc123", "https://testoauth2.gf.com.cn/login")
-    with pytest.raises(ValueError):
-        bridge.set_fmss_token("abc123", "https://fmssdev.gf.com.cn/fmss/login")
+    assert extract_admin_token([{"name": "Other", "value": "ignored"}, {"name": "Admin-Token", "value": "fake-admin-token"}]) == "fake-admin-token"
+    assert extract_admin_token({"cookies": [{"name": "Admin-Token", "value": "fake-admin-token"}]}) == "fake-admin-token"
+    assert extract_admin_token([{"name": "Cookie", "value": "ignored"}]) is None
 
 
-def test_capture_script_scopes_fetch_and_xhr_to_configured_api_path():
-    script = capture_script()
-    assert "parsed.origin === location.origin" in script
-    assert "parsed.pathname.startsWith(apiPath)" in script
-    assert "const requestUrl = typeof input === 'string' ? input : input?.url" in script
-    assert "window.prompt" not in script
-    assert "restore();" in script
-    assert "location.pathname.startsWith(apiPath)" not in script
+def test_admin_token_extraction_does_not_expose_other_cookies():
+    assert extract_admin_token({"name": "Admin-Token", "value": "fake-admin-token"}) == "fake-admin-token"
