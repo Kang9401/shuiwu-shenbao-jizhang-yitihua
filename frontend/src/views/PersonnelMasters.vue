@@ -6,7 +6,7 @@
       <div class="card-header">
         <div>
           <strong>人员主数据初始化/维护</strong>
-          <p>按月份维护员工和经纪人人员主数据，支持按月、机构、分公司导入和导出。</p>
+          <p>按月份维护员工、实习生和经纪人人员主数据，支持按月、机构、分公司导入和导出。</p>
         </div>
         <span class="tag tag-info">{{ personTypeLabel }}</span>
       </div>
@@ -17,7 +17,9 @@
             <span>人员类型</span>
             <select v-model="personType" class="period-native-select">
               <option value="employee">员工</option>
+              <option value="intern">实习生</option>
               <option value="broker">经纪人</option>
+              <option value="part_time">劳务报酬人员</option>
             </select>
           </label>
           <label>
@@ -50,7 +52,7 @@
 
         <div class="action-bar">
           <div class="action-hint">
-            <span>工资薪金和年终奖使用员工主数据；经纪人申报使用经纪人主数据。</span>
+            <span>{{ personType === 'employee' ? '工资薪金和年终奖使用员工主数据。' : personType === 'intern' ? '实习生申报使用实习生人员主数据。' : personType === 'broker' ? '经纪人申报使用经纪人主数据。' : '劳务报酬申报使用劳务报酬人员主数据。' }}</span>
           </div>
           <button class="btn btn-primary btn-lg" :disabled="!canImport || loading" @click="importFile">
             <span v-if="loading" class="spinner"></span>
@@ -72,7 +74,7 @@
           <a v-for="item in artifacts" :key="item.id" class="download-item" :href="item.download_url" target="_blank">
             <el-icon><Download /></el-icon>
             <span class="download-text">
-              <strong>{{ item.file_name }}</strong>
+              <strong>{{ displayFileName(item) }}</strong>
               <small>{{ scopeLabel(item.scope_type, item.scope_code) }} · {{ item.row_count }} 行</small>
             </span>
           </a>
@@ -124,7 +126,9 @@ const errorText = ref('')
 
 const personTypeLabel = computed(() => ({
   employee: '员工',
+  intern: '实习生',
   broker: '经纪人',
+  part_time: '劳务报酬人员',
 }[personType.value]))
 
 const canImport = computed(() =>
@@ -144,6 +148,12 @@ function scopeLabel(type: PersonnelScopeType, code: string) {
   if (type === 'month') return '月度全量'
   if (type === 'org') return `机构 ${code}`
   return `分公司 ${code}`
+}
+
+function displayFileName(item: PersonnelMasterArtifact) {
+  if (item.person_type !== 'employee' || item.scope_type !== 'month') return item.file_name
+  const match = item.file_name.match(/^(\d{4})(\d{2})_employee_month_all\.xlsx$/i)
+  return match ? `人员信息表(${match[1]}年${match[2]}月).xlsx` : item.file_name
 }
 
 function formatError(error: any) {

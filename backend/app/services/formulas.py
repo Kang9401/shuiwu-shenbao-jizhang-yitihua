@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -77,6 +78,7 @@ GENERAL_TAX_TEMPLATE_COLUMNS = [
     "公务交通费用",
     "通讯费用",
     "律师办案费用",
+    "住房公积金调整",
     "西藏附加减除费用",
     "其他",
     "准予扣除的捐赠额",
@@ -91,6 +93,52 @@ def first_existing(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]
         if column in df.columns:
             return column
     return None
+
+
+def normalize_column_label(value: Any) -> str:
+    text = _clean_cell(value).replace("（", "(").replace("）", ")")
+    text = text.replace("\n", "").replace("\r", "")
+    return re.sub(r"\s+", "", text)
+
+
+def find_normalized_column(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]:
+    lookup = {normalize_column_label(column): column for column in df.columns}
+    for candidate in candidates:
+        found = lookup.get(normalize_column_label(candidate))
+        if found is not None:
+            return found
+    return None
+
+
+BROKER_COLUMN_ALIASES = {
+    "employee_id": ("员工编号", "人员编号", "员工编码", "工号"),
+    "direct_income": ("经纪人本期收入", "本期收入", "劳务报酬收入", "佣金收入"),
+    "gross_income": ("应发工资(补足前)", "应发合计(补足前)", "应发工资", "应发合计"),
+    "vat": ("增值税", "增值税额", "应扣增值税"),
+    "adjust_income": ("调增应纳税所得额", "调增应纳税所得额 SUM", "税前调整"),
+    "additional_tax": ("附加税", "附加税额"),
+    "personal_tax": ("个人所得税(经纪人)", "经纪人个人所得税", "个人所得税"),
+}
+
+
+def broker_income_series(broker: pd.DataFrame) -> tuple[pd.Series, dict[str, str]]:
+    direct_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["direct_income"])
+    if direct_col:
+        return number_series(broker, [direct_col]), {"mode": "direct", "income_column": direct_col, "vat_column": ""}
+    gross_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["gross_income"])
+    if not gross_col:
+        raise ValueError("经纪人工资表未找到本期收入或应发工资列，禁止按 0 继续生成")
+    vat_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["vat"])
+    adjust_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["adjust_income"])
+    gross = number_series(broker, [gross_col])
+    vat = number_series(broker, [vat_col]) if vat_col else pd.Series(0, index=broker.index, dtype="float64")
+    adjust = number_series(broker, [adjust_col]) if adjust_col else pd.Series(0, index=broker.index, dtype="float64")
+    return gross + adjust - vat, {
+        "mode": "gross_plus_adjust_minus_vat",
+        "income_column": gross_col,
+        "adjust_column": adjust_col or "",
+        "vat_column": vat_col or "",
+    }
 
 
 def number_series(df: pd.DataFrame, candidates: Iterable[str], default: float = 0) -> pd.Series:
@@ -279,7 +327,7 @@ def normalize_general_salary_frame(role: str, df: pd.DataFrame) -> pd.DataFrame:
     for target, candidates in deduction_cols.items():
         source[target] = number_series(source, candidates)
 
-    for column in ["税延养老保险", "公务交通费用", "通讯费用", "律师办案费用", "西藏附加减除费用", "其他", "准予扣除的捐赠额", "减免税额", "协定减免"]:
+    for column in ["税延养老保险", "公务交通费用", "通讯费用", "律师办案费用", "住房公积金调整", "西藏附加减除费用", "其他", "准予扣除的捐赠额", "减免税额", "协定减免"]:
         source[column] = number_series(source, [column])
     source["备注"] = text_series(source, ["备注"])
     source["工号"] = source["员工编号"]
@@ -299,6 +347,9 @@ def merge_staff_for_general_salary(salary: pd.DataFrame, staff_df: pd.DataFrame)
     staff["*姓名"] = text_series(staff, ["*姓名", "姓名", "员工姓名"])
     staff["*证件类型"] = text_series(staff, ["*证件类型", "证件类型"])
     staff["*证件号码"] = text_series(staff, ["*证件号码", "证件号码"])
+    staff["任职受雇从业日期"] = text_series(
+        staff, ["任职受雇从业日期", "入职日期", "入职时间"]
+    )
     staff["机构代码_人员信息表"] = text_series(staff, ["机构代码", "分支机构代码", "单位编号"]).map(normalize_org_code)
     active_col = first_existing(staff, ["人员状态"])
     if active_col:
@@ -336,12 +387,18 @@ def annual_bonus_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str,
         if role not in frames_by_role:
             continue
         frame = frames_by_role[role].copy()
-        rename = {
+        for source, target in {
             "员工姓名": "*姓名",
             "年终奖汇总": "年终奖发放",
             "年终奖计税": "本次扣税",
-        }
-        frame = frame.rename(columns=rename)
+        }.items():
+            if source not in frame.columns:
+                continue
+            if target in frame.columns:
+                frame[target] = frame[target].combine_first(frame[source])
+                frame = frame.drop(columns=[source])
+            else:
+                frame = frame.rename(columns={source: target})
         if "员工编号" in frame.columns:
             frame["员工编号"] = frame["员工编号"].map(normalize_emp_id)
         bonus_frames.append(frame)
@@ -375,13 +432,14 @@ def annual_bonus_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str,
 
 BROKER_DECLARATION_COLUMNS = [
     "工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入", "本期免税收入",
-    "累计个人养老金", "商业健康保险", "税延养老保险", "其他", "允许扣除的税费", "减免税额", "备注",
+    "累计个人养老金", "商业健康保险", "税延养老保险", "其他", "允许扣除的税费", "减免税额", "协定减免", "备注",
 ]
 
-INTERN_DECLARATION_COLUMNS = ["*姓名", "*证件类型", "证件号码", "*所得项目", "本期收入"]
+INTERN_DECLARATION_COLUMNS = list(BROKER_DECLARATION_COLUMNS)
 INTERN_ALLOWED_CERT_TYPES = {
     "居民身份证", "中国护照", "港澳居民来往内地通行证", "台湾居民来往大陆通行证", "外国护照",
 }
+INTERN_CERT_COUNTRY_DEFAULTS = {"台湾居民来往大陆通行证": "中国台湾"}
 
 
 def _clean_cell(value: Any) -> str:
@@ -391,19 +449,42 @@ def _clean_cell(value: Any) -> str:
     return "" if text.lower() in {"nan", "none", "nat"} else text
 
 
+def _intern_country_default(cert_type: str, id_number: str) -> str:
+    if cert_type == "港澳居民来往内地通行证":
+        return "中国澳门" if id_number.upper().startswith("M") else "中国香港"
+    return INTERN_CERT_COUNTRY_DEFAULTS.get(cert_type, "")
+
+
 def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     broker = frames_by_role.get("broker_salary_sheet", pd.DataFrame()).copy()
+    # The broker workflow has one income upload. Accept legacy role names and
+    # direct callers that provide that frame under a different key as well.
+    if broker.empty:
+        for key, frame in frames_by_role.items():
+            if key in {"broker_staff_info", "staff_info"} or not isinstance(frame, pd.DataFrame) or frame.empty:
+                continue
+            broker = frame.copy()
+            break
     staff = frames_by_role.get("broker_staff_info", pd.DataFrame()).copy()
     issues: List[Dict[str, Any]] = []
     if broker.empty:
         return {
             "detail": broker,
             "summary": pd.DataFrame(),
-            "issues": [{"issue_type": "缺失输入", "message": "缺少经纪人综合业绩指标表"}],
+            "issues": [{"issue_type": "缺失输入", "message": "缺少经纪人工资单"}],
             "block_declarations": True,
         }
 
-    broker["员工编号"] = text_series(broker, ["员工编号"]).map(normalize_emp_id)
+    employee_id_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["employee_id"])
+    if not employee_id_col:
+        return {
+            "detail": pd.DataFrame(),
+            "summary": pd.DataFrame(),
+            "issues": [{"issue_type": "经纪人工资列缺失", "message": "经纪人工资表未找到员工编号/人员编号/员工编码/工号列"}],
+            "block_declarations": True,
+        }
+    broker["员工编号"] = broker[employee_id_col].fillna("").astype(str).str.strip().map(normalize_emp_id)
+    broker["姓名_业绩表"] = text_series(broker, ["*姓名", "姓名", "员工姓名", "经纪人姓名"])
     # 平台导出文件首行是汇总，不属于经纪人申报明细。
     broker = broker[broker["员工编号"].map(_clean_cell) != ""].copy()
     duplicate_payroll_ids = broker.loc[broker["员工编号"].duplicated(keep=False), "员工编号"].unique()
@@ -411,8 +492,19 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         {"issue_type": "经纪人业绩重复", "message": f"同一所属期间员工编号重复：{employee_id}"}
         for employee_id in duplicate_payroll_ids if _clean_cell(employee_id)
     )
-    broker["经纪人本期收入"] = number_series(broker, ["应发工资(补足前)"]) - number_series(broker, ["增值税"])
-    broker["个人所得税(经纪人)"] = number_series(broker, ["个人所得税(经纪人)"])
+    try:
+        broker["经纪人本期收入"], income_rule = broker_income_series(broker)
+    except ValueError as exc:
+        return {
+            "detail": broker,
+            "summary": pd.DataFrame(),
+            "issues": [{"issue_type": "经纪人工资列缺失", "message": str(exc)}],
+            "block_declarations": True,
+        }
+    tax_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["personal_tax"])
+    broker["个人所得税(经纪人)"] = number_series(broker, [tax_col]) if tax_col else 0
+    additional_tax_col = find_normalized_column(broker, BROKER_COLUMN_ALIASES["additional_tax"])
+    broker["允许扣除的税费"] = number_series(broker, [additional_tax_col]) if additional_tax_col else 0
     zero_count = 0
     negative_count = 0
     for idx, row in broker.iterrows():
@@ -439,22 +531,40 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             {"issue_type": "经纪人主数据重复", "message": f"经纪人人员主数据员工编号重复：{employee_id}"}
             for employee_id in duplicate_ids if _clean_cell(employee_id)
         )
-        staff_lookup = staff.drop_duplicates(subset=["员工编号"], keep="first")
-        broker_ids = {employee_id for employee_id in broker["员工编号"] if _clean_cell(employee_id)}
-        staff_ids = {employee_id for employee_id in staff_lookup["员工编号"] if _clean_cell(employee_id)}
-        issues.extend(
-            {"issue_type": "经纪人新增待维护", "severity": "warning", "message": f"经纪人工资表存在但人员主数据缺失，将跳过申报：{employee_id}"}
-            for employee_id in sorted(broker_ids - staff_ids)
-        )
-        issues.extend(
-            {"issue_type": "经纪人无本月收入提醒", "severity": "warning", "message": f"经纪人人员主数据存在但本月业绩表缺失：{employee_id}"}
-            for employee_id in sorted(staff_ids - broker_ids)
-        )
-        detail = broker.merge(
-            staff_lookup[["员工编号", "分支机构代码", "*姓名", "*证件类型", "*证件号码"]],
-            on="员工编号",
-            how="left",
-        )
+        staff["姓名_匹配键"] = staff["*姓名"].map(lambda value: "".join(_clean_cell(value).split()))
+        staff_with_id = staff[staff["员工编号"].map(_clean_cell) != ""]
+        staff_with_name = staff[staff["姓名_匹配键"].map(_clean_cell) != ""]
+        id_groups = {employee_id: list(indexes) for employee_id, indexes in staff_with_id.groupby("员工编号").groups.items()}
+        name_groups = {name: list(indexes) for name, indexes in staff_with_name.groupby("姓名_匹配键").groups.items()}
+        matched_staff_indexes: set[Any] = set()
+        detail = broker.copy()
+        for column in ("分支机构代码", "*姓名", "*证件类型", "*证件号码"):
+            detail[column] = ""
+        for idx, row in detail.iterrows():
+            employee_id = _clean_cell(row.get("员工编号"))
+            name = "".join(_clean_cell(row.get("姓名_业绩表")).split())
+            matches = id_groups.get(employee_id, []) if employee_id else []
+            match_method = "员工编号"
+            if len(matches) != 1 and name:
+                matches = name_groups.get(name, [])
+                match_method = "姓名"
+            if len(matches) != 1:
+                identifier = _clean_cell(row.get("姓名_业绩表")) or employee_id
+                reason = "姓名在人员主数据中重复" if name and len(name_groups.get(name, [])) > 1 else "人员主数据缺失"
+                issues.append({"issue_type": "经纪人新增待维护", "severity": "warning", "message": f"经纪人业绩表记录无法唯一匹配人员主数据，将跳过申报：{identifier}（{reason}）"})
+                continue
+            staff_index = matches[0]
+            matched_staff_indexes.add(staff_index)
+            for column in ("分支机构代码", "*姓名", "*证件类型", "*证件号码"):
+                detail.at[idx, column] = staff.at[staff_index, column]
+            if match_method == "姓名" and employee_id:
+                issues.append({"issue_type": "经纪人姓名匹配", "severity": "warning", "message": f"员工编号 {employee_id} 未在人员主数据中找到，已按唯一姓名匹配：{detail.at[idx, '*姓名']}"})
+        for staff_index, staff_row in staff.iterrows():
+            if staff_index in matched_staff_indexes:
+                continue
+            identifier = _clean_cell(staff_row.get("员工编号")) or _clean_cell(staff_row.get("*姓名"))
+            if identifier:
+                issues.append({"issue_type": "经纪人无本月收入提醒", "severity": "warning", "message": f"经纪人人员主数据存在但本月业绩表缺失：{identifier}"})
 
     for column in BROKER_DECLARATION_COLUMNS:
         if column not in detail.columns:
@@ -480,6 +590,7 @@ def broker_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         "broker_missing_master": int((~matched).sum()),
         "broker_zero_income": zero_count,
         "broker_negative_income": negative_count,
+        "broker_income_rule": income_rule,
     }
     blocking_types = {"经纪人业绩重复", "经纪人主数据重复"}
     return {
@@ -556,10 +667,16 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
         if not org_code:
             issues.append({"issue_type": "实习生机构未匹配", "message": f"实习生第 {source_row} 行 {name} 未填写有效机构代码，营业部也未匹配：{branch_name or '未填营业部'}"})
             continue
+        default_country = _intern_country_default(cert_type, id_number)
+        nationality = (
+            _clean_cell(row.get("*国籍(地区)"))
+            or _clean_cell(row.get("出生国家(地区)"))
+            or default_country
+        )
         if cert_type != "居民身份证":
             foreign_missing = [
                 field for field, value in {
-                    "国籍(地区)": _clean_cell(row.get("*国籍(地区)")),
+                    "国籍(地区)": nationality,
                     "性别": _clean_cell(row.get("*性别")),
                     "出生日期": _clean_cell(row.get("*出生日期")),
                 }.items() if not value
@@ -569,12 +686,15 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
                 continue
         rows.append({
             "分支机构代码": org_code,
+            "工号": _clean_cell(row.get("工号", row.get("员工编号", row.get("人员编号")))),
             "*姓名": name,
             "*证件类型": cert_type,
-            "证件号码": id_number,
-            "*国籍(地区)": _clean_cell(row.get("*国籍(地区)")),
+            "*证件号码": id_number,
+            "*国籍(地区)": nationality,
             "*性别": _clean_cell(row.get("*性别")),
             "*出生日期": _clean_cell(row.get("*出生日期")),
+            "出生国家(地区)": (_clean_cell(row.get("出生国家(地区)")) or "国籍") if cert_type != "居民身份证" else nationality,
+            "涉税事由": (_clean_cell(row.get("涉税事由")) or "其他") if cert_type != "居民身份证" else _clean_cell(row.get("涉税事由")),
             "任职受雇从业日期": row.get("实习开始时间", ""),
             "手机号码": _clean_cell(row.get("联系方式", row.get("手机号码"))),
             "人员状态": "正常",
@@ -613,6 +733,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
     issues: List[Dict[str, Any]] = []
     interest_source_withheld_warnings = 0
     declaration_validation_issues = 0
+    half_rate_adjustments: list[dict[str, Any]] = []
 
     if not xsg.empty:
         xsg["机构代码"] = text_series(xsg, ["机构代码", "分支机构代码"]).map(normalize_org_code)
@@ -665,12 +786,16 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
 
     if not lxs.empty:
         lxs["机构代码"] = text_series(lxs, ["机构代码", "分支机构代码"]).map(normalize_org_code)
-        rate = text_series(lxs, ["税率（%）", "*税率"], "0").str.rstrip("%")
-        lxs["利息税申报金额"] = number_series(lxs, ["债券兑息", "*收入"])
+        rate = text_series(lxs, ["税率（%）", "税率(%)", "*税率"], "0").str.rstrip("%")
+        lxs["利息税原始收入"] = number_series(lxs, ["债券兑息", "*收入"])
+        lxs["利息税申报金额"] = lxs["利息税原始收入"]
         lxs_name = text_series(lxs, ["客户姓名", "姓名", "*姓名"])
         lxs_cert_type = text_series(lxs, ["证件类型", "*证件类型"])
         lxs_cert_number = text_series(lxs, ["证件号码", "*证件号码", "身份证号码"])
         numeric_rate = pd.to_numeric(rate, errors="coerce").fillna(0)
+        actual_withheld_columns = ["实际扣缴税额", "实际扣缴税额（元）", "兑息扣税", "扣缴税额"]
+        actual_withheld = number_series(lxs, actual_withheld_columns)
+        source_withheld_present = text_series(lxs, actual_withheld_columns) != ""
         for idx in lxs.index:
             missing = [
                 label for label, value in [
@@ -682,21 +807,45 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
             ]
             if lxs.at[idx, "利息税申报金额"] <= 0:
                 missing.append("收入")
-            if numeric_rate.at[idx] <= 0 or numeric_rate.at[idx] > 100:
+            if numeric_rate.at[idx] not in {10, 20}:
                 missing.append("税率")
             if missing:
                 declaration_validation_issues += 1
                 issues.append({
-                    "issue_type": "利息税申报必填项异常",
+                    "issue_type": "interest_invalid_rate" if "税率" in missing else "利息税申报必填项异常",
                     "message": f"利息税源表第 {int(idx) + 2} 行 {lxs_name.at[idx] or '未填姓名'} 缺失或无效：{'、'.join(missing)}",
                     "row_number": int(idx) + 2,
                     "missing_fields": missing,
                 })
+                continue
+            if numeric_rate.at[idx] == 10:
+                original_income = float(lxs.at[idx, "利息税原始收入"])
+                adjusted_income = round(original_income / 2, 2)
+                if source_withheld_present.at[idx]:
+                    adjusted_income = round(float(actual_withheld.at[idx]) / 0.2, 2)
+                lxs.at[idx, "利息税申报金额"] = adjusted_income
+                note = (
+                    f"原税率10%，税局导入税率固定20%；收入由{original_income:.2f}调整为"
+                    f"{adjusted_income:.2f}"
+                )
+                lxs.at[idx, "利息税调整说明"] = note
+                adjustment = {
+                    "issue_type": "interest_half_rate_adjustment",
+                    "severity": "warning",
+                    "message": note,
+                    "row_number": int(idx) + 2,
+                    "name": lxs_name.at[idx],
+                    "original_rate": 10,
+                    "output_rate": 20,
+                    "original_income": original_income,
+                    "adjusted_income": adjusted_income,
+                }
+                half_rate_adjustments.append(adjustment)
+                issues.append(adjustment)
+        lxs["利息税输出税率"] = "20%"
         lxs["利息税税费(申报表)"] = (
-            lxs["利息税申报金额"] * numeric_rate / 100
+            lxs["利息税申报金额"] * 0.2
         ).round(2)
-        actual_withheld = number_series(lxs, ["兑息扣税"])
-        source_withheld_present = text_series(lxs, ["兑息扣税"]) != ""
         source_withheld_mismatch = source_withheld_present & (
             (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() > 0.01
         )
@@ -756,6 +905,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
         "interest_declared_amount": float(lxs.get("利息税申报金额", pd.Series(dtype=float)).sum()),
         "interest_withheld_tax": float(lxs.get("利息税税费(申报表)", pd.Series(dtype=float)).sum()),
         "interest_source_withheld_warnings": interest_source_withheld_warnings,
+        "interest_half_rate_adjustments": len(half_rate_adjustments),
     }
     metrics["total_records"] = metrics["restricted_stock_records"] + metrics["interest_records"]
     metrics["total_declared_amount"] = metrics["restricted_stock_declared_amount"] + metrics["interest_declared_amount"]
@@ -766,6 +916,9 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
         "issues": issues,
         "metrics": metrics,
         "reconciliation_rows": reconciliation_rows,
+        "extra_sheets": {
+            "利息税减半调整记录": pd.DataFrame(half_rate_adjustments),
+        },
         "block_declarations": declaration_validation_issues > 0,
     }
 

@@ -10,20 +10,72 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.accounting import PersonnelMasterArtifact, PersonnelMasterImportBatch
+from app.models.accounting import OrganizationMapping, PersonnelMasterArtifact, PersonnelMasterImportBatch
 from app.models.core import Period, UploadedFile
 from app.services.excel import read_excel, write_workbook
 from app.services.storage import save_upload
 
 
-PERSON_TYPES = {"employee", "intern", "broker", "customer"}
+PERSON_TYPES = {"employee", "intern", "broker", "customer", "part_time"}
 SCOPE_TYPES = {"month", "org", "branch"}
+ORG_CODE_ALIASES = ["机构代码", "分支机构代码", "单位编号"]
 
 
 class PersonnelMasterValidationError(ValueError):
     def __init__(self, issues: list[dict[str, Any]]):
         self.issues = issues
         super().__init__("；".join(issue["message"] for issue in issues))
+
+
+def _clean_org_code(value: Any) -> str:
+    text = _clean(value).replace(" ", "")
+    return text[:-2] if text.endswith(".0") and text[:-2].isdigit() else text
+
+
+def list_rpa_organizations(db: Session, *, period_id: int, person_type: str = "employee") -> list[dict]:
+    mappings = db.query(OrganizationMapping).filter(
+        OrganizationMapping.active == 1,
+        OrganizationMapping.rpa_enabled == 1,
+    ).order_by(OrganizationMapping.org_code, OrganizationMapping.rpa_org_name).all()
+    mappings_by_code: dict[str, list[OrganizationMapping]] = {}
+    for mapping in mappings:
+        mappings_by_code.setdefault(mapping.org_code.strip(), []).append(mapping)
+    duplicate_codes = [code for code, items in mappings_by_code.items() if len(items) > 1]
+    if duplicate_codes:
+        raise PersonnelMasterValidationError([
+            {
+                "issue_type": "duplicate_rpa_organization_mapping",
+                "org_code": code,
+                "message": f"机构代码 {code} 存在多个启用的 RPA 映射",
+            }
+            for code in duplicate_codes
+        ])
+
+    counts: dict[str, int] = {}
+    path = PersonnelMasterResolver(db, period_id).resolve_path(person_type)
+    if path:
+        frame = read_excel(path).fillna("")
+        code_col = _first_existing(frame.columns, ORG_CODE_ALIASES)
+        if code_col:
+            status_col = _first_existing(frame.columns, ["人员状态", "*人员状态", "状态"])
+            active = frame[frame[status_col].map(_is_active_status)] if status_col else frame
+            for _, row in active.iterrows():
+                code = _clean_org_code(row.get(code_col))
+                if code:
+                    counts[code] = counts.get(code, 0) + 1
+
+    result = []
+    for code, items in mappings_by_code.items():
+        item = {
+            "code": code,
+            "name": items[0].rpa_org_name,
+            "parent_branch": items[0].parent_branch,
+            "employee_count": counts.get(code, 0),
+        }
+        if items[0].rpa_search_result_index != 1:
+            item["rpa_search_result_index"] = items[0].rpa_search_result_index
+        result.append(item)
+    return result
 
 
 def _clean(value: Any) -> str:
@@ -254,6 +306,38 @@ def save_generated_employee_master(
     return artifact
 
 
+def materialize_employee_id_updates(
+    source_path: str | Path,
+    changes: list[dict[str, str]],
+    output_dir: str | Path,
+    year: int,
+    month: int,
+) -> dict[str, str]:
+    """仅在本月输出副本中更新员工编号，不修改来源历史文件。"""
+    staff = read_excel(source_path).fillna("")
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    id_col = "证件号码" if "证件号码" in staff.columns else "*证件号码"
+    org_col = _first_existing(staff.columns, ORG_CODE_ALIASES)
+    for change in changes:
+        mask = (
+            staff.get(id_col, pd.Series("", index=staff.index)).map(_clean).eq(change.get("id_number", ""))
+            & staff.get(org_col or "机构代码", pd.Series("", index=staff.index)).map(_clean_org_code).eq(change.get("org_code", ""))
+            & staff.get("员工编号", pd.Series("", index=staff.index)).map(_clean).eq(change.get("old_employee_id", ""))
+        )
+        if int(mask.sum()) != 1:
+            raise ValueError(f"{change.get('name', '')} 的员工编号自动更新匹配到 {int(mask.sum())} 条人员记录")
+        staff.loc[mask, "员工编号"] = change["new_employee_id"]
+    history_path = root / f"人员信息表完整数据({year}年{month:02d}月).xlsx"
+    display_path = root / f"人员信息表({year}年{month:02d}月).xlsx"
+    write_workbook(history_path, {"Sheet1": staff})
+    display = staff
+    if "人员状态" in display.columns:
+        display = display[display["人员状态"].map(_clean).isin(["", "正常", "在职"])]
+    write_workbook(display_path, {"Sheet1": display})
+    return {"updated_staff_path": str(display_path), "full_staff_path": str(history_path)}
+
+
 def get_personnel_master_artifact(
     db: Session,
     period_id: int,
@@ -311,6 +395,89 @@ def list_personnel_master_batches(db: Session, period_id: int, person_type: str)
         .limit(200)
         .all()
     )
+
+
+def copy_previous_month_personnel_master_if_missing(
+    db: Session,
+    *,
+    period_id: int,
+    person_type: str,
+) -> list[PersonnelMasterArtifact]:
+    """Materialize a missing monthly master from the immediately preceding period."""
+    current_artifacts = (
+        db.query(PersonnelMasterArtifact)
+        .filter(
+            PersonnelMasterArtifact.period_id == period_id,
+            PersonnelMasterArtifact.person_type == person_type,
+        )
+        .all()
+    )
+    if current_artifacts:
+        return []
+
+    current_period = db.query(Period).filter(Period.id == period_id).first()
+    if current_period is None:
+        return []
+    previous_year = current_period.year if current_period.month > 1 else current_period.year - 1
+    previous_month = current_period.month - 1 if current_period.month > 1 else 12
+    previous_period = (
+        db.query(Period)
+        .filter(Period.year == previous_year, Period.month == previous_month)
+        .first()
+    )
+    if previous_period is None:
+        return []
+
+    source_artifacts = (
+        db.query(PersonnelMasterArtifact)
+        .filter(
+            PersonnelMasterArtifact.period_id == previous_period.id,
+            PersonnelMasterArtifact.person_type == person_type,
+        )
+        .order_by(PersonnelMasterArtifact.scope_type, PersonnelMasterArtifact.scope_code)
+        .all()
+    )
+    target_dir = settings.artifact_dir / "personnel_masters" / str(period_id) / person_type
+    created: list[PersonnelMasterArtifact] = []
+    current_label = _period_label(current_period, period_id)
+    previous_label = _period_label(previous_period, previous_period.id)
+    for source in source_artifacts:
+        source_path = Path(source.stored_path)
+        if not source_path.exists():
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"{current_label}_{person_type}_{source.scope_type}_{source.scope_code or 'all'}.xlsx"
+        target_path = target_dir / file_name
+        shutil.copy2(source_path, target_path)
+        artifact = PersonnelMasterArtifact(
+            period_id=period_id,
+            person_type=person_type,
+            scope_type=source.scope_type,
+            scope_code=source.scope_code,
+            file_name=file_name,
+            stored_path=str(target_path),
+            row_count=source.row_count,
+            validation_issues=[],
+        )
+        db.add(artifact)
+        db.flush()
+        db.add(PersonnelMasterImportBatch(
+            period_id=period_id,
+            artifact_id=artifact.id,
+            person_type=person_type,
+            scope_type=source.scope_type,
+            scope_code=source.scope_code,
+            original_name=f"自动复制{previous_label}人员主数据：{source.file_name}",
+            stored_path=str(target_path),
+            row_count=source.row_count,
+            validation_issues=[],
+        ))
+        created.append(artifact)
+    if created:
+        db.commit()
+        for artifact in created:
+            db.refresh(artifact)
+    return created
 
 
 class PersonnelMasterResolver:
