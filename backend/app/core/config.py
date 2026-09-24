@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     # Leave empty until FMSS confirms the real current-user endpoint.  The
     # identity resolver deliberately makes no speculative user-info calls.
     fmss_current_user_path: str = ""
-    fmss_write_enabled: bool = False
-    fmss_post_write_enabled: bool = False
+    fmss_write_enabled: bool = True
+    fmss_post_write_enabled: bool = True
     fmss_production_write_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

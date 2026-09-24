@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.version import APP_VERSION
 from app.db.init_db import init_db
+from app.integrations.fmss.browser_auth import fmss_browser_auth
 from app.rpa.service import rpa_service
 
 
@@ -24,6 +25,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        fmss_browser_auth.close()
         rpa_service.shutdown()
 
 

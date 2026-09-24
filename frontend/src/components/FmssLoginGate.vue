@@ -14,7 +14,6 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { fmssApi } from '../api'
 
 const emit = defineEmits<{ connected: [] }>()
-
 const opening = ref(false)
 const status = ref('当前登录状态：未登录')
 let pollTimer: number | undefined
@@ -23,17 +22,11 @@ let pollStartedAt = 0
 async function openLogin() {
   opening.value = true
   try {
-    const bridge = (window as any).pywebview?.api
-    if (!bridge?.open_fmss_login) {
-      await fmssApi.openLogin()
-      status.value = '当前登录状态：请使用桌面版完成登录'
-      return
-    }
-    await bridge.open_fmss_login()
-    status.value = '当前登录状态：等待 FMSS 登录'
+    await fmssApi.openBrowserLogin()
+    status.value = '正在等待FMSS登录，请在新窗口完成OA登录'
     pollStartedAt = Date.now()
   } catch {
-    status.value = '当前登录状态：登录窗口打开失败'
+    status.value = 'FMSS登录窗口启动失败，请检查Chrome环境'
   } finally {
     opening.value = false
   }
@@ -47,7 +40,14 @@ async function checkSession() {
   }
   try {
     const { data } = await fmssApi.session(true)
-    if (!data.connected) return
+    if (!data.connected) {
+      const browser = await fmssApi.browserStatus()
+      if (browser.data.status === 'error') {
+        status.value = browser.data.message || 'FMSS登录失败，请重新登录'
+        stopPolling()
+      }
+      return
+    }
     await fmssApi.branches()
     stopPolling()
     emit('connected')
@@ -70,7 +70,9 @@ onMounted(() => {
   void checkSession()
   startPolling()
 })
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(() => {
+  stopPolling()
+})
 </script>
 
 <style scoped>

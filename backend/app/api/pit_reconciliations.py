@@ -52,6 +52,16 @@ def _stage_sources(bundle, stage: str):
     sources = (bundle.organizations, bundle.salary, bundle.declarations, bundle.balance, bundle.broker, bundle.bond_interest, bundle.restricted_stock) if stage == "pre_payment" else (bundle.certificates, bundle.bank)
     return [{"source_type": source.source_type, "source_status": source.status, "required": True, "row_count": len(source.rows), "source_kind": source.source_kind, "source_id": source.source_id, "source_ref": source.source_ref, "issues_json": source.issues} for source in sources]
 
+
+def _has_blocking_source_issues(item: dict, stage: str) -> bool:
+    issues = item.get("issues_json") or []
+    if stage == "post_payment" and item.get("source_type") == "bank_statement":
+        return any(
+            not isinstance(issue, dict) or issue.get("issue_type") != "unresolved_bank_organization"
+            for issue in issues
+        )
+    return bool(issues)
+
 @router.get("/overview")
 def overview(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"]=Query(...),db:Session=Depends(get_db)):
     try: row=_workpaper(db,period_id,stage,allow_stale=True)
@@ -86,9 +96,17 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
         result=PitReconciliationEngine().calculate(bundle)
         result["stage"] = stage
         stage_sources = _stage_sources(bundle, stage)
-        complete = all(item["source_status"] in {"ready", "ready_empty", "not_applicable"} and not item["issues_json"] for item in stage_sources)
+        complete = all(
+            item["source_status"] in {"ready", "ready_empty", "not_applicable"}
+            and not _has_blocking_source_issues(item, stage)
+            for item in stage_sources
+        )
         result["data_status"] = "ready" if complete else "incomplete"
-        result["missing_sources"] = [item["source_type"] for item in stage_sources if item["source_status"] in {"missing", "invalid"} or item["issues_json"]]
+        result["missing_sources"] = [
+            item["source_type"]
+            for item in stage_sources
+            if item["source_status"] in {"missing", "invalid"} or _has_blocking_source_issues(item, stage)
+        ]
         workpaper=repository.replace(workpaper,result); db.commit(); db.refresh(workpaper); return {"workpaper":_payload(workpaper),"message":"已覆盖更新同一份月度个税核对底稿"}
     except Exception as exc:
         db.rollback()

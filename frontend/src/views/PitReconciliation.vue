@@ -1,8 +1,32 @@
 <template>
   <div v-loading="pageLoading" class="pit-page">
     <section class="card workflow-card">
-      <div class="card-header"><div><strong>个税核对底稿</strong><p>缴款前、缴款后是长期独立保存的真实底稿；重算和人工原因均按阶段隔离。</p><div class="pit-context"><span>公司：{{ companyName }}</span><span>所属期：{{ periodLabel }}</span></div></div><div class="pit-header-actions"><StageTabs v-model="activeStage" /><el-button v-if="overview?.exists" link type="primary" @click="exportWorkpaper"><el-icon><Download /></el-icon>导出当前阶段</el-button></div></div>
-      <div class="card-body pit-toolbar"><div class="pit-workflow-status"><el-tag :type="workflowStatusMeta.type" effect="light">{{ workflowStatusMeta.label }}</el-tag><span>{{ workflowStatusMeta.description }}</span><el-tag effect="plain" :type="fmssState === 'APPROVED' ? 'success' : fmssState === 'REVIEWING' ? 'warning' : 'info'">FMSS：{{ fmssStateLabel }}</el-tag></div><div class="pit-refresh-time"><small>数据刷新时间</small><strong>{{ dataRefreshedAt || '—' }}</strong></div><div class="pit-actions"><el-tooltip :content="periodId ? '重新获取当前阶段底稿、数据准备和当前核对结果' : '请先选择所属期'"><span><el-button :disabled="!periodId" @click="refreshCurrentStage">刷新</el-button></span></el-tooltip><el-button :disabled="!periodId" :loading="fmssRefreshing" @click="refreshFmssState">刷新线上状态</el-button><el-tooltip :content="recalculateDisabledReason"><span><el-button type="primary" :loading="recalculateLoading" :disabled="Boolean(recalculateDisabledReason)" @click="recalculate(activeStage)"><el-icon><RefreshRight /></el-icon>重算</el-button></span></el-tooltip><el-tooltip content="根据下级人工原因更新空白或已有自动汇总内容，不覆盖人工填写内容。"><span><el-dropdown v-if="activeStage === 'pre_payment'" split-button type="warning" :loading="aggregateLoading" :disabled="Boolean(aggregateDisabledReason)" @click="aggregateReasons('refresh_generated')" @command="aggregateReasons"><span>一键汇总原因</span><template #dropdown><el-dropdown-menu><el-dropdown-item command="refresh_generated">更新自动汇总</el-dropdown-item><el-dropdown-item command="fill_empty">仅补空白</el-dropdown-item></el-dropdown-menu></template></el-dropdown></span></el-tooltip><el-tooltip v-if="activeStage === 'pre_payment' && aggregateDisabledReason" :content="aggregateDisabledReason"><span class="pit-action-status">原因汇总已禁用</span></el-tooltip><el-tooltip :content="submitDisabledReason"><span><el-button type="success" :disabled="Boolean(submitDisabledReason)" @click="openSubmitReviewer">提交审核</el-button></span></el-tooltip></div></div>
+      <div class="card-header"><div><strong>个税核对底稿</strong><p>缴款前、缴款后是长期独立保存的真实底稿；重算和人工原因均按阶段隔离。</p><div class="pit-context"><span>公司：{{ companyName }}</span><span>所属期：{{ periodLabel }}</span></div></div><div class="pit-header-actions"><StageTabs v-model="activeStage" :disabled="readOnly" /><el-button v-if="overview?.exists" link type="primary" @click="exportWorkpaper"><el-icon><Download /></el-icon>导出当前阶段</el-button></div></div>
+      <div class="card-body pit-toolbar">
+        <div class="pit-workflow-status">
+          <el-tag :type="workflowStatusMeta.type" effect="light">{{ workflowStatusMeta.label }}</el-tag>
+          <span>{{ workflowStatusMeta.description }}</span>
+          <el-tag v-if="fmssState !== 'APPROVED'" effect="plain" :type="fmssState === 'REVIEWING' ? 'warning' : 'info'">
+            {{ activeStage === 'post_payment' ? '线上状态：' : 'FMSS：' }}{{ fmssStateLabel }}
+          </el-tag>
+        </div>
+        <div class="pit-refresh-time"><small>数据刷新时间</small><strong>{{ dataRefreshedAt || '—' }}</strong></div>
+        <div v-if="!readOnly" class="pit-actions">
+          <el-tooltip :content="periodId ? '重新获取当前阶段底稿、数据准备和当前核对结果' : '请先选择所属期'">
+            <span><el-button :disabled="!periodId" @click="refreshPreparationData">刷新准备数据</el-button></span>
+          </el-tooltip>
+          <el-button :disabled="!periodId" :loading="fmssRefreshing" @click="refreshFmssState()">刷新线上状态</el-button>
+          <el-tooltip :content="recalculateDisabledReason">
+            <span><el-button type="primary" :loading="recalculateLoading" :disabled="Boolean(recalculateDisabledReason)" @click="recalculate(activeStage)"><el-icon><RefreshRight /></el-icon>重算</el-button></span>
+          </el-tooltip>
+          <el-tooltip v-if="activeStage === 'pre_payment'" :content="aggregateButtonTooltip">
+            <span><el-dropdown split-button type="warning" :loading="aggregateLoading" :disabled="Boolean(aggregateDisabledReason)" @click="aggregateReasons('refresh_generated')" @command="aggregateReasons"><span>一键汇总原因</span><template #dropdown><el-dropdown-menu><el-dropdown-item command="refresh_generated">更新自动汇总</el-dropdown-item><el-dropdown-item command="fill_empty">仅补空白</el-dropdown-item></el-dropdown-menu></template></el-dropdown></span>
+          </el-tooltip>
+          <el-tooltip :content="submitDisabledReason">
+            <span><el-button type="success" :disabled="Boolean(submitDisabledReason)" @click="openSubmitReviewer">提交审核</el-button></span>
+          </el-tooltip>
+        </div>
+      </div>
     </section>
 
     <section class="card workflow-card pit-source-panel">
@@ -42,6 +66,7 @@ import { fmssApi, pitReconciliationApi, type PitBankTaxMatch, type PitDeclaratio
 import StageTabs from '../components/pit/StageTabs.vue'
 import ReasonCell from '../components/pit/ReasonCell.vue'
 import ReasonEditorDialog from '../components/pit/ReasonEditorDialog.vue'
+import type { PaymentStage } from '../features/pit/contracts'
 
 type RawTabKey = 'balanceSheet' | 'bondDetail' | 'restrictedDetail' | 'comprehensiveDeclaration' | 'classifiedDeclaration' | 'restrictedDeclaration' | 'postCertificate' | 'postBankStatement' | 'postBankTaxDetail'
 type PitTabKey = 'summary' | 'declaration' | 'taxAmount' | 'occurrence' | 'salaryTax' | 'salaryTaxableIncome' | 'bondInterest' | 'restrictedStock' | 'postPaymentCheck' | RawTabKey
@@ -49,14 +74,22 @@ type ReasonKind = 'summary' | 'tax' | 'occurrence' | 'difference'
 type ReasonField = 'difference_1_manual_reason' | 'difference_2_manual_reason' | 'difference_3_manual_reason' | 'difference_4_manual_reason' | 'difference_5_manual_reason' | 'difference_6_manual_reason' | 'difference_7_manual_reason' | 'current_manual_reason' | 'cumulative_manual_reason' | 'business_declared_manual_reason' | 'broker_occurrence_manual_reason' | 'declared_income_manual_reason' | 'manual_reason'
 type TableRow = Record<string, unknown>
 const reasonFieldLabels: Record<ReasonField, string> = { difference_1_manual_reason:'差异原因1', difference_2_manual_reason:'差异原因2', difference_3_manual_reason:'差异原因3', difference_4_manual_reason:'差异原因11', difference_5_manual_reason:'差异原因12', difference_6_manual_reason:'差异原因6', difference_7_manual_reason:'差异原因7', current_manual_reason:'差异原因8', cumulative_manual_reason:'差异原因9', business_declared_manual_reason:'差异原因10', broker_occurrence_manual_reason:'差异原因11', declared_income_manual_reason:'差异原因12', manual_reason:'差异原因' }
-const props = defineProps<{ companyId?: number | null; periodId: number | null; periodLabel?: string; companyName?: string }>()
+const props = defineProps<{ companyId?: number | null; periodId: number | null; periodLabel?: string; companyName?: string; readOnly?: boolean; initialStage?: PaymentStage }>()
+const readOnly = computed(() => props.readOnly === true)
 const periodLabel = computed(() => props.periodLabel || '未选择')
 const taxPeriodLabel = computed(() => { const match=periodLabel.value.match(/(\d{4})\D+(\d{1,2})/); if(!match) return periodLabel.value; const year=Number(match[1]); const month=Number(match[2]); const mm=String(month).padStart(2,'0'); const last=String(new Date(year,month,0).getDate()).padStart(2,'0'); return `${year}.${mm}.01-${year}.${mm}.${last}` })
 const companyName = computed(() => props.companyName || '未选择')
 const postPaymentReady = computed(() => readiness.value.some((item) => item.source_type === 'tax_certificate' && ['ready', 'ready_empty'].includes(item.source_status)) && readiness.value.some((item) => item.source_type === 'bank_statement' && ['ready', 'ready_empty'].includes(item.source_status)))
+const postPaymentPreparationReason = computed(() => {
+  if (activeStage.value !== 'post_payment') return ''
+  const missing = readiness.value
+    .filter((item) => item.source_status === 'missing' || item.source_status === 'invalid' || item.issues_json?.length)
+    .map((item) => sourceLabels[item.source_type] ?? item.source_type)
+  return missing.length ? `请先完成必要数据准备：${[...new Set(missing)].join('、')}` : ''
+})
 const postPaymentHint = computed(() => postPaymentReady.value ? '使用完税凭证和银行流水进行扣款后核对' : '请先导入完税凭证和银行流水')
 const overview = ref<PitOverviewResponse | null>(null); const readiness = ref<PitReadinessItem[]>([]); const summaryRows = ref<PitOrgSummary[]>([]); const taxAmountRows = ref<PitTaxAmountCheck[]>([]); const occurrenceRows = ref<PitOccurrenceCheck[]>([]); const declarationRows = ref<PitDeclarationSummary[]>([]); const salaryTaxRows = ref<PitDifferenceDetail[]>([]); const salaryTaxableIncomeRows = ref<PitDifferenceDetail[]>([]); const bondInterestRows = ref<PitDifferenceDetail[]>([]); const restrictedStockRows = ref<PitDifferenceDetail[]>([]); const bankMatchRows = ref<PitBankTaxMatch[]>([])
-const fmssState = ref('NOT_SUBMITTED'); const fmssRefreshing = ref(false); const submitOnlineLoading = ref(false); const reviewerDialogVisible = ref(false); const selectedReviewer = ref(''); const reviewerOptions = ref<Array<{ username: string; label: string }>>([])
+const fmssState = ref('NOT_SUBMITTED'); const doubleReviewCompleted = ref(false); const fmssStateUnavailable = ref(false); const fmssRefreshing = ref(false); const submitOnlineLoading = ref(false); const reviewerDialogVisible = ref(false); const selectedReviewer = ref(''); const reviewerOptions = ref<Array<{ username: string; label: string }>>([])
 const preRawSheetTabs: Array<{ key: RawTabKey; name: string }> = [{ key:'balanceSheet',name:'科目余额表' },{ key:'bondDetail',name:'债券利息明细' },{ key:'restrictedDetail',name:'限售股明细' },{ key:'comprehensiveDeclaration',name:'综合所得申报表' },{ key:'classifiedDeclaration',name:'分类所得申报表' },{ key:'restrictedDeclaration',name:'限售股所得申报表' }]
 const postRawSheetTabs: Array<{ key: RawTabKey; name: string }> = [{ key:'postCertificate',name:'个税完税凭证' },{ key:'postBankStatement',name:'银行流水' },{ key:'postBankTaxDetail',name:'银行流水个税税额明细' }]
 const allRawSheetTabs = [...preRawSheetTabs, ...postRawSheetTabs]
@@ -66,37 +99,46 @@ const pitTabKeys: PitTabKey[] = ['summary','declaration','taxAmount','occurrence
 const activeTab = ref<PitTabKey>('summary'); const pageLoading = ref(false); const recalculateLoading = ref(false); const aggregateLoading = ref(false); const readinessLoading = ref(false); const occurrenceDescriptionLoading = ref(false); const occurrenceDescriptionInput = ref<HTMLInputElement | null>(null); const dataRefreshedAt = ref(''); const sourcesExpanded = ref(false); const orgFilter = ref(''); const keyword = ref(''); const displayMode = ref<'all' | 'difference' | 'missing'>('all'); const workspaceRef = ref<HTMLElement | null>(null); const tableHeight = ref(620); const isFullscreen = ref(false)
 const overviewCache = new Map<string, PitOverviewResponse>()
 let requestGeneration = 0
+let fmssRequestGeneration = 0
 const tabLoading = reactive(Object.fromEntries(pitTabKeys.map((key) => [key,false]))) as Record<PitTabKey,boolean>; const tabLoaded = reactive(Object.fromEntries(pitTabKeys.map((key) => [key,false]))) as Record<PitTabKey,boolean>
 const rawPageSize = 100
 const rawSheets = reactive(Object.fromEntries(allRawSheetTabs.map((sheet) => [sheet.key,{ columns:[] as Array<{ key:string; label:string }>,rows:[] as TableRow[],total:0,page:1,loading:false }]))) as Record<RawTabKey,{ columns:Array<{ key:string;label:string }>;rows:TableRow[];total:number;page:number;loading:boolean }>
 const reasonDialogVisible = ref(false); const reasonSaving = ref(false); const editingReasonRow = ref<TableRow | null>(null); const editingReasonField = ref<ReasonField | null>(null); const editingReasonKind = ref<ReasonKind>('summary'); const editingReasonText = ref(''); const editingReasonFieldLabel = computed(() => editingReasonField.value ? reasonFieldLabels[editingReasonField.value] : '差异原因'); const detailDrawerVisible = ref(false); const detailDrawerRow = ref<PitDifferenceDetail | null>(null)
 const sourceLabels: Record<string, string> = { organization_mapping:'机构主数据', salary:'工资薪金', pit_declaration:'实际个税申报', balance_sheet:'科目余额表', broker:'证券经纪人', bond_interest:'债券利息', restricted_stock:'限售股', tax_certificate:'完税证明', bank_statement:'银行流水' }; const sourceStatusLabels: Record<string, string> = { ready:'已就绪', ready_empty:'已就绪（无记录）', missing:'缺失', invalid:'数据异常', not_applicable:'无相关业务' }
 const balanceColumns = [{ key:'opening_balance',label:'期初余额' },{ key:'debit_amount',label:'借方金额' },{ key:'credit_amount',label:'贷方金额' },{ key:'closing_balance',label:'期末余额' }]; const occurrenceBalanceColumns = [...balanceColumns,{ key:'occurrence_amount',label:'科目余额表当期发生额' }]
-const activeStage = ref<'pre_payment' | 'post_payment'>('pre_payment')
+const activeStage = ref<PaymentStage>(props.initialStage || 'pre_payment')
 const workflowStatus = computed(() => String(overview.value?.workpaper?.workflow_status || 'data_preparation'))
-const fmssStateLabel = computed(() => ({ NOT_SUBMITTED:'未提交', DRAFT:'线上草稿', REVIEWING:'审核中', APPROVED:'已复核', RETURNED:'已退回' }[fmssState.value] || fmssState.value))
-const workflowStatusMeta = computed(() => ({
-  data_preparation: { label:'数据准备', type:'warning' as const, description:'来源数据尚未齐全或需要重新计算。当前可修改、重算，暂不可提交。' },
+const fmssStateLabel = computed(() => doubleReviewCompleted.value ? '双复核完成' : ({ NOT_SUBMITTED:'未提交', DRAFT:'线上草稿', REVIEWING:'审核中', APPROVED:'已复核', RETURNED:'已退回' }[fmssState.value] || fmssState.value))
+const workflowStatusMeta = computed(() => doubleReviewCompleted.value ? { label:'双复核完成', type:'success' as const, description:'缴款前、缴款后底稿均已通过FMSS复核，当前期间已永久锁定。' } : ({
+  data_preparation: { label:'数据准备', type:'warning' as const, description:'来源数据尚未齐全或需要重新计算。当前可修改、重算，也可按需要提交。' },
   pending_submission: { label:'待提交', type:'primary' as const, description:'当前底稿已完成重算，可继续填写差异原因；确认后可以提交。' },
   submitted: { label:'已提交', type:'info' as const, description:'当前版本已提交支撑平台，正在等待复核，底稿已锁定。' },
   returned: { label:'已退回', type:'danger' as const, description:'当前版本已被复核退回，可修改或重新计算；修改后进入待提交。' },
   reviewed: { label:'已复核', type:'success' as const, description:'当前版本已复核通过，底稿已锁定。' },
 }[workflowStatus.value] || { label:workflowStatus.value, type:'info' as const, description:'当前底稿状态未知。' }))
-const isEditable = computed(() => ['data_preparation','pending_submission','returned'].includes(workflowStatus.value) && !['REVIEWING','APPROVED'].includes(fmssState.value))
+const isEditable = computed(() => !readOnly.value && !fmssStateUnavailable.value && ['data_preparation','pending_submission','returned'].includes(workflowStatus.value) && !['REVIEWING','APPROVED'].includes(fmssState.value))
 const recalculateDisabledReason = computed(() => {
   if (!props.periodId) return '请先选择所属期'
+  if (fmssStateUnavailable.value) return '线上状态无法确认，当前已保守锁定'
   if (workflowStatus.value === 'submitted') return '当前版本已提交，不能重新计算'
   if (workflowStatus.value === 'reviewed') return '当前版本已复核，不能修改'
-  if (activeStage.value === 'post_payment' && !postPaymentReady.value) return '请先完成必要数据准备'
+  if (activeStage.value === 'post_payment' && postPaymentPreparationReason.value) return postPaymentPreparationReason.value
   return ''
 })
-const submitDisabledReason = computed(() => !props.periodId ? '请先选择所属期' : activeStage.value !== 'pre_payment' ? '本轮暂不开放缴款后线上提交' : workflowStatus.value !== 'pending_submission' ? '当前状态不可提交，请先完成必要数据准备' : fmssState.value === 'REVIEWING' ? 'FMSS正在审核中' : fmssState.value === 'APPROVED' ? 'FMSS已经复核通过' : '')
+const submitDisabledReason = computed(() => {
+  if (!props.periodId) return '请先选择所属期'
+  if (fmssStateUnavailable.value) return '线上状态无法确认，当前已保守锁定'
+  if (fmssState.value === 'REVIEWING') return 'FMSS正在审核中'
+  if (fmssState.value === 'APPROVED') return 'FMSS已经复核通过'
+  return ''
+})
 const aggregateDisabledReason = computed(() => {
   if (!props.periodId) return '请先选择所属期'
   if (workflowStatus.value === 'submitted') return '当前版本已提交，不能汇总原因'
   if (workflowStatus.value === 'reviewed') return '当前版本已复核，不能汇总原因'
   return ''
 })
+const aggregateButtonTooltip = computed(() => aggregateDisabledReason.value || '根据下级人工原因更新空白或已有自动汇总内容，不覆盖人工填写内容。')
 const organizationOptions = computed(() => [...new Set(summaryRows.value.map((row) => row.org_code).filter(Boolean))])
 const readinessMeta = computed(() => {
   const abnormal = readiness.value.some((item) => item.source_status === 'invalid' || !!item.issues_json?.length)
@@ -196,12 +238,83 @@ async function loadReadiness(generation=requestGeneration) { if (!props.periodId
 async function refreshReadiness() { if (!props.periodId || readinessLoading.value) return; readinessLoading.value = true; try { await loadReadiness(); ElMessage.success('数据准备情况已刷新') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '数据准备情况刷新失败') } finally { readinessLoading.value = false } }
 async function ensureTabLoaded(tab: PitTabKey,generation=requestGeneration) { if (!props.periodId || tabLoaded[tab] || tabLoading[tab]) return; if (isRawTab(tab)) { await loadRawSheet(tab,1,generation); return } tabLoading[tab] = true; try { const periodId = props.periodId; const stage=activeStage.value; let rows: unknown; if (tab === 'summary' || tab === 'postPaymentCheck') rows = (await pitReconciliationApi.getSummary(periodId,stage)).data; if (tab === 'taxAmount') rows = (await pitReconciliationApi.getTaxAmountChecks(periodId,stage)).data; if (tab === 'occurrence') rows = (await pitReconciliationApi.getOccurrenceChecks(periodId,stage)).data; if (tab === 'declaration') rows = (await pitReconciliationApi.getDeclarationSummary(periodId,stage)).data; if (tab === 'salaryTax') rows = (await pitReconciliationApi.getDifferences(periodId,stage,{ detail_type:'salary_tax' })).data; if (tab === 'salaryTaxableIncome') rows = (await pitReconciliationApi.getDifferences(periodId,stage,{ detail_type:'salary_taxable_income' })).data; if (tab === 'bondInterest') rows = (await pitReconciliationApi.getDifferences(periodId,stage,{ detail_type:'bond_interest_tax' })).data; if (tab === 'restrictedStock') rows = (await pitReconciliationApi.getDifferences(periodId,stage,{ detail_type:'restricted_stock_tax' })).data; if (generation !== requestGeneration) return; if (tab === 'summary' || tab === 'postPaymentCheck') summaryRows.value = rows as PitOrgSummary[]; if (tab === 'taxAmount') taxAmountRows.value = rows as PitTaxAmountCheck[]; if (tab === 'occurrence') occurrenceRows.value = rows as PitOccurrenceCheck[]; if (tab === 'declaration') declarationRows.value = rows as PitDeclarationSummary[]; if (tab === 'salaryTax') salaryTaxRows.value = rows as PitDifferenceDetail[]; if (tab === 'salaryTaxableIncome') salaryTaxableIncomeRows.value = rows as PitDifferenceDetail[]; if (tab === 'bondInterest') bondInterestRows.value = rows as PitDifferenceDetail[]; if (tab === 'restrictedStock') restrictedStockRows.value = rows as PitDifferenceDetail[]; tabLoaded[tab] = true } catch (error: any) { if (generation === requestGeneration) ElMessage.error(error?.response?.data?.detail || '核对数据加载失败') } finally { if (generation === requestGeneration) tabLoading[tab] = false } }
 function markDataRefreshed(generation: number) { if (generation === requestGeneration) dataRefreshedAt.value = formatDateTime(new Date()) }
-async function initializePage(generation=requestGeneration) { if (!props.periodId) return; pageLoading.value = true; try { const otherStage=activeStage.value === 'pre_payment' ? 'post_payment' : 'pre_payment'; await Promise.all([loadOverview(false,generation),loadReadiness(generation),fetchOverview(otherStage)]); if (generation === requestGeneration && overview.value?.exists) { await ensureTabLoaded(activeTab.value,generation); if (tabLoaded[activeTab.value]) markDataRefreshed(generation); scheduleTableHeight() } } catch { if (generation === requestGeneration) ElMessage.error('个税底稿初始化失败') } finally { if (generation === requestGeneration) pageLoading.value = false } }; async function handleTabChange(value: string | number) { await ensureTabLoaded(value as PitTabKey,requestGeneration); scheduleTableHeight() }
-function resetPitPage() { overview.value = null; readiness.value = []; dataRefreshedAt.value = ''; summaryRows.value = []; taxAmountRows.value = []; occurrenceRows.value = []; declarationRows.value = []; salaryTaxRows.value = []; salaryTaxableIncomeRows.value = []; bondInterestRows.value = []; restrictedStockRows.value = []; bankMatchRows.value = []; orgFilter.value = ''; keyword.value = ''; displayMode.value = 'all'; isFullscreen.value = false; if (typeof document !== 'undefined') document.body.style.overflow = ''; updateTableHeight(); pitTabKeys.forEach((key) => { tabLoaded[key] = false; if (isRawTab(key)) Object.assign(rawSheets[key],{ columns:[],rows:[],total:0,page:1,loading:false }) }) }
-async function refreshCurrentStage() { if (!props.periodId) return; const generation = ++requestGeneration; overviewCache.delete(overviewCacheKey(activeStage.value)); tabLoaded[activeTab.value] = false; try { await Promise.all([loadOverview(true,generation), loadReadiness(generation)]); await ensureTabLoaded(activeTab.value,generation); if (tabLoaded[activeTab.value]) markDataRefreshed(generation); ElMessage.success('当前阶段已刷新') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '当前阶段刷新失败') } }
-async function refreshFmssState() { if (!props.periodId || fmssRefreshing.value) return; fmssRefreshing.value = true; try { const { data } = await fmssApi.declaration(props.periodId, activeStage.value); fmssState.value = data.status; ElMessage.success('FMSS线上状态已刷新') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || 'FMSS线上状态查询失败') } finally { fmssRefreshing.value = false } }
-async function openSubmitReviewer() { if (!props.periodId || submitDisabledReason.value) return; try { const { data } = await fmssApi.reviewers(props.periodId); const rows = Array.isArray(data) ? data : data?.rows || []; reviewerOptions.value = rows.map((row: any) => { const username = String(row?.username || row?.userName || row?.loginName || row?.account || row || '').trim(); return { username, label: String(row?.name || row?.displayName || username) } }).filter((row: { username: string }) => row.username); if (reviewerOptions.value.length === 1) selectedReviewer.value = reviewerOptions.value[0].username; reviewerDialogVisible.value = true } catch (error: any) { ElMessage.error(error?.response?.data?.detail || 'FMSS复核人列表获取失败') } }
-async function submitOnline() { if (!props.periodId || !selectedReviewer.value || submitOnlineLoading.value) return; submitOnlineLoading.value = true; try { await fmssApi.submit(props.periodId, selectedReviewer.value, activeStage.value); reviewerDialogVisible.value = false; await refreshFmssState(); ElMessage.success('FMSS提交审核已完成') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || 'FMSS提交审核失败') } finally { submitOnlineLoading.value = false } }
+async function initializePage(generation=requestGeneration) {
+  if (!props.periodId) return
+  pageLoading.value = true
+  try {
+    await Promise.all([loadOverview(false,generation), loadReadiness(generation)])
+    if (generation !== requestGeneration || !overview.value?.exists) return
+
+    // Every PRE/POST switch synchronizes the online declaration before this stage is displayed.
+    await refreshFmssState(true, false)
+    if (generation !== requestGeneration) return
+    await loadOverview(true,generation)
+    await ensureTabLoaded(activeTab.value,generation)
+    if (tabLoaded[activeTab.value]) markDataRefreshed(generation)
+    scheduleTableHeight()
+  } catch {
+    if (generation === requestGeneration) ElMessage.error('个税底稿初始化失败')
+  } finally {
+    if (generation === requestGeneration) pageLoading.value = false
+  }
+}
+async function handleTabChange(value: string | number) { await ensureTabLoaded(value as PitTabKey,requestGeneration); scheduleTableHeight() }
+function resetPitPage() { overview.value = null; readiness.value = []; dataRefreshedAt.value = ''; fmssState.value = 'NOT_SUBMITTED'; doubleReviewCompleted.value = false; fmssStateUnavailable.value = false; summaryRows.value = []; taxAmountRows.value = []; occurrenceRows.value = []; declarationRows.value = []; salaryTaxRows.value = []; salaryTaxableIncomeRows.value = []; bondInterestRows.value = []; restrictedStockRows.value = []; bankMatchRows.value = []; orgFilter.value = ''; keyword.value = ''; displayMode.value = 'all'; isFullscreen.value = false; if (typeof document !== 'undefined') document.body.style.overflow = ''; updateTableHeight(); pitTabKeys.forEach((key) => { tabLoaded[key] = false; tabLoading[key] = false; if (isRawTab(key)) Object.assign(rawSheets[key],{ columns:[],rows:[],total:0,page:1,loading:false }) }) }
+async function refreshPreparationData() { if (!props.periodId) return; const generation = ++requestGeneration; overviewCache.delete(overviewCacheKey(activeStage.value)); tabLoaded[activeTab.value] = false; try { await Promise.all([loadOverview(true,generation), loadReadiness(generation)]); await ensureTabLoaded(activeTab.value,generation); if (tabLoaded[activeTab.value]) markDataRefreshed(generation); ElMessage.success('当前阶段数据准备已刷新') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '当前阶段数据准备刷新失败') } }
+function workflowStatusFromFmss(status: string) { return ({ REVIEWING:'submitted', APPROVED:'reviewed', RETURNED:'returned' } as Record<string, string>)[status] }
+function applyFmssState(status: string, declarationId?: string | null, doubleReviewed = false) {
+  fmssState.value = status
+  doubleReviewCompleted.value = doubleReviewed
+  fmssStateUnavailable.value = false
+  if (!overview.value) return
+  const workflowStatus = workflowStatusFromFmss(status)
+  const nextOverview = {
+    ...overview.value,
+    workpaper: {
+      ...overview.value.workpaper,
+      ...(workflowStatus ? { workflow_status: workflowStatus } : {}),
+      ...(declarationId ? { platform_submission_id: declarationId } : {}),
+    },
+  }
+  overview.value = nextOverview
+  overviewCache.set(overviewCacheKey(activeStage.value), nextOverview)
+}
+async function refreshFmssState(silent = false, reloadOverview = true) {
+  if (!props.periodId) return false
+  const pageGeneration = requestGeneration
+  const stage = activeStage.value
+  const fmssGeneration = ++fmssRequestGeneration
+  fmssRefreshing.value = true
+  try {
+    // This endpoint synchronizes the local workflow state on the server. Keep the loaded workpaper rows intact.
+    const { data } = await fmssApi.declaration(props.periodId, stage)
+    if (fmssGeneration !== fmssRequestGeneration || pageGeneration !== requestGeneration || stage !== activeStage.value) return false
+    applyFmssState(data.status, data.declaration_id, Boolean(data.double_review_completed))
+    if (reloadOverview) await loadOverview(true, pageGeneration)
+    if (!silent) ElMessage.success('FMSS线上状态已刷新')
+    return true
+  } catch (error: any) {
+    if (fmssGeneration === fmssRequestGeneration && overview.value?.workpaper?.platform_submission_id) fmssStateUnavailable.value = true
+    if (!silent && fmssGeneration === fmssRequestGeneration && pageGeneration === requestGeneration) ElMessage.error('线上状态刷新失败')
+    return false
+  } finally {
+    if (fmssGeneration === fmssRequestGeneration) fmssRefreshing.value = false
+  }
+}
+function localWorkpaperReady() { const workpaper = overview.value?.workpaper; return workpaper?.calculation_status === 'success' && ['ready', 'complete'].includes(String(workpaper?.data_status || '')) }
+async function openSubmitReviewer() {
+  if (!props.periodId || submitDisabledReason.value) return
+  try {
+    const { data } = await fmssApi.reviewers(props.periodId, activeStage.value)
+    const rows = Array.isArray(data) ? data : data?.rows || []
+    reviewerOptions.value = rows.map((row: any) => { const username = String(row?.username || row?.userName || row?.loginName || row?.account || row || '').trim(); return { username, label: String(row?.name || row?.displayName || username) } }).filter((row: { username: string }) => row.username)
+    if (reviewerOptions.value.length === 1) selectedReviewer.value = reviewerOptions.value[0].username
+    reviewerDialogVisible.value = true
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || 'FMSS复核人列表获取失败')
+  }
+}
+async function submitOnline() { if (!props.periodId || !selectedReviewer.value || submitOnlineLoading.value) return; submitOnlineLoading.value = true; try { await fmssApi.submit(props.periodId, selectedReviewer.value, activeStage.value); reviewerDialogVisible.value = false; const refreshed = await refreshFmssState(); if (!refreshed) { fmssStateUnavailable.value = true; return } if (activeStage.value === 'post_payment' && fmssState.value !== 'REVIEWING') { ElMessage.error(`FMSS提交接口已响应，但线上状态为${fmssStateLabel.value}`); return } ElMessage.success('FMSS提交审核已完成') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || 'FMSS提交审核失败') } finally { submitOnlineLoading.value = false } }
 async function applySearch() { if (isRawTab(activeTab.value)) { tabLoaded[activeTab.value] = false; await loadRawSheet(activeTab.value,1,requestGeneration) } }
 async function resetFilters() { orgFilter.value=''; keyword.value=''; displayMode.value='all'; await applySearch() }
 async function recalculate(stage: 'pre_payment' | 'post_payment') { if (!props.periodId || !isEditable.value) return; recalculateLoading.value = true; try { await pitReconciliationApi.recalculate(props.periodId, stage); overviewCache.delete(overviewCacheKey(stage)); resetPitPage(); await initializePage(); ElMessage.success(stage === 'pre_payment' ? '缴款前底稿已重新计算' : '缴款后底稿已重新计算') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '计算失败') } finally { recalculateLoading.value = false } }
@@ -233,7 +346,7 @@ async function importOccurrenceDescriptions(event: Event) { const input = event.
 function openReasonEditor(row: TableRow, field: ReasonField, kind: ReasonKind) { editingReasonRow.value = row; editingReasonField.value = field; editingReasonKind.value = kind; editingReasonText.value = String(row[field] ?? row.auto_reason ?? ''); reasonDialogVisible.value = true }
 async function saveReason(reason: string) { const row = editingReasonRow.value; const field = editingReasonField.value; if (!isEditable.value || !row || !field || !props.periodId) return; reasonSaving.value = true; try { const payload = { [field]: reason }; if (editingReasonKind.value === 'summary') await pitReconciliationApi.updateSummary(props.periodId,activeStage.value,Number(row.id),payload as any); if (editingReasonKind.value === 'tax') await pitReconciliationApi.updateTaxAmountCheck(props.periodId,activeStage.value,Number(row.id),payload as any); if (editingReasonKind.value === 'occurrence') await pitReconciliationApi.updateOccurrenceCheck(props.periodId,activeStage.value,Number(row.id),payload as any); if (editingReasonKind.value === 'difference') await pitReconciliationApi.updateDifference(props.periodId,activeStage.value,Number(row.id),{ manual_reason:reason }); overviewCache.delete(overviewCacheKey(activeStage.value)); await loadOverview(true); row[field] = reason; editingReasonText.value = reason; reasonDialogVisible.value = false; ElMessage.success('人工原因已保存') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '保存失败') } finally { reasonSaving.value = false } }
 async function drillDown(tab: PitTabKey, orgCode?: string) { orgFilter.value = orgCode || ''; activeTab.value = tab; await ensureTabLoaded(tab) }; function openSalaryDrawer(row: unknown) { detailDrawerRow.value = row as PitDifferenceDetail; detailDrawerVisible.value = true }; function subjectDetailTab(row: PitTaxAmountCheck): PitTabKey { return row.subject_code === '21510008' ? 'bondInterest' : row.subject_code === '21510009' ? 'restrictedStock' : 'salaryTax' }
-watch([() => props.companyId, () => props.periodId, activeStage],async () => { const generation = ++requestGeneration; activeTab.value = activeStage.value === 'pre_payment' ? 'summary' : 'postPaymentCheck'; resetPitPage(); await initializePage(generation) },{ immediate:true })
+watch([() => props.companyId, () => props.periodId, () => props.initialStage, activeStage],async () => { if (props.initialStage && activeStage.value !== props.initialStage) activeStage.value = props.initialStage; const generation = ++requestGeneration; activeTab.value = activeStage.value === 'pre_payment' ? 'summary' : 'postPaymentCheck'; resetPitPage(); await initializePage(generation) },{ immediate:true })
 onMounted(() => { updateTableHeight(); window.addEventListener('resize', updateTableHeight) })
 onBeforeUnmount(() => { window.removeEventListener('resize', updateTableHeight); if (typeof document !== 'undefined') document.body.style.overflow = '' })
 const MoneyColumn = defineComponent({ props:{ label:{ type:String,required:true },field:{ type:String,required:true } },setup(componentProps) { return () => h(ElTableColumn,{ prop:componentProps.field,label:componentProps.label,width:Math.max(140,rawColumnWidth(componentProps.label)),align:'right' },{ default:({ row }: { row:TableRow }) => formatMoney(row[componentProps.field]) }) } })

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import webbrowser
 import unicodedata
 from typing import Literal
 
@@ -12,6 +11,7 @@ from app.api.dependencies import require_company
 from app.core.company_context import current_company_id
 from app.core.config import settings
 from app.db.session import get_db
+from app.integrations.fmss.browser_auth import fmss_browser_auth
 from app.integrations.fmss.client import FmssClient
 from app.integrations.fmss.errors import FmssError, FmssPermissionDenied
 from app.integrations.fmss.identity import FmssIdentityResolver
@@ -72,15 +72,23 @@ def session_state(validate: bool = Query(False)):
 @router.post("/logout")
 def logout():
     fmss_session.clear()
+    fmss_browser_auth.close()
     return {"cleared": True}
 
 
-@router.post("/login/open")
-def open_login():
-    # Login is intentionally separated from PIT writes.  A desktop bridge must
-    # inject the resulting token into the process-only FmssSession.
-    webbrowser.open(settings.fmss_login_url)
-    return {"opened": True}
+@router.post("/browser/open")
+def open_browser_login():
+    return fmss_browser_auth.open()
+
+
+@router.get("/browser/status")
+def browser_status():
+    return fmss_browser_auth.status()
+
+
+@router.post("/browser/close")
+def close_browser_login():
+    return fmss_browser_auth.close()
 
 
 @router.get("/iit/branches")
@@ -112,7 +120,7 @@ def approval_log(period_id: int = Query(...), db: Session = Depends(get_db)):
     try:
         service = PitOnlineService(db)
         company, period = service._context(current_company_id(), period_id)
-        return FmssClient().approval_log(company.fmss_branch_code, f"{period.year}-{period.month:02d}")
+        return FmssClient().approval_log(service.fmss_branch_code(company), f"{period.year}-{period.month:02d}")
     except FmssError as exc:
         raise _fail(exc) from exc
 
@@ -126,11 +134,11 @@ def review(declaration_id: str):
 
 
 @router.get("/iit/reviewers", dependencies=[Depends(require_company)])
-def reviewers(period_id: int = Query(...), stage: Literal["pre_payment"] = Query("pre_payment"), db: Session = Depends(get_db)):
+def reviewers(period_id: int = Query(...), stage: Literal["pre_payment", "post_payment"] = Query("pre_payment"), db: Session = Depends(get_db)):
     try:
         service = PitOnlineService(db)
         company, period = service._context(current_company_id(), period_id)
-        return FmssClient().reviewers(company.fmss_branch_code, f"{period.year}-{period.month:02d}", "PRE")
+        return FmssClient().reviewers(service.fmss_branch_code(company), f"{period.year}-{period.month:02d}", "PRE" if stage == "pre_payment" else "POST")
     except FmssError as exc:
         raise _fail(exc) from exc
 
@@ -153,11 +161,9 @@ def decision(declaration_id: str, payload: DecisionPayload, db: Session = Depend
         raise HTTPException(status_code=404, detail="本地没有找到该FMSS申报单关联")
     try:
         current_user = fmss_session.snapshot().username
-        if not current_user:
-            raise FmssPermissionDenied()
         service = PitOnlineService(db)
         company, period = service._context(workpaper.company_id, workpaper.period_id)
-        approval = FmssClient().approval_log(company.fmss_branch_code, f"{period.year}-{period.month:02d}")
+        approval = FmssClient().approval_log(service.fmss_branch_code(company), f"{period.year}-{period.month:02d}")
         rows = approval.get("rows", []) if isinstance(approval, dict) else []
         normal = lambda value: unicodedata.normalize("NFC", str(value or "").strip())
         allowed = any(
@@ -166,7 +172,7 @@ def decision(declaration_id: str, payload: DecisionPayload, db: Session = Depend
             and normal(row.get("reviewer")) == normal(current_user)
             for row in rows if isinstance(row, dict)
         )
-        if not allowed:
+        if current_user and not allowed:
             raise FmssPermissionDenied()
         return service.decide_workpaper(workpaper, payload.passed, payload.comment)
     except FmssError as exc:
@@ -178,6 +184,19 @@ def decision_body(payload: DecisionPayload, db: Session = Depends(get_db)):
     if not payload.id:
         raise HTTPException(status_code=422, detail="缺少FMSS申报单ID")
     return decision(payload.id, payload, db)
+
+
+@router.post("/iit/withdraw/{declaration_id}", dependencies=[Depends(require_company)])
+def withdraw(declaration_id: str, db: Session = Depends(get_db)):
+    workpaper = db.query(PitReconciliationWorkpaper).filter_by(
+        company_id=current_company_id(), platform_submission_id=declaration_id,
+    ).first()
+    if workpaper is None:
+        raise HTTPException(status_code=404, detail="本地没有找到该FMSS申报单关联")
+    try:
+        return PitOnlineService(db).withdraw_workpaper(workpaper)
+    except FmssError as exc:
+        raise _fail(exc) from exc
 
 
 @router.get("/iit/config")

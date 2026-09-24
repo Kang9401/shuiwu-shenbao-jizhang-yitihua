@@ -62,6 +62,9 @@ export interface SubmittedWorkpaper {
   submitterName: string
   submittedAt: string
   sheets: WorkpaperSheet[]
+  reviewerName?: string
+  canReview?: boolean
+  canWithdraw?: boolean
 }
 
 export interface ReviewHistoryItem {

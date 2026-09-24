@@ -9,6 +9,11 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
+from app.models.core import Company, Period
+from app.core.company_context import current_company_id
+from app.integrations.fmss.branch_code import to_fmss_branch_code
+from app.integrations.fmss.client import FmssClient
+from app.integrations.fmss.errors import FmssError
 from app.services.excel import dataframe_records, read_excel
 from app.services.storage import save_upload
 
@@ -229,6 +234,11 @@ def import_tax_certificate_files(db: Session, *, period_id: int, files: list[Upl
     batch = ReconciliationImportBatch(period_id=period_id, import_type="tax_certificate", original_name="完税证明批量导入", stored_path="", row_count=0, validation_issues=[], file_results=[])
     db.add(batch); db.flush(); all_issues=[]; count=0; paths=[]
     file_results: list[dict[str, Any]] = []
+    period = db.query(Period).filter_by(id=period_id, company_id=current_company_id()).one()
+    company = db.query(Company).filter_by(id=period.company_id).one_or_none()
+    branch_code = to_fmss_branch_code(company.code if company is not None else str(period.company_id))
+    month = f"{period.year}-{period.month:02d}"
+    fmss_client = FmssClient()
     for file in files:
         file_name = file.filename or "tax_certificate.pdf"
         try:
@@ -237,7 +247,24 @@ def import_tax_certificate_files(db: Session, *, period_id: int, files: list[Upl
             all_issues.extend([{**issue, "file_name": file_name} for issue in exc.issues]); continue
         path, _ = save_upload(file, period_id, "tax_certificate")
         paths.append(str(path)); records, issues = parse_tax_certificate_pdf(path); all_issues.extend([{**issue, "file_name": file.filename} for issue in issues])
-        file_results.append({"file_name": file_name, "status": "success" if records else "failed", "error": ";".join(issue.get("message", "") for issue in issues) if issues else None})
+        result = {"file_name": file_name, "status": "success" if records else "failed", "error": ";".join(issue.get("message", "") for issue in issues) if issues else None}
+        if records:
+            existing = next((item for item in file_results if item.get("file_name") == file_name and item.get("fmss_file_id") is not None), None)
+            if existing is not None:
+                result["fmss_file_id"] = existing["fmss_file_id"]
+            else:
+                try:
+                    upload_result = fmss_client.upload_iit_attachment(
+                        branch_code, month, "POST", path, file_name=file_name
+                    )
+                    file_id = upload_result.get("fileId") if isinstance(upload_result, dict) else None
+                    if file_id is None:
+                        raise FmssError("FMSS完税凭证上传未返回fileId")
+                    result["fmss_file_id"] = file_id
+                except Exception as exc:
+                    result["status"] = "failed"
+                    result["error"] = f"FMSS完税凭证上传失败：{exc}"
+        file_results.append(result)
         for raw in records:
             count += 1
             raw_for_storage = {key: (str(value) if isinstance(value, Decimal) else value) for key, value in raw.items()}

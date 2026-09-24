@@ -9,7 +9,6 @@ import socket
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 
@@ -29,71 +28,12 @@ from app.main import app
 
 _mutex_handle = None
 _monitor_window = None
-_fmss_window = None
 _desktop_exiting = False
+
+logger = logging.getLogger(__name__)
 
 
 class DesktopWindowManager:
-    def open_fmss_login(self) -> dict:
-        global _fmss_window
-        import webview
-        from app.integrations.fmss.browser_auth import extract_admin_token, is_fmss_business_page
-        from app.integrations.fmss.client import FmssClient
-        from app.integrations.fmss.errors import FmssError
-        from app.integrations.fmss.session import fmss_session
-
-        if _fmss_window is None:
-            _fmss_window = webview.create_window(
-                "FMSS登录",
-                settings.fmss_login_url,
-                width=1100,
-                height=800,
-                text_select=True,
-            )
-            def on_loaded() -> None:
-                global _fmss_window
-                window = _fmss_window
-                if window is None:
-                    return
-                try:
-                    page_url = window.get_current_url() or ""
-                    if not is_fmss_business_page(page_url):
-                        return
-                    token = extract_admin_token(window.get_cookies())
-                    if not token:
-                        return
-                    fmss_session.connect(token)
-                    FmssClient(fmss_session).sheets("PRE")
-                except FmssError:
-                    fmss_session.clear()
-                    return
-                except Exception:
-                    fmss_session.clear()
-                    return
-                window.hide()
-                window.destroy()
-                _fmss_window = None
-
-            _fmss_window.events.loaded += on_loaded
-        else:
-            _fmss_window.show()
-        return {"opened": True}
-
-    def close_fmss_login(self) -> dict:
-        global _fmss_window
-        if _fmss_window is not None:
-            _fmss_window.hide()
-        return {"closed": True}
-
-    def clear_fmss_login(self) -> dict:
-        """Close the dedicated login window without touching system Chrome cookies."""
-        global _fmss_window
-        if _fmss_window is not None:
-            _fmss_window.hide()
-            _fmss_window.destroy()
-            _fmss_window = None
-        return {"cleared": True}
-
     def open_rpa_monitor(self) -> dict:
         if _monitor_window is None:
             return {"opened": False, "message": "监控窗口尚未初始化"}
@@ -313,6 +253,7 @@ def main() -> int:
                 text_select=True,
                 js_api=manager,
             )
+            logger.info("TaxWorkbench desktop window started")
             _monitor_window = webview.create_window(
                 "RPA 任务监控",
                 f"{url}/?window=rpa-monitor",
@@ -330,10 +271,6 @@ def main() -> int:
                 private_mode=False,
                 storage_path=str(settings.storage_root / "webview"),
             )
-        except ImportError:
-            webbrowser.open(url)
-            while thread.is_alive():
-                time.sleep(0.5)
         finally:
             _stop_server(server, thread)
         return 0

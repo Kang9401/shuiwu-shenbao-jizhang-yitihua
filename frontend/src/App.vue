@@ -75,8 +75,8 @@
         <div class="topbar-right">
           <div class="fmss-topbar-status" title="FMSS连接状态">
             <span class="fmss-env-tag">{{ fmssEnvironment.toUpperCase() }}</span>
-            <span>FMSS已连接</span>
-            <strong>{{ fmssIdentity.displayName || fmssIdentity.username || '当前用户' }}</strong>
+            <span v-if="fmssIdentity.displayName || fmssIdentity.username">用户：{{ fmssIdentity.displayName || fmssIdentity.username }}登录中</span>
+            <span v-else>FMSS已登录（账号信息未获取）</span>
             <el-button link type="primary" @click="switchFmssAccount">切换账号</el-button>
           </div>
           <div class="company-control">
@@ -170,7 +170,7 @@
 
         <PitReconciliation v-else-if="activeView === 'pit_reconciliation'" :company-id="selectedCompany?.id" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" :company-name="selectedCompany?.name || '未选择'" />
 
-        <PitReview v-else-if="activeView === 'pit_review'" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" />
+        <PitReview v-else-if="activeView === 'pit_review'" :company-id="selectedCompany?.id" :period-id="selectedPeriodId" :period-label="selectedPeriodLabel" />
 
         <MonthlyPersonnelWorkflow
           v-else-if="activeWorkflow && ['broker_tax', 'intern_tax', 'part_time_tax'].includes(activeWorkflow.code)"
@@ -552,8 +552,7 @@ function handleFmssExpired() {
   fmssIdentity.username = null
   fmssIdentity.displayName = null
   session.value = null
-  const bridge = (window as any).pywebview?.api
-  if (bridge?.clear_fmss_login) void bridge.clear_fmss_login()
+  void fmssApi.closeBrowserLogin()
 }
 
 async function switchFmssAccount() {
@@ -562,14 +561,12 @@ async function switchFmssAccount() {
   } catch {
     // The local session is cleared below even when the API request fails.
   }
-  const bridge = (window as any).pywebview?.api
-  if (bridge?.clear_fmss_login) await bridge.clear_fmss_login()
   fmssReady.value = false
   fmssBranches.value = []
   fmssIdentity.username = null
   fmssIdentity.displayName = null
   session.value = null
-  if (bridge?.open_fmss_login) await bridge.open_fmss_login()
+  await fmssApi.openBrowserLogin()
 }
 
 async function loadFmssBranches() {

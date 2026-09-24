@@ -15,6 +15,20 @@ from app.services.pit_reconciliation.repository import PitReconciliationReposito
 from app.api import pit_reconciliations as pit_api
 
 
+def test_post_unresolved_bank_organization_issue_is_non_blocking():
+    allowed = {
+        "source_type": "bank_statement",
+        "issues_json": [{"issue_type": "unresolved_bank_organization", "message": "未识别本方机构"}],
+    }
+    blocking = {
+        "source_type": "bank_statement",
+        "issues_json": [{"issue_type": "invalid_amount", "message": "金额无效"}],
+    }
+    assert not pit_api._has_blocking_source_issues(allowed, "post_payment")
+    assert pit_api._has_blocking_source_issues(blocking, "post_payment")
+    assert pit_api._has_blocking_source_issues(allowed, "pre_payment")
+
+
 def _client_with_workpaper():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False)

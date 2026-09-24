@@ -616,15 +616,18 @@ export interface FmssSheetDefinition { key: string; title: string; headers: stri
 export const fmssApi = {
   session: (validate = false) => api.get<FmssSession>('/fmss/session', { params: { validate: validate || undefined } }),
   logout: () => api.post<{ cleared: boolean }>('/fmss/logout'),
-  openLogin: () => api.post<{ opened: boolean }>('/fmss/login/open'),
+  openBrowserLogin: () => api.post<{ status: string; message: string | null }>('/fmss/browser/open'),
+  browserStatus: () => api.get<{ status: string; message: string | null }>('/fmss/browser/status'),
+  closeBrowserLogin: () => api.post<{ status: string; message: string | null }>('/fmss/browser/close'),
   branches: () => api.get<FmssBranch[] | { rows?: FmssBranch[] }>('/fmss/iit/branches'),
   sheets: (stage: 'PRE' | 'POST') => api.get<FmssSheetDefinition[]>('/fmss/iit/sheets', { params: { stage } }),
-  declaration: (periodId: number, stage: PitStage) => api.get<{ status: string; declaration: unknown; declaration_id: string | null }>('/fmss/iit/declaration', { params: { period_id: periodId, stage } }),
+  declaration: (periodId: number, stage: PitStage) => api.get<{ status: string; declaration: unknown; declaration_id: string | null; double_review_completed?: boolean }>('/fmss/iit/declaration', { params: { period_id: periodId, stage } }),
   approvalLog: (periodId: number) => api.get<{ rows?: any[]; canManage?: boolean }>('/fmss/iit/approval-log', { params: { period_id: periodId } }),
   review: (declarationId: string) => api.get<any>(`/fmss/iit/review/${encodeURIComponent(declarationId)}`),
-  reviewers: (periodId: number) => api.get<any>('/fmss/iit/reviewers', { params: { period_id: periodId } }),
+  reviewers: (periodId: number, stage: PitStage) => api.get<any>('/fmss/iit/reviewers', { params: { period_id: periodId, stage } }),
   submit: (periodId: number, reviewer: string, stage: PitStage) => api.post<any>('/fmss/iit/submit', { period_id: periodId, reviewer, stage }),
   decision: (declarationId: string, passed: boolean, comment: string) => api.post<any>('/fmss/iit/decision', { id: declarationId, passed, comment }),
+  withdraw: (declarationId: string) => api.post<any>(`/fmss/iit/withdraw/${encodeURIComponent(declarationId)}`),
 }
 
 export const financeAIApi = {

@@ -152,6 +152,11 @@ def test_tax_certificate_batch_reports_each_pdf(monkeypatch, tmp_path):
     first = tmp_path / "one.pdf"; second = tmp_path / "two.xlsx"
     first.write_bytes(b"pdf"); second.write_bytes(b"xlsx")
     monkeypatch.setattr("app.services.pit_reconciliation.parsers.tax_certificate_parser.parse_tax_certificate_pdf", lambda path: ([{"org_code": "10001", "taxpayer_name": "测试", "amount": "1.00"}], []))
+    monkeypatch.setattr(
+        "app.services.reconciliation_import.FmssClient.upload_iit_attachment",
+        lambda self, branch, month, stage, path, *, file_name=None: {"fileId": 26},
+    )
     batch = import_tax_certificate_files(db, period_id=period.id, files=[_upload(first), _upload(second)])
     assert {item["file_name"]: item["status"] for item in batch.file_results} == {"one.pdf": "success", "two.xlsx": "failed"}
+    assert batch.file_results[0]["fmss_file_id"] == 26
     db.close()

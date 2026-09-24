@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from .session import FmssSession, fmss_session
 class FmssClient:
     """Small authenticated FMSS client. GET may retry once; writes never retry."""
 
-    def __init__(self, session: FmssSession = fmss_session, *, timeout: float = 20.0) -> None:
+    def __init__(self, session: FmssSession = fmss_session, *, timeout: float = 30.0) -> None:
         self.session = session
         self.timeout = timeout
 
@@ -24,7 +25,7 @@ class FmssClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
-        files: dict[str, Any] | None = None,
+        files: Any = None,
         data: dict[str, Any] | None = None,
     ) -> Any:
         authorization, generation = self.session.authorization_header()
@@ -41,7 +42,7 @@ class FmssClient:
                     json=json,
                     files=files,
                     data=data,
-                    timeout=self.timeout,
+                    timeout=300.0 if files is not None else self.timeout,
                 )
                 if response.status_code == 401:
                     self.session.clear()
@@ -92,8 +93,28 @@ class FmssClient:
                 files={"file": (file_path.name, handle, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             )
 
+    def upload_iit_attachment(
+        self,
+        branch_code: str,
+        month: str,
+        stage: str,
+        file_path: Path,
+        *,
+        file_name: str | None = None,
+    ) -> Any:
+        with file_path.open("rb") as handle:
+            return self._request(
+                "POST",
+                "/iit/attachment/upload",
+                data={"branchCode": branch_code, "month": month, "stage": stage},
+                files={"file": (file_name or file_path.name, handle, "application/pdf")},
+            )
+
     def submit_iit_declaration(self, declaration_id: str | int, reviewer: str) -> Any:
         return self._request("POST", "/iit/submit", json={"id": int(declaration_id), "reviewer": reviewer.strip()})
+
+    def withdraw_iit_declaration(self, declaration_id: str | int) -> Any:
+        return self._request("POST", f"/iit/withdraw/{int(declaration_id)}")
 
     def decide_iit_declaration(self, declaration_id: str | int, passed: bool, comment: str) -> Any:
         return self._request(
@@ -101,6 +122,19 @@ class FmssClient:
             "/iit/decision",
             json={"id": int(declaration_id), "pass": bool(passed), "comment": comment.strip()},
         )
+
+    def upload_iit_certificates(self, declaration_id: str | int, file_paths: list[Path]) -> Any:
+        if not file_paths:
+            raise FmssApiError("没有可绑定的完税凭证文件")
+        with ExitStack() as stack:
+            files = [
+                ("files", (path.name, stack.enter_context(path.open("rb")), "application/pdf"))
+                for path in file_paths
+            ]
+            return self._request("POST", f"/iit/certificate/{declaration_id}/batch", files=files)
+
+    def certificates(self, declaration_id: str | int) -> Any:
+        return self._request("GET", f"/iit/certificate/{declaration_id}")
 
     def get_iit_config(self, version: str = "") -> Any:
         return self._request("GET", "/iit/config", params={"version": version})
