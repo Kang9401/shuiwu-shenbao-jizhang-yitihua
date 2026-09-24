@@ -36,6 +36,9 @@ backend/vendor/etax_rpa/机构信息表.xlsx
 /backend/database/
 /backend/databases/
 /etax_github_source_20260714/
+/.tmp_reference_inspection/
+/.tmp_salary_headers/
+/artifacts/etax_page_snapshots/
 
 # Local business data and generated tax-workbook artifacts. Keep only the
 # placeholder so the runtime storage directory exists after checkout.
