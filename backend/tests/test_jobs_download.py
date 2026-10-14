@@ -2,13 +2,16 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import jobs as jobs_api
+from app.core.config import Settings, settings
 from app.db.session import Base
 from app.models.core import Artifact, Job
+from app.schemas.core import JobSaveAllRequest
 
 
 def _db_session():
@@ -22,9 +25,10 @@ def _db_session():
     return testing_session_local()
 
 
-def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_path: Path):
+@pytest.mark.parametrize("workflow_code", ["intern_tax", "part_time_tax", "broker_tax", "restricted_stock_interest_tax"])
+def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_path: Path, workflow_code):
     db = _db_session()
-    job = Job(workflow_code="restricted_stock_interest_tax", input_file_ids=[], status="success")
+    job = Job(workflow_code=workflow_code, input_file_ids=[], status="success")
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -49,3 +53,50 @@ def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_p
         f"申报文件/{collection.name}",
     ]
     db.close()
+
+
+def test_desktop_save_all_filters_artifacts_sanitizes_names_and_avoids_overwrite(tmp_path: Path, monkeypatch):
+    db = _db_session()
+    job = Job(workflow_code="broker_tax", input_file_ids=[], status="success")
+    db.add(job)
+    db.commit()
+    source = tmp_path / "source.xlsx"
+    source.write_text("declaration", encoding="utf-8")
+    db.add_all([
+        Artifact(job_id=job.id, artifact_type="declaration", file_name="../申报.xlsx", stored_path=str(source)),
+        Artifact(job_id=job.id, artifact_type="personnel_collection", file_name="申报.xlsx", stored_path=str(source)),
+        Artifact(job_id=job.id, artifact_type="working_sheet", file_name="底稿.xlsx", stored_path=str(source)),
+    ])
+    db.commit()
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(settings, "runtime_mode", "desktop")
+
+    result = jobs_api.save_job_declarations(job.id, JobSaveAllRequest(directory=str(target)), db)
+
+    assert result["saved_count"] == 2
+    assert sorted(path.name for path in target.iterdir()) == ["申报 (1).xlsx", "申报.xlsx"]
+    db.close()
+
+
+def test_save_all_is_rejected_outside_desktop_mode(tmp_path: Path, monkeypatch):
+    db = _db_session()
+    job = Job(workflow_code="broker_tax", input_file_ids=[], status="success")
+    db.add(job)
+    db.commit()
+    monkeypatch.setattr(settings, "runtime_mode", "development")
+
+    from fastapi import HTTPException
+    try:
+        jobs_api.save_job_declarations(job.id, JobSaveAllRequest(directory=str(tmp_path)), db)
+        assert False, "expected desktop-mode rejection"
+    except HTTPException as error:
+        assert error.status_code == 403
+    finally:
+        db.close()
+
+
+def test_settings_uses_desktop_launcher_runtime_mode(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MODE", raising=False)
+    monkeypatch.setenv("APP_RUNTIME_MODE", "desktop")
+    assert Settings().runtime_mode == "desktop"

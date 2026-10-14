@@ -16,6 +16,7 @@ PERSONNEL_CHANGE_COLUMNS = [
     "*姓名", "证件类型", "证件号码", "国籍(地区)", "性别", "出生日期",
     "人员状态", "任职受雇从业类型", "手机号码", "任职受雇从业日期",
     "离职日期", "机构代码(人员信息表)", "机构代码(工资单)", "员工编号",
+    "涉税事由", "出生国家(地区)",
 ]
 
 MISSING_REQUIRED_FILL = PatternFill(fill_type="solid", fgColor="FFFF00")
@@ -77,6 +78,8 @@ def build_personnel_change_review_table(report: dict, year: int, month: int) -> 
             "机构代码(人员信息表)": org_staff,
             "机构代码(工资单)": org_payroll,
             "员工编号": _clean(item.get("employee_id")),
+            "涉税事由": _clean(item.get("tax_reason")) or ("其他" if _clean(item.get("cert_type")) not in {"", "居民身份证"} else ""),
+            "出生国家(地区)": _clean(item.get("birth_country")) or ("国籍" if _clean(item.get("cert_type")) not in {"", "居民身份证"} else ""),
         })
 
     def enrich_transfer_hire(item: dict) -> dict:
@@ -133,9 +136,11 @@ def write_personnel_change_review_table(df: pd.DataFrame, path: str | Path) -> N
 
         for row_number, (_, row) in enumerate(df.iterrows(), start=2):
             required = ["*姓名", "证件类型", "证件号码", "员工编号", "机构代码(人员信息表)"]
+            if _clean(row.get("人员状态")) == "非正常":
+                required.extend(["手机号码", "任职受雇从业日期"])
             cert_type = _clean(row.get("证件类型"))
             if cert_type and cert_type != "居民身份证":
-                required.extend(["国籍(地区)", "性别", "出生日期"])
+                required.extend(["国籍(地区)", "性别", "出生日期", "涉税事由", "出生国家(地区)"])
             for column in required:
                 if not _clean(row.get(column)):
                     worksheet.cell(row=row_number, column=column_index[column]).fill = MISSING_REQUIRED_FILL

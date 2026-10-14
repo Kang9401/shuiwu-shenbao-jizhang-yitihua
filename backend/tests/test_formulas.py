@@ -1,15 +1,25 @@
 import pandas as pd
 
+from app.services.verification import DECLARATION_COLUMNS
 from app.services.formulas import (
+    GENERAL_TAX_TEMPLATE_COLUMNS,
     annual_bonus_transform,
     broker_tax_transform,
     general_salary_tax_transform,
+    INTERN_DECLARATION_COLUMNS,
     intern_tax_transform,
     merge_duplicate_invoice_lines,
     normalize_org_code,
     restricted_stock_interest_transform,
     staff_change_analysis,
 )
+
+
+def test_general_salary_template_has_housing_fund_adjustment_in_required_position():
+    for columns in (GENERAL_TAX_TEMPLATE_COLUMNS, DECLARATION_COLUMNS):
+        index = columns.index("住房公积金调整")
+        assert columns[index - 1] == "律师办案费用"
+        assert columns[index + 1] == "西藏附加减除费用"
 
 
 def test_normalize_org_code_matches_legacy_mapping():
@@ -59,6 +69,7 @@ def test_general_salary_tax_keeps_legacy_split_salary_role_compatible():
     assert len(result["detail"]) == 1
     assert result["detail"].loc[0, "本期收入"] == 10000
     assert result["detail"].loc[0, "工资单类型"] == "营销工资单"
+    assert result["detail"].loc[0, "住房公积金调整"] == 0
 
 
 def test_general_salary_tax_normalizes_headquarters_salary_sheet():
@@ -117,6 +128,20 @@ def test_annual_bonus_transform_merges_active_staff_only():
     assert result["detail"].iloc[0]["*全年一次性奖金收入"] == 20000
 
 
+def test_annual_bonus_transform_combines_old_and_new_templates():
+    bonus = pd.DataFrame([
+        {"员工编号": "1001", "员工姓名": "张三", "年终奖发放": 10000, "本次扣税": 1000},
+        {"员工编号": "1002", "员工姓名": "李四", "年终奖汇总": 20000, "年终奖计税": 2000},
+    ])
+    staff = pd.DataFrame([
+        {"员工编号": "1001", "*姓名": "张三", "证件类型": "居民身份证", "证件号码": "1", "机构代码": "10301", "人员状态": "正常"},
+        {"员工编号": "1002", "*姓名": "李四", "证件类型": "居民身份证", "证件号码": "2", "机构代码": "10301", "人员状态": "正常"},
+    ])
+    result = annual_bonus_transform({"annual_bonus_sheet": bonus, "staff_info": staff})
+    assert result["detail"]["*全年一次性奖金收入"].tolist() == [10000, 20000]
+    assert result["summary"].iloc[0]["收入合计"] == 30000
+
+
 def test_broker_tax_subtracts_vat_and_checks_staff():
     broker = pd.DataFrame(
         [{"员工编号": "2001", "应发工资(补足前)": 1200, "增值税": 200, "个人所得税(经纪人)": 100}]
@@ -132,6 +157,21 @@ def test_broker_tax_subtracts_vat_and_checks_staff():
     assert result["summary"].iloc[0]["个人所得税(经纪人)"] == 100
 
 
+def test_broker_tax_adds_adjustment_and_deducts_additional_tax():
+    broker = pd.DataFrame([{
+        "员工编号": "2001", "应发合计（补足前）": 1200,
+        "调增应纳税所得额": 80, "增值税": 200, "附加税": 30,
+        "个人所得税": 100,
+    }])
+    staff = pd.DataFrame([{
+        "员工编号": "2001", "分支机构代码": "10301", "姓名": "张三",
+        "证件类型": "居民身份证", "证件号码": "110101199001010011",
+    }])
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+    assert result["detail"].iloc[0]["经纪人本期收入"] == 1080
+    assert result["detail"].iloc[0]["允许扣除的税费"] == 30
+
+
 def test_broker_tax_warns_when_personnel_master_has_unmatched_broker():
     broker = pd.DataFrame([{"员工编号": "2001", "应发工资(补足前)": 1200, "增值税": 200}])
     staff = pd.DataFrame([{"员工编号": "2002", "分支机构代码": "10301"}])
@@ -139,6 +179,39 @@ def test_broker_tax_warns_when_personnel_master_has_unmatched_broker():
     assert result["block_declarations"] is False
     assert {item["issue_type"] for item in result["issues"]} == {"经纪人新增待维护", "经纪人无本月收入提醒"}
     assert all(item["severity"] == "warning" for item in result["issues"])
+
+
+def test_broker_tax_falls_back_to_unique_name_when_master_has_no_employee_id():
+    broker = pd.DataFrame([{
+        "员工编号": "2001", "姓名": "张三", "应发工资(补足前)": 1200,
+        "增值税": 200, "个人所得税(经纪人)": 100,
+    }])
+    staff = pd.DataFrame([{
+        "分支机构代码": "10301", "*姓名": "张三",
+        "*证件类型": "居民身份证", "*证件号码": "110101199001010011",
+    }])
+
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+
+    row = result["detail"].iloc[0]
+    assert row["分支机构代码"] == "10301"
+    assert row["*证件号码"] == "110101199001010011"
+    assert result["metrics"]["broker_declared_records"] == 1
+    assert {item["issue_type"] for item in result["issues"]} == {"经纪人姓名匹配"}
+
+
+def test_broker_tax_does_not_name_match_ambiguous_personnel_master():
+    broker = pd.DataFrame([{"员工编号": "2001", "姓名": "张三", "应发工资(补足前)": 1200}])
+    staff = pd.DataFrame([
+        {"分支机构代码": "10301", "*姓名": "张三", "*证件号码": "A"},
+        {"分支机构代码": "10302", "*姓名": "张三", "*证件号码": "B"},
+    ])
+
+    result = broker_tax_transform({"broker_salary_sheet": broker, "broker_staff_info": staff})
+
+    assert result["metrics"]["broker_declared_records"] == 0
+    assert result["detail"].iloc[0]["分支机构代码"] == ""
+    assert any("姓名在人员主数据中重复" in item["message"] for item in result["issues"])
 
 
 def test_intern_tax_builds_legacy_personnel_and_declaration_data():
@@ -154,6 +227,50 @@ def test_intern_tax_builds_legacy_personnel_and_declaration_data():
     assert row["任职受雇从业类型"] == "实习学生（全日制学历教育）"
     assert row["*所得项目"] == "其他连续劳务报酬"
     assert row["本期收入"] == 500
+
+
+def test_intern_tax_uses_broker_headers_and_fills_foreign_fields():
+    intern = pd.DataFrame([{
+        "营业部名称": "广州昌岗中路", "工号": "I-001", "*姓名": "港籍实习生",
+        "*证件类型": "港澳居民来往内地通行证", "*证件号码": "M1234567",
+        "*性别": "男", "*出生日期": "2005-01-01", "实习开始时间": "2026-06-01",
+        "发放补贴数（元）": 500,
+    }])
+    result = intern_tax_transform({"intern_salary_sheet": intern})
+    row = result["detail"].iloc[0]
+    assert list(INTERN_DECLARATION_COLUMNS[:6]) == ["工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入"]
+    assert row["工号"] == "I-001"
+    assert row["*证件号码"] == "M1234567"
+    assert row["出生国家(地区)"] == "中国澳门"
+    assert row["涉税事由"] == "提供临时劳务"
+
+
+def test_interest_half_rate_outputs_twenty_percent_and_halves_income():
+    source = pd.DataFrame([{
+        "机构代码": "301", "客户姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "债券兑息": 1000, "税率(%)": 10,
+    }])
+    result = restricted_stock_interest_transform({"interest_tax_sheet": source})
+    detail = result["detail"].iloc[0]
+    assert detail["利息税原始收入"] == 1000
+    assert detail["利息税申报金额"] == 500
+    assert detail["利息税输出税率"] == "20%"
+    assert detail["利息税税费(申报表)"] == 100
+    assert result["metrics"]["interest_half_rate_adjustments"] == 1
+    assert any(item["issue_type"] == "interest_half_rate_adjustment" for item in result["issues"])
+
+
+def test_interest_half_rate_prefers_actual_withheld_tax_to_derive_income():
+    source = pd.DataFrame([{
+        "机构代码": "301", "客户姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "债券兑息": 1234, "税率（%）": 10,
+        "实际扣缴税额": 100,
+    }])
+    result = restricted_stock_interest_transform({"interest_tax_sheet": source})
+
+    detail = result["detail"].iloc[0]
+    assert detail["利息税申报金额"] == 500
+    assert detail["利息税税费(申报表)"] == 100
 
 
 def test_intern_tax_blocks_unknown_branch_instead_of_silent_export():

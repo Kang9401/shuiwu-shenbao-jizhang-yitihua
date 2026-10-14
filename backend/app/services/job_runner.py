@@ -24,7 +24,19 @@ def run_job(db: Session, job: Job, operation: str = "generate") -> Job:
             .order_by(UploadedFile.id)
             .all()
         )
-        if job.workflow_code == "restricted_stock_interest_tax":
+        monthly_codes = {"broker_tax", "intern_tax", "part_time_tax"}
+        has_monthly_round = bool(files) or operation in {"initial", "recheck"}
+        if job.workflow_code in monthly_codes and job.period_id is not None and not has_monthly_round:
+            has_monthly_round = db.query(Job.id).filter(
+                Job.workflow_code == job.workflow_code,
+                Job.period_id == job.period_id,
+                Job.operation == "initial",
+                Job.id != job.id,
+            ).first() is not None
+        if job.workflow_code in monthly_codes and job.period_id is not None and has_monthly_round:
+            from app.services.monthly_personnel import run_monthly_personnel
+            result = run_monthly_personnel(workflow, db, job.id, job.period_id, files, operation)
+        elif job.workflow_code in {"restricted_stock_interest_tax", "part_time_tax"}:
             result = workflow.run(db, job.id, job.period_id, files, operation=operation)
         else:
             result = workflow.run(db, job.id, job.period_id, files)
@@ -46,6 +58,8 @@ def run_job(db: Session, job: Job, operation: str = "generate") -> Job:
                 .all()
             )
             for artifact in previous_artifacts:
+                if job.workflow_code in {"broker_tax", "intern_tax", "part_time_tax"} and artifact.artifact_type not in {"declaration", "personnel_collection"}:
+                    continue
                 try:
                     Path(artifact.stored_path).unlink(missing_ok=True)
                 except OSError:

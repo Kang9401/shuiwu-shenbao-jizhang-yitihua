@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import Field, model_validator
@@ -10,12 +11,28 @@ from app.core.version import PRODUCT_NAME
 class Settings(BaseSettings):
     app_name: str = PRODUCT_NAME
     api_prefix: str = "/api"
-    runtime_mode: str = "development"
+    runtime_mode: str = Field(default_factory=lambda: os.getenv("APP_RUNTIME_MODE", "development"))
     storage_root: Path = Field(default_factory=default_storage_root)
     database_url: str = ""
     backup_root: Path = Field(default_factory=default_backup_root)
     frontend_dist_dir: Path = Field(default_factory=default_frontend_dist)
     allow_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
+    finance_ai_base_url: str = ""
+    finance_ai_api_key: str = ""
+    finance_ai_model: str = ""
+    finance_ai_timeout_seconds: float = 60.0
+    # FMSS endpoints are deliberately explicit; do not derive the gateway from
+    # the hostname. Production keeps the same prod-api gateway prefix.
+    fmss_login_url: str = "https://fmss.gf.com.cn/fmss"
+    fmss_api_base_url: str = "https://fmss.gf.com.cn/fmss/prod-api"
+    fmss_environment: str = "production"
+    # Leave empty until FMSS confirms the real current-user endpoint.  The
+    # identity resolver deliberately makes no speculative user-info calls.
+    fmss_current_user_path: str = ""
+    fmss_write_enabled: bool = True
+    fmss_post_write_enabled: bool = True
+    # Production submission is enabled; deployments can still disable it explicitly.
+    fmss_production_write_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

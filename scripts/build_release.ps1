@@ -18,6 +18,10 @@ $StagingOutput = Join-Path $ReleaseBase ".staging-$Version-$PID"
 $PreviousOutput = Join-Path $ReleaseBase ".previous-$Version-$PID"
 $PackageDir = Join-Path $StagingOutput "TaxWorkbench"
 $SmokeData = Join-Path $StagingOutput "smoke-data"
+$RpaHelperOutput = Join-Path $Root "build\rpa_helpers"
+$RpaHelperWork = Join-Path $Root "build\rpa-pyinstaller"
+$RpaHelperSpecs = Join-Path $Root "build\rpa-specs"
+$env:PYTHONUSERBASE = Join-Path $Root "build\python-userbase"
 
 if (-not (Test-Path -LiteralPath $PythonExe)) {
     $PythonCommand = Get-Command $PythonExe -ErrorAction SilentlyContinue
@@ -68,8 +72,37 @@ if ($LASTEXITCODE -ne 0) { throw "Icon generation failed" }
 if ($LASTEXITCODE -ne 0) { throw "Version resource generation failed" }
 
 if (-not $ReuseDesktopBuild) {
+    foreach ($Path in @($RpaHelperOutput, $RpaHelperWork, $RpaHelperSpecs)) {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+    $RpaRunnerName = "etax_rpa_runner"
+    $RpaRunnerWorkDir = Join-Path $RpaHelperWork $RpaRunnerName
+    New-Item -ItemType Directory -Path $RpaRunnerWorkDir -Force | Out-Null
+    & $PythonExe -s -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --onefile `
+        --collect-all playwright `
+        --exclude-module pandas `
+        --exclude-module numpy `
+        --exclude-module scipy `
+        --exclude-module lxml `
+        --exclude-module matplotlib `
+        --exclude-module PIL `
+        --distpath $RpaHelperOutput `
+        --workpath $RpaRunnerWorkDir `
+        --specpath $RpaHelperSpecs `
+        --name $RpaRunnerName `
+        (Join-Path $Backend "app\rpa\runner.py")
+    if ($LASTEXITCODE -ne 0) { throw "RPA runner build failed" }
+    $RpaRunnerPath = Join-Path $RpaHelperOutput "$RpaRunnerName.exe"
+    $RpaRunnerHash = Get-FileHash -Algorithm SHA256 -LiteralPath $RpaRunnerPath
+    $RpaRunnerHash.Hash.ToLowerInvariant() | Set-Content -Encoding ASCII (Join-Path $RpaHelperOutput "$RpaRunnerName.sha256")
     Push-Location $Root
-    try { & $PythonExe -m PyInstaller --noconfirm --clean (Join-Path $Root "packaging\TaxWorkbench.spec") } finally { Pop-Location }
+    try { & $PythonExe -s -m PyInstaller --noconfirm --clean (Join-Path $Root "packaging\TaxWorkbench.spec") } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $Root "dist\TaxWorkbench\TaxWorkbench.exe"))) {
@@ -108,7 +141,10 @@ try {
 }
 
 $ZipPath = Join-Path $StagingOutput "TaxWorkbench_${Version}_Windows_x64.zip"
-Compress-Archive -LiteralPath $PackageDir -DestinationPath $ZipPath -CompressionLevel Optimal
+# Windows PowerShell Compress-Archive can race with Defender while scanning a new EXE.
+# tar.exe is built into supported Windows versions and creates the same ZIP layout.
+& tar.exe -a -c -f $ZipPath -C $StagingOutput "TaxWorkbench"
+if ($LASTEXITCODE -ne 0) { throw "ZIP creation failed" }
 $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath
 "$($Hash.Hash)  $([System.IO.Path]::GetFileName($ZipPath))" | Set-Content -Encoding UTF8 (Join-Path $StagingOutput "SHA256.txt")
 if (Test-Path -LiteralPath $SmokeData) {

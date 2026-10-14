@@ -1,0 +1,291 @@
+from decimal import Decimal
+import pandas as pd
+
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.session import Base, get_db
+from app.main import app
+from app.models.core import Company, Period
+from app.services.pit_reconciliation.domain import BalanceRow, DeclarationRow, OrganizationRow, PitSourceBundle, SalaryRow, SourceResult
+from app.services.pit_reconciliation.engine import PitReconciliationEngine
+from app.services.pit_reconciliation.repository import PitReconciliationRepository
+from app.api import pit_reconciliations as pit_api
+
+
+def test_post_unresolved_bank_organization_issue_is_non_blocking():
+    allowed = {
+        "source_type": "bank_statement",
+        "issues_json": [{"issue_type": "unresolved_bank_organization", "message": "未识别本方机构"}],
+    }
+    blocking = {
+        "source_type": "bank_statement",
+        "issues_json": [{"issue_type": "invalid_amount", "message": "金额无效"}],
+    }
+    assert not pit_api._has_blocking_source_issues(allowed, "post_payment")
+    assert pit_api._has_blocking_source_issues(blocking, "post_payment")
+    assert pit_api._has_blocking_source_issues(allowed, "pre_payment")
+
+
+def _client_with_workpaper():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(engine)
+    with session_local() as db:
+        company = Company(name="测试公司", code="PIT", operator_name="测试")
+        db.add(company); db.flush()
+        period = Period(company_id=company.id, year=2026, month=8, name="2026-08")
+        db.add(period); db.flush()
+        empty = lambda name, required=True: SourceResult(name, "ready_empty", required=required)
+        bundle = PitSourceBundle(
+            SourceResult("organization_mapping", "ready", [OrganizationRow("10001", "测试营业部", "测试营业部")]),
+            SourceResult("salary", "ready", [SalaryRow("10001", "张三", pit_tax=Decimal("100"))]),
+            SourceResult("pit_declaration", "ready", [DeclarationRow("10001", "综合所得", person_name="张三", income_item="正常工资薪金", tax_amount=Decimal("180"))]),
+            SourceResult("balance_sheet", "ready", [BalanceRow("10001", "21510006", "21510006", credit_amount=Decimal("180"), closing_balance=Decimal("180"))]),
+            empty("broker"), empty("bond_interest"), empty("restricted_stock"), empty("tax_certificate", False), empty("bank_statement", False),
+        )
+        repository = PitReconciliationRepository(db, company.id, period.id, "pre_payment")
+        result = PitReconciliationEngine().calculate(bundle)
+        result["stage"] = "pre_payment"
+        repository.replace(repository.get_or_create_workpaper(), result)
+        db.commit()
+
+    def override_get_db():
+        db: Session = session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    return TestClient(app, headers={"X-Company-ID": "1"}), period.id
+
+
+def test_pit_filters_and_patch_whitelist():
+    client, period_id = _client_with_workpaper()
+    try:
+        response = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment", "org_code": "10001", "subject_code": "21510006", "only_differences": "true"})
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+        row = response.json()[0]
+        patched = client.patch(f"/api/pit-reconciliations/tax-amount-checks/{row['id']}", params={"period_id": period_id, "stage": "pre_payment"}, json={"business_declared_manual_reason": "工资补发", "calculation_status": "tampered"})
+        assert patched.status_code == 200
+        assert patched.json()["business_declared_manual_reason"] == "工资补发"
+        assert "calculation_status" not in patched.json()
+        no_match = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment", "subject_code": "21510008", "only_differences": "true"})
+        assert no_match.status_code == 200
+        assert no_match.json() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_pit_patch_requires_matching_period():
+    client, period_id = _client_with_workpaper()
+    try:
+        row = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()[0]
+        missing = client.patch(f"/api/pit-reconciliations/tax-amount-checks/{row['id']}", json={"business_declared_manual_reason": "x"})
+        assert missing.status_code == 422
+        wrong = client.patch(f"/api/pit-reconciliations/tax-amount-checks/{row['id']}", params={"period_id": period_id + 999, "stage": "pre_payment"}, json={"business_declared_manual_reason": "x"})
+        assert wrong.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_recalculate_replaces_existing_workpaper_successfully(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready", [OrganizationRow("10001", "测试营业部", "测试营业部")]),
+        SourceResult("salary", "ready", [SalaryRow("10001", "张三", pit_tax=Decimal("120"))]),
+        SourceResult("pit_declaration", "ready", [DeclarationRow("10001", "综合所得", person_name="张三", income_item="正常工资薪金", tax_amount=Decimal("180"))]),
+        SourceResult("balance_sheet", "ready", [BalanceRow("10001", "21510006", "21510006", credit_amount=Decimal("180"), closing_balance=Decimal("180"))]),
+        SourceResult("broker", "ready_empty"), SourceResult("bond_interest", "ready_empty"), SourceResult("restricted_stock", "ready_empty"), SourceResult("tax_certificate", "ready_empty", required=False), SourceResult("bank_statement", "ready_empty", required=False),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        before = client.get("/api/pit-reconciliations/overview", params={"period_id": period_id, "stage": "pre_payment"}).json()["workpaper"]
+        response = client.post("/api/pit-reconciliations/recalculate", params={"period_id": period_id, "stage": "pre_payment", "stage": "pre_payment"})
+        assert response.status_code == 200
+        assert response.json()["workpaper"]["id"] == before["id"]
+        assert response.json()["workpaper"]["stage"] == "pre_payment"
+        assert response.json()["workpaper"]["calculation_status"] == "success"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_recalculate_reports_invalid_payroll_headers(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready", [OrganizationRow("10001")]),
+        SourceResult("salary", "invalid", issues=[{
+            "issue_type": "payroll_header_missing",
+            "message": "职级工资单缺少附A2必填字段：工资表_累计应纳税所得额；实际工资表表头：['员工编号', '个人所得税']",
+        }]),
+        SourceResult("pit_declaration", "ready_empty"),
+        SourceResult("balance_sheet", "ready_empty"),
+        SourceResult("broker", "ready_empty"), SourceResult("bond_interest", "ready_empty"),
+        SourceResult("restricted_stock", "ready_empty"),
+        SourceResult("tax_certificate", "ready_empty", required=False),
+        SourceResult("bank_statement", "ready_empty", required=False),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        response = client.post("/api/pit-reconciliations/recalculate", params={"period_id": period_id, "stage": "pre_payment"})
+        assert response.status_code == 400
+        assert "工资表_累计应纳税所得额" in response.json()["detail"]
+        assert "实际工资表表头" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_pit_workpaper_export_contains_reference_template_sheets():
+    client, period_id = _client_with_workpaper()
+    try:
+        response = client.get("/api/pit-reconciliations/export", params={"period_id": period_id, "stage": "pre_payment"})
+        assert response.status_code == 200
+        import io
+        import openpyxl
+        workbook = openpyxl.load_workbook(io.BytesIO(response.content), read_only=True)
+        from app.services.pit_reconciliation.exporter import PRE_PAYMENT_SHEET_NAMES
+        assert workbook.sheetnames == list(PRE_PAYMENT_SHEET_NAMES)
+        assert list(next(workbook["汇总税额核对"].values)) == [
+            "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差异1", "差异原因1",
+            "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
+            "当期工资薪金累计应纳税所得额差异3", "差异原因3", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_pit_sheet_data_exposes_reference_columns_and_pagination():
+    client, period_id = _client_with_workpaper()
+    try:
+        response = client.get("/api/pit-reconciliations/sheet-data", params={
+            "period_id": period_id, "stage": "pre_payment", "sheet_name": "个税明细税额核对", "page": 1, "page_size": 2,
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["columns"] == [
+            "机构代码", "营业部名称", "会计科目", "描述", "期初余额", "借方金额", "贷方金额", "期末余额",
+            "申报表税额", "本期差异金额8（申报表-余额表贷方）", "差异原因8", "累计差异金额9（申报表-余额表期末余额）", "差异原因9",
+            "工资表、支撑平台税额", "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "差异金额10（申报表-工资表、支撑平台税额）", "差异原因10",
+        ]
+        assert payload["total"] == 4
+        assert len(payload["rows"]) == 2
+        assert all("描述" in row for row in payload["rows"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_failed_recalculation_keeps_previous_detail_rows(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    original_replace = PitReconciliationRepository.replace
+
+    def fail_after_replace(self, workpaper, result):
+        original_replace(self, workpaper, result)
+        raise RuntimeError("simulated replacement failure")
+
+    monkeypatch.setattr(pit_api.PitReconciliationRepository, "replace", fail_after_replace)
+    try:
+        before = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()
+        response = client.post("/api/pit-reconciliations/recalculate", params={"period_id": period_id, "stage": "pre_payment"})
+        after = client.get("/api/pit-reconciliations/tax-amount-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()
+        assert response.status_code == 400
+        assert [(row["subject_code"], row["business_tax_amount"]) for row in after] == [(row["subject_code"], row["business_tax_amount"]) for row in before]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_occurrence_description_export_and_import_only_updates_description():
+    client, period_id = _client_with_workpaper()
+    try:
+        import io
+        import openpyxl
+
+        exported = client.get("/api/pit-reconciliations/occurrence-descriptions/export", params={"period_id": period_id, "stage": "pre_payment"})
+        assert exported.status_code == 200
+        workbook = openpyxl.load_workbook(io.BytesIO(exported.content), read_only=True)
+        assert "发生额应申报收入说明" in next(workbook.active.values)
+
+        occurrence = client.get("/api/pit-reconciliations/occurrence-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()[0]
+        before_revision = client.get("/api/pit-reconciliations/overview", params={"period_id": period_id, "stage": "pre_payment"}).json()["workpaper"]["draft_revision"]
+        spreadsheet = io.BytesIO()
+        pd.DataFrame([{
+            "机构代码": occurrence["org_code"], "会计科目": occurrence["subject_code"], "对应税种": occurrence["income_type"],
+            "发生额应申报收入说明": "导入说明", "借方金额": 999999,
+        }]).to_excel(spreadsheet, index=False)
+        response = client.post(
+            "/api/pit-reconciliations/occurrence-descriptions/import",
+            params={"period_id": period_id, "stage": "pre_payment"},
+            files={"file": ("说明.xlsx", spreadsheet.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert response.status_code == 200
+        assert response.json()["updated_count"] == 1
+        assert response.json()["draft_revision"] == before_revision + 1
+        current = client.get("/api/pit-reconciliations/occurrence-checks", params={"period_id": period_id, "stage": "pre_payment"}).json()[0]
+        assert current["expected_income_description"] == "导入说明"
+        assert current["debit_amount"] == occurrence["debit_amount"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_a1_api_keeps_engine_branch_name():
+    client, period_id = _client_with_workpaper()
+    try:
+        response = client.get("/api/pit-reconciliations/difference-details", params={"period_id": period_id, "stage": "pre_payment", "detail_type": "salary_tax"})
+        assert response.status_code == 200
+        assert response.json()[0]["org_code"] == "10001"
+        assert response.json()[0]["org_name"] == "测试营业部"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_readiness_is_stage_specific_and_stale_workpaper_can_read_latest_sources(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready"), SourceResult("salary", "ready_empty"), SourceResult("pit_declaration", "ready_empty"), SourceResult("balance_sheet", "ready_empty"),
+        SourceResult("broker", "ready_empty"), SourceResult("bond_interest", "ready_empty"), SourceResult("restricted_stock", "ready_empty"),
+        SourceResult("tax_certificate", "ready"), SourceResult("bank_statement", "missing"),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        pre = client.get("/api/pit-reconciliations/readiness", params={"period_id": period_id, "stage": "pre_payment"})
+        post = client.get("/api/pit-reconciliations/readiness", params={"period_id": period_id, "stage": "post_payment"})
+        assert pre.status_code == post.status_code == 200
+        assert {item["source_type"] for item in pre.json()} == {"organization_mapping", "salary", "pit_declaration", "balance_sheet", "broker", "bond_interest", "restricted_stock"}
+        assert {item["source_type"] for item in post.json()} == {"tax_certificate", "bank_statement"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_sheet_data_filters_before_pagination(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    from collections import OrderedDict
+    rows = [{"机构代码": "10001", "姓名": f"人员{index}", "差异金额": 0} for index in range(100)] + [{"机构代码": "10002", "姓名": "跨页目标", "差异金额": 10}]
+    monkeypatch.setattr(pit_api, "build_pit_workpaper_sheets", lambda *_: OrderedDict({"汇总税额核对": pd.DataFrame(), "申报表汇总数": pd.DataFrame(), "个税明细税额核对": pd.DataFrame(rows), "其他个税发生额核对": pd.DataFrame(), "附A1 工资薪金等个税差异": pd.DataFrame(), "附A2 累计应纳税所得额差异明细": pd.DataFrame(), "附A3 客户利息个税差异明细": pd.DataFrame(), "附A4 限售股个税差异": pd.DataFrame(), "科目余额表": pd.DataFrame(), "债券利息明细": pd.DataFrame(), "限售股明细": pd.DataFrame(), "综合所得申报表": pd.DataFrame(), "分类所得申报表": pd.DataFrame(), "限售股所得申报表": pd.DataFrame()}))
+    try:
+        response = client.get("/api/pit-reconciliations/sheet-data", params={"period_id": period_id, "stage": "pre_payment", "sheet_name": "个税明细税额核对", "keyword": "跨页目标", "org_code": "10002", "display_mode": "difference", "page": 1, "page_size": 100})
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert response.json()["rows"][0]["姓名"] == "跨页目标"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_successful_recalculation_with_incomplete_stage_sources_stays_in_data_preparation(monkeypatch):
+    client, period_id = _client_with_workpaper()
+    bundle = PitSourceBundle(
+        SourceResult("organization_mapping", "ready", [OrganizationRow("10001", "测试营业部", "测试营业部")]),
+        SourceResult("salary", "ready_empty"), SourceResult("pit_declaration", "ready_empty"), SourceResult("balance_sheet", "ready_empty"),
+        SourceResult("broker", "missing"), SourceResult("bond_interest", "ready_empty"), SourceResult("restricted_stock", "ready_empty"),
+        SourceResult("tax_certificate", "ready_empty"), SourceResult("bank_statement", "ready_empty"),
+    )
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _self: bundle)
+    try:
+        response = client.post("/api/pit-reconciliations/recalculate", params={"period_id": period_id, "stage": "pre_payment"})
+        assert response.status_code == 200
+        assert response.json()["workpaper"]["data_status"] == "incomplete"
+        assert response.json()["workpaper"]["workflow_status"] == "data_preparation"
+    finally:
+        app.dependency_overrides.clear()

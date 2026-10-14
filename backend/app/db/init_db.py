@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.db.session import Base, engine
-from app.models import accounting, core, tax
+from app.models import accounting, core, pit_reconciliation, tax
 from app.db.migrations import run_migrations
-from app.services.organization_mapping import seed_organization_mappings
+from app.services.company_migration import migrate_legacy_company_storage
 
 
 def _sqlite_db_path() -> Path | None:
@@ -25,7 +25,7 @@ def init_db(*, create_preupgrade_backup: bool = True) -> None:
     engine.dispose()
     Base.metadata.create_all(bind=engine)
     run_migrations(engine, backup_existing=create_preupgrade_backup and existed)
-    seed_organization_mappings()
+    migrate_legacy_company_storage()
 
 
 if __name__ == "__main__":
