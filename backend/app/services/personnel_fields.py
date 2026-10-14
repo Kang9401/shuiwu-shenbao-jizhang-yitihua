@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import re
 
 
 def text(value):
@@ -8,6 +9,12 @@ def text(value):
         return ""
     value = str(value).strip()
     return "" if value.lower() in {"none", "nan", "nat"} else value
+
+
+def phone_text(value):
+    """Keep phone identifiers as text and remove Excel's integer suffix."""
+    value = text(value)
+    return value[:-2] if re.fullmatch(r"\d+\.0", value) else value
 
 
 def with_foreign_defaults(record):

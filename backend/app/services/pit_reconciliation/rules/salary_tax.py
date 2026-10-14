@@ -1,6 +1,6 @@
 from collections import defaultdict
 from decimal import Decimal
-from ..keys import employee_identity
+from ..keys import employee_identity, reliable_id_number
 from ..money import has_difference
 
 
@@ -14,12 +14,14 @@ def salary_tax_details(salaries, declarations):
         ("个人养老金", "cumulative_personal_pension"), ("其他扣除", "cumulative_other_deduction"),
     )
     comparison=defaultdict(lambda: {key: [Decimal("0.00"), Decimal("0.00")] for _, key in comparison_fields})
+    def key_for(row):
+        return (row.org_code, reliable_id_number(getattr(row, "id_number", "")) or row.person_name)
     for row in salaries:
-        key=(row.org_code,row.person_name); payroll[key]+=row.pit_tax or Decimal("0.00"); metadata[key]=row
+        key=key_for(row); payroll[key]+=row.pit_tax or Decimal("0.00"); metadata[key]=row
         for _, field in comparison_fields: comparison[key][field][0] += getattr(row,field,None) or Decimal("0.00")
     for row in declarations:
         if "工资薪金" in row.income_item and "证券经纪" not in row.income_item:
-            key=(row.org_code,row.person_name); declared[key]+=row.tax_amount or Decimal("0.00"); metadata.setdefault(key,row)
+            key=key_for(row); declared[key]+=row.tax_amount or Decimal("0.00"); metadata.setdefault(key,row)
             for _, field in comparison_fields: comparison[key][field][1] += getattr(row,field,None) or Decimal("0.00")
     output=[]
     for index,key in enumerate(sorted(set(payroll)|set(declared))):
@@ -30,5 +32,5 @@ def salary_tax_details(salaries, declarations):
             for name, field in comparison_fields:
                 payroll_amount, declaration_amount=comparison[key][field]
                 items.append({"name":name,"payroll_amount":str(payroll_amount),"declaration_amount":str(declaration_amount),"difference":str(payroll_amount-declaration_amount),"tax_rate":"","tax_effect":""})
-            output.append({"detail_type":"salary_tax","org_code":key[0],"name":key[1],"id_number":getattr(row,"id_number","") or "","identity_key":employee_identity(getattr(row,"employee_no","") or "",getattr(row,"id_number","") or "",key[0],key[1],index),"source_amount":payroll[key],"target_amount":declared[key],"difference":difference,"auto_reason":f"工资个人所得税 {payroll[key]:.2f}，申报税额 {declared[key]:.2f}，差异 {difference:.2f}","detail_json":{"payroll_tax_amount":str(payroll[key]),"declared_tax_amount":str(declared[key]),"comparison_items":items}})
+            output.append({"detail_type":"salary_tax","org_code":key[0],"name":getattr(row,"person_name","") or "","id_number":getattr(row,"id_number","") or "","identity_key":employee_identity(getattr(row,"employee_no","") or "",getattr(row,"id_number","") or "",key[0],getattr(row,"person_name","") or "",index),"source_amount":payroll[key],"target_amount":declared[key],"difference":difference,"auto_reason":f"工资个人所得税 {payroll[key]:.2f}，申报税额 {declared[key]:.2f}，差异 {difference:.2f}","detail_json":{"payroll_tax_amount":str(payroll[key]),"declared_tax_amount":str(declared[key]),"comparison_items":items}})
     return output

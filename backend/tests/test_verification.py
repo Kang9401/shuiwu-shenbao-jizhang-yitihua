@@ -15,8 +15,10 @@ from app.services.verification import (
     verify,
     load_retirement_welfare,
     load_employee_payroll,
+    load_headquarters_payroll,
     PayrollHeaderValidationError,
 )
+from app.services.salary_classifier import classify_salary_frame
 
 
 def _retirement_welfare_file(path: Path, headers: list[str], rows: list[list[object]]) -> Path:
@@ -35,6 +37,66 @@ def _write_rank_payroll(path: Path, rows: list[dict]) -> None:
     for row in rows:
         normalized.append({"累计预扣预缴应纳税所得额": 0, **row})
     pd.DataFrame(normalized).to_excel(path, index=False)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_headquarters_payroll_social_insurance_accepts_new_and_legacy_headers(tmp_path, legacy):
+    amounts = {"基本养老保险费": 1200.25, "基本医疗保险费": 300.50, "失业保险费": 60.75, "住房公积金": 1500.00}
+    old_names = {"基本养老保险费": "养老保险金的员工部分", "基本医疗保险费": "医疗保险金的员工部分",
+                 "失业保险费": "失业保险金的员工部分", "住房公积金": "住房公积金的员工部分"}
+    row = {"员工编号": "00123", "姓名": "测试人员", "机构代码": "10501", "本期收入": 15000}
+    row.update({old_names[k] if legacy else k: v for k, v in amounts.items()})
+    path = tmp_path / "总部工资单.xlsx"
+    pd.DataFrame([row]).to_excel(path, index=False)
+    result = load_headquarters_payroll(str(path))
+    assert result.iloc[0]["员工编号"] == "00123"
+    for field, value in amounts.items():
+        assert result.iloc[0][field] == pytest.approx(value)
+
+
+def test_headquarters_payroll_prefers_explicit_new_zero_over_legacy_amount(tmp_path):
+    path = tmp_path / "总部工资单.xlsx"
+    pd.DataFrame([{"员工编号": "00123", "姓名": "测试人员", "基本养老保险费": 0,
+                   "养老保险金的员工部分": 1200}]).to_excel(path, index=False)
+    assert load_headquarters_payroll(str(path)).iloc[0]["基本养老保险费"] == 0
+
+
+def test_headquarters_31_column_template_is_structural_even_when_blank():
+    columns = [
+        "薪资期间", "薪资方案", "个税申报地", "个税扣缴义务人纳税人识别号", "个税类型", "姓名", "員工编号",
+        "证件类型", "证件号码", "本期收入", "本期免税收入", "基本养老保险费", "基本医疗保险费", "失业保险费",
+        "住房公积金", "累计子女教育", "累计继续教育", "累计住房贷款利息", "累计住房租金", "累计赡养老人",
+        "累计3岁以下婴幼儿照护", "累计个人养老金", "累计商业保险扣除", "企业(职业)年金", "商业健康保险",
+        "税延养老保险", "其他", "准予扣除的捐赠额", "减免税额", "备注", "本期应预扣预缴税额",
+    ]
+    result = classify_salary_frame(pd.DataFrame(columns=columns), "任意文件名.xlsx")
+    assert result.role == "headquarters_salary"
+
+
+def test_headquarters_31_column_new_amounts_are_preserved(tmp_path):
+    path = tmp_path / "任意文件名.xlsx"
+    pd.DataFrame([{
+        "薪资期间": "2026-08", "个税申报地": "成都", "个税扣缴义务人纳税人识别号": "T",
+        "个税类型": "工资薪金", "姓名": "测试人员", "員工编号": "00123", "本期收入": 10000,
+        "企业(职业)年金": 111, "商业健康保险": 222, "本期免税收入": 333, "本期应预扣预缴税额": 444,
+        "机构代码": "10501",
+    }]).to_excel(path, index=False)
+    result = load_headquarters_payroll(str(path)).iloc[0]
+    assert result["员工编号"] == "00123"
+    assert result["企业(职业)年金"] == 111
+    assert result["商业健康保险"] == 222
+    assert result["本期免税收入"] == 333
+    assert result["本期应预扣预缴税额 SUM"] == 444
+    assert result["个人所得税 SUM"] == 444
+
+
+def test_headquarters_payroll_preserves_explicit_zero_tax_with_new_header(tmp_path):
+    path = tmp_path / "headquarters.xlsx"
+    pd.DataFrame([{
+        "员工编号": "00123", "姓名": "测试人员", "机构代码": "10501", "本期收入": 10000,
+        "个人所得税": 0, "本期应预扣预缴税额": 444,
+    }]).to_excel(path, index=False)
+    assert load_headquarters_payroll(str(path)).iloc[0]["个人所得税 SUM"] == 0
 
 
 def test_real_five_and_seven_digit_payroll_headers_map_appendix_a2_fields(tmp_path: Path):

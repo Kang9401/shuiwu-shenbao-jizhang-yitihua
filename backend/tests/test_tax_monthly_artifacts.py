@@ -381,7 +381,8 @@ def test_latest_result_restores_saved_report_and_declarations(tmp_path: Path, mo
     db.close()
 
 
-def test_generate_uses_saved_monthly_personnel_changes_without_new_upload(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("status", ["正常", "非正常"])
+def test_generate_uses_saved_monthly_personnel_changes_without_new_upload(tmp_path: Path, monkeypatch, status):
     monkeypatch.setattr(tax_api, "ARTIFACT_DIR", tmp_path / "artifacts")
     db = _db_session()
     period = Period(year=2025, month=2, name="2025年2月")
@@ -403,11 +404,11 @@ def test_generate_uses_saved_monthly_personnel_changes_without_new_upload(tmp_pa
                 "国籍(地区)": "中国",
                 "性别": "女",
                 "出生日期": "1992-02-02",
-                "人员状态": "正常",
+                "人员状态": status,
                 "任职受雇从业类型": "雇员",
                 "手机号码": "13900000000",
                 "任职受雇从业日期": "2025/02/01",
-                "离职日期": "",
+                "离职日期": "2025-02-28" if status == "非正常" else "",
                 "机构代码(人员信息表)": "11801",
                 "机构代码(工资单)": "11801",
                 "员工编号": "1002",
@@ -431,6 +432,12 @@ def test_generate_uses_saved_monthly_personnel_changes_without_new_upload(tmp_pa
 
     assert {file.file_type for file in result.files} == {"declaration", "personnel_collection"}
     assert any("_1-人员信息采集_员工" in file.name for file in result.files)
+    collection_file = next(file for file in result.files if file.file_type == "personnel_collection")
+    collection = pd.read_excel(tax_api.ARTIFACT_DIR / str(session.id) / "output" / collection_file.name, dtype=str).fillna("")
+    assert collection.loc[0, "手机号码"] == "13900000000"
+    assert collection.loc[0, "任职受雇从业日期"] == "2025-02-01"
+    if status == "非正常":
+        assert collection.loc[0, "离职日期"] == "2025-02-28"
     db.close()
 
 

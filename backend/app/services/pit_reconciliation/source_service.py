@@ -37,7 +37,14 @@ def declaration_snapshot_rows(db, workpaper) -> list[dict]:
 
 
 def _text(value: Any) -> str:
-    return "" if value is None else str(value).strip()
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
 
 
 def _org_code(value: Any) -> str:
@@ -135,7 +142,7 @@ class PitSourceService:
         result=[]
         for row in rows:
             raw=row.raw_data or {}; full=_text(_pick(raw, "会计科目", "科目编码") or row.account_code); subject="45019006" if "45019006" in full else next((code for code in ("21510006","21510008","21510009","21510016","21131042","21210037","21210038","21210012") if code in full), full.split(".")[0])
-            org=_text(_pick(raw, "公司段", "机构代码", "分支机构代码") or row.organization_code); result.append(BalanceRow(org, full, subject, _text(_pick(raw, "描述", "会计科目名称") or row.account_name), *[money_or_none(_pick(raw, *aliases)) for aliases in BALANCE_FIELD_ALIASES.values()], raw))
+            org=_org_code(_pick(raw, "公司段", "机构代码", "分支机构代码") or row.organization_code); result.append(BalanceRow(org, full, subject, _text(_pick(raw, "描述", "会计科目名称") or row.account_name), *[money_or_none(_pick(raw, *aliases)) for aliases in BALANCE_FIELD_ALIASES.values()], raw))
         return SourceResult("balance_sheet", "ready_empty" if not result else "ready", result, source_kind="reconciliation_import_batch", source_id=batch.id, source_ref=batch.stored_path)
 
     def load_declaration_source(self) -> SourceResult:
@@ -147,9 +154,13 @@ class PitSourceService:
             candidates={candidate.org_code for candidate in (tax_org, name_org) if candidate} | {value for value in (declared_org, file_org) if value}
             if len(candidates) > 1:
                 issues.append({"issue_type":"declaration_organization_conflict", "message":f"申报文件机构归属冲突：税号/营业部/文件名识别结果为 {', '.join(sorted(candidates))}", "row_id":row.id})
-            resolved=tax_org or name_org
-            org=resolved.org_code if resolved else (declared_org or file_org)
-            result.append(DeclarationRow(org, _text(_pick(raw,"sheet_name","申报类型","申报表类型") or row.declaration_type), agent, agent_id, _text(_pick(raw,"纳税人姓名","姓名","*姓名") or row.taxpayer_name), _text(_pick(raw,"身份证件号码","证件号码","身份证号码","*证件号码")), _text(_pick(raw,"所得项目","*所得项目") or row.declaration_type), money_or_none(_pick(raw,"收入额","本期收入","收入") or row.income_amount), money_or_none(_pick(raw,"应补退税额","应补/退税额","扣缴税额","税额") or row.tax_amount), _text(_pick(raw,"税率/预扣率","税率","预扣率")), money_or_none(_pick(raw,"累计应纳税所得额")), money_or_none(_pick(raw,"累计减除费用")), money_or_none(_pick(raw,"累计专项扣除")), money_or_none(_pick(raw,"子女教育")), money_or_none(_pick(raw,"赡养老人")), money_or_none(_pick(raw,"住房贷款利息")), money_or_none(_pick(raw,"住房租金")), money_or_none(_pick(raw,"继续教育")), money_or_none(_pick(raw,"婴幼儿照护","3岁以下婴幼儿照护","3岁以下婴幼儿")), money_or_none(_pick(raw,"累计个人养老金","个人养老金")), money_or_none(_pick(raw,"累计其他扣除","其他扣除")), money_or_none(_pick(raw,"住房公积金调整")), _text(_pick(raw,"tax_period","税款所属期") or row.tax_period), raw))
+            resolved = tax_org or name_org
+            # Conflicting tax ID/name/file results must remain pending instead
+            # of silently choosing one organization and contaminating totals.
+            org = "" if len(candidates) > 1 else (resolved.org_code if resolved else (declared_org or file_org))
+            income_value = _pick(raw, "收入额", "本期收入", "收入", "转让收入额")
+            tax_value = _pick(raw, "应补退税额", "应补/退税额", "扣缴税额", "税额")
+            result.append(DeclarationRow(org, _text(_pick(raw,"sheet_name","申报类型","申报表类型") or row.declaration_type), agent, agent_id, _text(_pick(raw,"纳税人姓名","姓名","*姓名") or row.taxpayer_name), _text(_pick(raw,"身份证件号码","证件号码","身份证号码","*证件号码")), _text(_pick(raw,"所得项目","*所得项目") or row.declaration_type), money_or_none(income_value if income_value is not None else row.income_amount), money_or_none(tax_value if tax_value is not None else row.tax_amount), _text(_pick(raw,"税率/预扣率","税率","预扣率")), money_or_none(_pick(raw,"累计应纳税所得额")), money_or_none(_pick(raw,"累计减除费用")), money_or_none(_pick(raw,"累计专项扣除")), money_or_none(_pick(raw,"子女教育")), money_or_none(_pick(raw,"赡养老人")), money_or_none(_pick(raw,"住房贷款利息")), money_or_none(_pick(raw,"住房租金")), money_or_none(_pick(raw,"继续教育")), money_or_none(_pick(raw,"婴幼儿照护","3岁以下婴幼儿照护","3岁以下婴幼儿")), money_or_none(_pick(raw,"累计个人养老金","个人养老金")), money_or_none(_pick(raw,"累计其他扣除","其他扣除")), money_or_none(_pick(raw,"住房公积金调整")), _text(_pick(raw,"tax_period","税款所属期") or row.tax_period), raw))
         return SourceResult("pit_declaration", "ready_empty" if not result else "ready", result, source_kind="reconciliation_import_batch", source_id=batch.id, source_ref=batch.stored_path, issues=issues)
 
     def load_salary_source(self) -> SourceResult:

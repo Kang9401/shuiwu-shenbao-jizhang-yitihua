@@ -60,12 +60,16 @@ def _metadata(sheet: pd.DataFrame) -> dict[str, str]:
     return result
 
 
-def _record(headers: list[str], values: pd.Series, metadata: dict[str, str], sheet_name: str) -> dict[str, Any]:
-    row = {headers[index]: value for index, value in enumerate(values.iloc[:len(headers)])}
+def _record(headers: list[str], values: pd.Series, metadata: dict[str, str], sheet_name: str,
+            column_positions: dict[str, int] | None = None) -> dict[str, Any]:
+    positions = column_positions if column_positions is not None else {field: index for index, field in enumerate(headers)}
+    row = {field: values.iloc[index] for field, index in positions.items() if index < len(values)}
     row.update(metadata)
     row["sheet_name"] = sheet_name
-    # 分类所得模板使用本月应纳税所得额；保留通用列名以供调用方展示。
-    row["应纳税所得额"] = row.get("累计应纳税所得额", "")
+    # 综合/分类所得模板使用“累计应纳税所得额”作为统一展示字段。
+    # 限售股模板本身已有“应纳税所得额”，不能被不存在的累计字段覆盖为空。
+    if "累计应纳税所得额" in row:
+        row["应纳税所得额"] = row.get("累计应纳税所得额", "")
     return row
 
 
@@ -79,17 +83,52 @@ def _money(value: Any) -> Decimal | None:
         return None
 
 
-def _official_total_issue(sheet: pd.DataFrame, numbering_row: int, headers: list[str], records: list[dict]) -> dict | None:
+def _official_total_issue(sheet: pd.DataFrame, numbering_row: int, columns: dict[str, int], records: list[dict]) -> dict | None:
     total_row = next((row for _, row in sheet.iloc[numbering_row + 1:].iterrows() if _text(row.iloc[0]) in {"合计", "总计"}), None)
     if total_row is None:
         return None
-    declared_income = _money(total_row.iloc[headers.index("收入")])
-    declared_tax = _money(total_row.iloc[headers.index("应补退税额")])
+    declared_income = _money(total_row.iloc[columns["收入"]])
+    declared_tax = _money(total_row.iloc[columns["应补退税额"]])
     visible_income = sum((_money(row.get("收入")) or Decimal("0.00") for row in records), Decimal("0.00"))
     visible_tax = sum((_money(row.get("应补退税额")) or Decimal("0.00") for row in records), Decimal("0.00"))
     if (declared_income is not None and abs(visible_income - declared_income) > Decimal("0.01")) or (declared_tax is not None and abs(visible_tax - declared_tax) > Decimal("0.01")):
         return {"issue_type": "declaration_detail_total_mismatch", "message": "申报表可见明细合计与文件合计不一致", "visible_income_sum": str(visible_income), "declared_total_income": str(declared_income) if declared_income is not None else None, "visible_tax_sum": str(visible_tax), "declared_total_tax": str(declared_tax) if declared_tax is not None else None, "income_difference": str(visible_income - declared_income) if declared_income is not None else None, "tax_difference": str(visible_tax - declared_tax) if declared_tax is not None else None}
     return None
+
+
+def _normalized_header(value: Any) -> str:
+    return re.sub(r"[\s/／\\_（）()]", "", _text(value))
+
+
+def _general_column_positions(sheet: pd.DataFrame, numbering_row: int) -> dict[str, int]:
+    # Locate leaf headers across all header rows, including wrapped text and
+    # merged multi-row headers. Never infer the tax column from template width.
+    found: dict[str, set[int]] = {}
+    for values in sheet.iloc[:numbering_row].itertuples(index=False, name=None):
+        for index, value in enumerate(values):
+            name = _normalized_header(value)
+            if name:
+                found.setdefault(name, set()).add(index)
+    tax_positions = found.get("应补退税额", set())
+    if len(tax_positions) != 1:
+        raise ValueError("申报表必须有唯一的“应补/退税额”列，无法定位取数位置")
+    tax_index = next(iter(tax_positions))
+    # Do not fall back to a positional index when a non-tax header is unknown:
+    # an inserted/renamed column would otherwise silently become another field.
+    positions: dict[str, int] = {}
+    aliases = {"住房公积金调整": ("住房公积金和年金调整",), "累计应纳税所得额": ("应纳税所得额",)}
+    for field in GENERAL_HEADERS:
+        candidates = found.get(_normalized_header(field), set()).copy()
+        for alias in aliases.get(field, ()):
+            candidates.update(found.get(_normalized_header(alias), set()))
+        if len(candidates) == 1:
+            positions[field] = next(iter(candidates))
+    positions["应补退税额"] = tax_index
+    required = {"序号", "姓名", "身份证件号码", "所得项目", "收入", "应纳税额", "已缴税额", "应补退税额"}
+    if not required.issubset(positions):
+        missing = "、".join(sorted(required - set(positions)))
+        raise ValueError(f"申报表关键表头缺失或名称未支持：{missing}")
+    return positions
 
 
 def _parse_official_general(sheet: pd.DataFrame, sheet_name: str) -> tuple[list[dict], bool, list[dict]]:
@@ -103,15 +142,18 @@ def _parse_official_general(sheet: pd.DataFrame, sheet_name: str) -> tuple[list[
     if numbering_row is None:
         return [], True, []
     metadata = _metadata(sheet)
-    headers = GENERAL_HEADERS if "住房公积金调整" in header_text else LEGACY_GENERAL_HEADERS
+    try:
+        columns = _general_column_positions(sheet, numbering_row)
+    except ValueError as exc:
+        return [], True, [{"issue_type": "declaration_tax_column_invalid", "message": str(exc)}]
     records = []
     business_fields = ("姓名", "身份证件号码", "所得项目", "收入", "累计应纳税所得额", "应纳税额", "应补退税额")
-    business_indexes = [headers.index(field) for field in business_fields if field in headers]
+    business_indexes = [columns[field] for field in business_fields if field in columns]
     for _, values in sheet.iloc[numbering_row + 1:].iterrows():
         if not _is_sequence(values.iloc[0]) or not any(_text(values.iloc[index]) for index in business_indexes):
             continue
-        records.append(_record(headers, values, metadata, sheet_name))
-    issue = _official_total_issue(sheet, numbering_row, headers, records)
+        records.append(_record(GENERAL_HEADERS, values, metadata, sheet_name, columns))
+    issue = _official_total_issue(sheet, numbering_row, columns, records)
     return records, True, [issue] if issue else []
 
 
@@ -120,11 +162,55 @@ def _parse_official_restricted(sheet: pd.DataFrame, sheet_name: str) -> tuple[li
     if "限售股转让所得个人所得税扣缴报告表" not in header_text or sheet.shape[1] < 20:
         return [], False, []
     metadata = _metadata(sheet)
+    header_row = next(
+        (
+            int(index)
+            for index, row in sheet.iloc[:12].iterrows()
+            if _normalized_header("扣缴税额") in {
+                _normalized_header(value) for value in row.tolist()
+            }
+        ),
+        None,
+    )
+    if header_row is None:
+        return [], True, [{"issue_type": "declaration_header_invalid", "message": "限售股申报表缺少可识别的“扣缴税额”表头"}]
+
+    aliases = {
+        "纳税人姓名": ("客户姓名",),
+        "证件类型": ("纳税人有效身份证件_证件类型",),
+        "证券账户号": ("证券账号",),
+        "每股计税价格": ("每股计税价格（元/股)", "每股计税价格(元/股)"),
+        "转让股数": ("转让股数(股)", "转让股数（股）"),
+        "原值及合理税费小计": ("限售股原值及合理税费_小计", "小计"),
+    }
+    data_start = next(
+        (int(index) for index, row in sheet.iloc[header_row + 1:].iterrows()
+         if _is_sequence(row.iloc[0])
+         and not all(_is_sequence(row.iloc[column]) for column in range(10))),
+        len(sheet),
+    )
+    found: dict[str, set[int]] = {}
+    # Official exports keep identity and cost leaf headers below merged groups.
+    for values in sheet.iloc[header_row:data_start].itertuples(index=False, name=None):
+        for index, value in enumerate(values):
+            name = _normalized_header(value)
+            if name:
+                found.setdefault(name, set()).add(index)
+    positions: dict[str, int] = {}
+    for field in RESTRICTED_HEADERS:
+        candidates = set(found.get(_normalized_header(field), set()))
+        for alias in aliases.get(field, ()):
+            candidates.update(found.get(_normalized_header(alias), set()))
+        if len(candidates) == 1:
+            positions[field] = next(iter(candidates))
+    required = ("纳税人姓名", "证件号码", "转让收入额", "扣缴税额")
+    if any(field not in positions for field in required):
+        return [], True, [{"issue_type": "declaration_header_invalid", "message": "限售股申报表关键表头缺失或重复，无法安全定位取数列"}]
     records = []
-    for _, values in sheet.iterrows():
+    for _, values in sheet.iloc[data_start:].iterrows():
         if not _is_sequence(values.iloc[0]) or not (_text(values.iloc[1]) or _text(values.iloc[3])):
             continue
-        row = _record(RESTRICTED_HEADERS, values, metadata, sheet_name)
+        row = _record(RESTRICTED_HEADERS, values, metadata, sheet_name, positions)
         row["所得项目"] = "限售股转让所得"
         records.append(row)
     return records, True, []

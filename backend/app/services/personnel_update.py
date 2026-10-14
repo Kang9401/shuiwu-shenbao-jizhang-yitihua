@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from app.services.personnel_fields import phone_text
 
 
 PERSONNEL_COLLECTION_COLUMNS = [
@@ -194,6 +195,7 @@ def build_personnel_collection_files(
     org_col = "机构代码(人员信息表)"
     template_columns = [*PERSONNEL_COLLECTION_COLUMNS, org_col]
     work = work.reindex(columns=template_columns, fill_value="")
+    work["手机号码"] = work["手机号码"].map(phone_text)
     template = pd.DataFrame(columns=template_columns)
     work = pd.concat([template, work], axis=0, ignore_index=True)
     work = work.drop(columns=["人员状态"], errors="ignore")
@@ -327,8 +329,10 @@ def apply_staff_info_update(
 
     for idx, row in matched_leaver_updates:
         staff.loc[idx, "人员状态"] = "非正常"
-        for col in ["国籍(地区)", "性别", "出生日期", "离职日期"]:
-            staff.loc[idx, col] = row.get(col, "")
+        for col in ["国籍(地区)", "性别", "出生日期", "手机号码", "任职受雇从业日期", "离职日期"]:
+            value = _clean(row.get(col, ""))
+            if value:
+                staff.loc[idx, col] = value
 
     for idx, row in rehire_updates:
         values = {column: _clean(row.get(column)) for column in staff.columns}

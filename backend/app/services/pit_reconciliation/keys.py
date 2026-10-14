@@ -1,6 +1,12 @@
 import re
 
 
+def reliable_id_number(value: str | None) -> str:
+    """Return a usable resident ID; masked/short values are not identities."""
+    text = re.sub(r"\s+", "", str(value or "")).upper()
+    return text if re.fullmatch(r"\d{17}[0-9X]", text) else ""
+
+
 def normalized_name(value: str | None) -> str:
     return re.sub(r"\s+", "", value or "").upper()
 

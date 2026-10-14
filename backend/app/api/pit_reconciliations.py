@@ -215,8 +215,10 @@ def sheet_data(
     if sheet_name not in sheet_names_for_stage(stage):
         raise HTTPException(status_code=404, detail="底稿工作表不存在")
     frame = build_pit_workpaper_sheets(db, current_company_id(), period_id, workpaper)[sheet_name]
-    if org_code and "机构代码" in frame.columns:
-        frame = frame[frame["机构代码"].astype(str) == org_code]
+    if org_code:
+        org_column = next((column for column in ("机构代码", "公司段", "分支机构代码", "org_code") if column in frame.columns), None)
+        if org_column is not None:
+            frame = frame[frame[org_column].map(_occurrence_import_key) == org_code]
     if keyword:
         needle = keyword.strip().lower()
         if needle:

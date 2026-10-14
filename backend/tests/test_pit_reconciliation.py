@@ -24,6 +24,8 @@ from app.services.pit_reconciliation.rules.restricted_stock import restricted_st
 from app.services.pit_reconciliation.keys import preferred_id_number
 from app.services.pit_reconciliation.rules.salary_tax import salary_tax_details
 from app.services.pit_reconciliation.rules.salary_taxable_income import salary_taxable_income_details
+from app.services.pit_reconciliation.exporter import _balance_display_rows
+from app.services.verification import load_headquarters_payroll
 
 
 def _db():
@@ -205,6 +207,21 @@ def test_a2_declaration_extra_exposes_missing_payroll_as_null():
     assert details[0]["detail_json"]["payroll_taxable_income"] is None
 
 
+def test_same_name_with_distinct_full_ids_is_not_merged():
+    salary = [
+        SalaryRow("10001", "同名", id_number="110101199001010011", pit_tax=Decimal("10")),
+        SalaryRow("10001", "同名", id_number="110101199001010022", pit_tax=Decimal("20")),
+    ]
+    declarations = [
+        DeclarationRow("10001", "综合所得", person_name="同名", id_number="110101199001010011", income_item="正常工资薪金", tax_amount=Decimal("10")),
+        DeclarationRow("10001", "综合所得", person_name="同名", id_number="110101199001010022", income_item="正常工资薪金", tax_amount=Decimal("30")),
+    ]
+    details = salary_tax_details(salary, declarations)
+    assert len(details) == 1
+    assert details[0]["id_number"] == "110101199001010022"
+    assert details[0]["difference"] == Decimal("10")
+
+
 def test_a2_excludes_headquarters_rows_without_cumulative_payroll_fields():
     salary = [SalaryRow("10001", "总部人员", salary_kind="headquarters", pit_tax=Decimal("100"))]
     declarations = [DeclarationRow(
@@ -375,6 +392,75 @@ def test_salary_source_accepts_generated_working_sheet_org_columns(tmp_path):
     assert source.rows[0].cumulative_taxable_income == Decimal("1234.56")
     assert source.rows[0].cumulative_special_deduction == Decimal("330")
     assert source.rows[0].cumulative_child_education == Decimal("1000")
+
+
+def test_salary_source_uses_headquarters_withheld_tax_when_personal_tax_is_absent(tmp_path):
+    db = _db()
+    company = Company(name="测试公司", code="TEST", operator_name="测试")
+    db.add(company); db.flush()
+    period = Period(company_id=company.id, year=2026, month=7, name="2026-07")
+    db.add(period); db.flush()
+    path = tmp_path / "working_sheet.xlsx"
+    input_path = tmp_path / "headquarters.xlsx"
+    pd.DataFrame([{
+        "机构代码": "10001", "姓名": "总部员工", "员工编号": "总部001",
+        "本期收入": "1000", "本期应预扣预缴税额": "88.66",
+    }]).to_excel(input_path, index=False)
+    payroll = load_headquarters_payroll(str(input_path))
+    payroll["工资单类型"] = "总部工资单"
+    payroll.to_excel(path, index=False)
+    db.add(TaxMonthlyArtifact(company_id=company.id, period_id=period.id, artifact_type="working_sheet", file_name=path.name, stored_path=str(path)))
+    db.commit()
+
+    source = PitSourceService(db, company.id, period.id).load_salary_source()
+
+    assert source.status == "ready"
+    assert source.rows[0].pit_tax == Decimal("88.66")
+
+
+def test_salary_source_keeps_zero_headquarters_personal_tax(tmp_path):
+    db = _db()
+    company = Company(name="测试公司", code="TEST", operator_name="测试")
+    db.add(company); db.flush()
+    period = Period(company_id=company.id, year=2026, month=7, name="2026-07")
+    db.add(period); db.flush()
+    path = tmp_path / "working_sheet.xlsx"
+    pd.DataFrame([{
+        "机构代码_工资单": "10001", "*姓名": "总部员工", "证件号码": "ID1",
+        "员工编号": "总部001", "工资单类型": "总部工资单", "个人所得税": 0,
+        "本期应预扣预缴税额": "88.66",
+    }]).to_excel(path, index=False)
+    db.add(TaxMonthlyArtifact(company_id=company.id, period_id=period.id, artifact_type="working_sheet", file_name=path.name, stored_path=str(path)))
+    db.commit()
+
+    source = PitSourceService(db, company.id, period.id).load_salary_source()
+
+    assert source.rows[0].pit_tax == Decimal("0.00")
+
+
+def test_balance_display_maps_current_import_headers():
+    rows = _balance_display_rows([{
+        "公司段": "17020", "会计科目": "21510008", "描述": "利息税",
+        "期初余额": "1.00", "借方金额": "2.00", "贷方金额": "3.00", "期末余额": "4.00",
+    }])
+    assert rows[0]["期初余额(N)"] == "1.00"
+    assert rows[0]["借方金额(N)"] == "2.00"
+    assert rows[0]["贷方金额(N)"] == "3.00"
+    assert rows[0]["期末余额(N)"] == "4.00"
+
+
+def test_declaration_summary_counts_filing_records_without_changing_amounts():
+    bundle = _bundle()
+    bundle.declarations.rows = [
+        DeclarationRow("10001", "分类所得", person_name="同一客户", id_number="ID1", income_item="其他利息、股息、红利所得", income_amount=Decimal("100"), tax_amount=Decimal("20")),
+        DeclarationRow("10001", "分类所得", person_name="同一客户", id_number="ID1", income_item="其他利息、股息、红利所得", income_amount=Decimal("200"), tax_amount=Decimal("40")),
+        DeclarationRow("10001", "分类所得", income_item="其他利息、股息、红利所得", income_amount=Decimal("50"), tax_amount=Decimal("10")),
+        DeclarationRow("10001", "分类所得", income_item="其他利息、股息、红利所得", income_amount=Decimal("30"), tax_amount=Decimal("6")),
+    ]
+    summary = PitReconciliationEngine().calculate(bundle)["declaration_summaries"][0]
+    assert summary["person_count"] == 4
+    assert summary["income_amount"] == Decimal("380.00")
+    assert summary["tax_amount"] == Decimal("76.00")
 
 
 def test_salary_source_missing_a2_columns_reports_actual_working_sheet_headers(tmp_path):

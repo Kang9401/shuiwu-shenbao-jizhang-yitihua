@@ -447,13 +447,13 @@ def load_marketing_style_payroll(
 
     统一列名为标准名称。处理不同工资单的列名差异。
     """
-    df = pd.read_excel(file_path, dtype={"员工编号": str})
+    df = pd.read_excel(file_path, dtype={"员工编号": str, "員工编号": str})
     cols = df.columns.tolist()
 
     result = pd.DataFrame()
 
     # 员工编号 + 姓名
-    emp_id_col = _first_col(cols, "员工编号")
+    emp_id_col = _first_col(cols, "员工编号", "員工编号")
     emp_name_col = _first_col(cols, "员工姓名", "员工姓名CN", "姓名")
     org_col = _first_col(cols, "单位编号", "单位编码")
     org_name_col = _first_col(cols, "单位名称", "单位名称CN")
@@ -543,7 +543,7 @@ def load_rank_payroll(
 
     result = pd.DataFrame()
 
-    emp_id_col = _first_col(cols, "员工编号")
+    emp_id_col = _first_col(cols, "员工编号", "員工编号")
     emp_name_col = _first_col(cols, "姓名", "员工姓名")
     dept_col = _first_col(cols, "所在部门")
     org_col = _first_col(cols, "机构代码")
@@ -597,12 +597,12 @@ def load_headquarters_payroll(
 
     复现原脚本 L188-200。
     """
-    df = pd.read_excel(file_path, dtype={"员工编号": str})
+    df = pd.read_excel(file_path, dtype={"员工编号": str, "員工编号": str})
     cols = df.columns.tolist()
 
     result = pd.DataFrame()
 
-    emp_id_col = _first_col(cols, "员工编号")
+    emp_id_col = _first_col(cols, "员工编号", "員工编号")
     emp_name_col = _first_col(cols, "姓名", "员工姓名")
     dept_col = _first_col(cols, "工资发放地", "所在部门")
     org_col = _first_col(cols, "机构代码")
@@ -619,14 +619,15 @@ def load_headquarters_payroll(
 
     salary_col = _first_col(cols, "本期收入", "应发合计 SUM")
     welfare_col = _first_col(cols, "福利费", "福利费用", "福利费 SUM")
-    housing_col = _first_col(cols, "住房公积金的员工部分", "住房公积金的员工部分 SUM")
-    pension_col = _first_col(cols, "养老保险金的员工部分", "养老保险金的员工部分 SUM")
-    medical_col = _first_col(cols, "医疗保险金的员工部分", "医疗保险金的员工部分 SUM")
-    unemployed_col = _first_col(cols, "失业保险金的员工部分", "失业保险金的员工部分 SUM")
-    annuity_col = _first_col(cols, "企业年金的员工部分", "企业年金的员工部分 SUM")
-    insurance_col = _first_col(cols, "累计商业保险扣除", "商业保险扣除 SUM", "商业保险扣除")
-    tax_col = _first_col(cols, "个人所得税", "个人所得税 SUM")
-    exempt_col = _first_col(cols, "免税支出", "免税支出 SUM")
+    housing_col = _first_col(cols, "住房公积金", "住房公积金的员工部分", "住房公积金的员工部分 SUM")
+    pension_col = _first_col(cols, "基本养老保险费", "养老保险金的员工部分", "养老保险金的员工部分 SUM")
+    medical_col = _first_col(cols, "基本医疗保险费", "医疗保险金的员工部分", "医疗保险金的员工部分 SUM")
+    unemployed_col = _first_col(cols, "失业保险费", "失业保险金的员工部分", "失业保险金的员工部分 SUM")
+    annuity_col = _first_col(cols, "企业(职业)年金", "企业年金的员工部分", "企业年金的员工部分 SUM")
+    insurance_col = _first_col(cols, "商业健康保险", "累计商业保险扣除", "商业保险扣除 SUM", "商业保险扣除")
+    tax_col = _first_col(cols, "个人所得税", "个人所得税 SUM", "本期应预扣预缴税额", "本期应预扣预缴税额 SUM")
+    exempt_col = _first_col(cols, "本期免税收入", "免税支出", "免税支出 SUM")
+    withhold_col = _first_col(cols, "本期应预扣预缴税额", "本期应预扣预缴税额 SUM")
 
     result["应发工资"] = _to_numeric(df[salary_col]) if salary_col else 0
     result["福利费"] = _to_numeric(df[welfare_col]) if welfare_col else 0
@@ -638,7 +639,7 @@ def load_headquarters_payroll(
     result["商业健康保险"] = _to_numeric(df[insurance_col]) if insurance_col else 0
     result["个人所得税 SUM"] = _to_numeric(df[tax_col]) if tax_col else 0
     result["本期免税收入"] = _to_numeric(df[exempt_col]) if exempt_col else 0
-    result["本期应预扣预缴税额 SUM"] = 0
+    result["本期应预扣预缴税额 SUM"] = _to_numeric(df[withhold_col]) if withhold_col else 0
     result["调增应纳税所得额"] = 0
     result["年累计专项附加扣除"] = 0
 

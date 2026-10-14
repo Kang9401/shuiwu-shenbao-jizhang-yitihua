@@ -4,6 +4,9 @@ import pandas as pd
 
 from app.services.personnel_declaration import build_monthly_personnel_change_table
 from app.services.personnel_update import PERSONNEL_COLLECTION_COLUMNS, build_personnel_collection_files
+from app.services.personnel_fields import phone_text
+from app.services.monthly_personnel import normalize
+import pytest
 
 
 def _master_row(name: str, id_number: str, org_code: str, status: str, **extra: str) -> dict[str, str]:
@@ -59,6 +62,41 @@ def test_personnel_collection_preserves_hire_date_alias_in_tax_format(tmp_path: 
     output = pd.read_excel(files[0], dtype=str).fillna("")
 
     assert output.loc[output["*姓名"] == "李四", "任职受雇从业日期"].iloc[0] == "2026-08-07"
+
+
+def test_departure_collection_uses_updated_phone_and_hire_date(tmp_path: Path):
+    previous_path = tmp_path / "previous.xlsx"
+    current_path = tmp_path / "current.xlsx"
+    pd.DataFrame([_master_row("张三", "110101199001010011", "10001", "正常",
+                                phone="", hire_date="")]).to_excel(previous_path, index=False)
+    pd.DataFrame([_master_row("张三", "110101199001010011", "10001", "非正常",
+                                phone="13900000000", hire_date="2024-03-01", leave_date="2026-09-30")]).to_excel(current_path, index=False)
+    changes = build_monthly_personnel_change_table(previous_path, current_path, 2026, 9)
+    files = build_personnel_collection_files(changes, tmp_path / "declarations", 2026, 9)
+    output = pd.read_excel(files[0], dtype=str).fillna("")
+    assert output.loc[0, "手机号码"] == "13900000000"
+    assert output.loc[0, "任职受雇从业日期"] == "2024-03-01"
+    assert output.loc[0, "离职日期"] == "2026-09-30"
+
+
+@pytest.mark.parametrize("value, expected", [
+    (13902251110.0, "13902251110"), ("13902251110.0", "13902251110"),
+    ("013900000000", "013900000000"), ("028-12345678", "028-12345678"),
+    ("+86 13900000000", "+86 13900000000"), ("123.45", "123.45"), (None, ""),
+])
+def test_phone_text_preserves_text_identifiers(value, expected):
+    assert phone_text(value) == expected
+
+
+def test_intern_monthly_normalization_and_collection_write_phone_as_text(tmp_path: Path):
+    people = normalize(pd.DataFrame([{
+        "*姓名": "实习生甲", "证件号码": "110101199001010011", "证件类型": "居民身份证",
+        "联系方式": 13902251110.0, "机构代码": "10001",
+    }]))
+    assert people[0]["手机号码"] == "13902251110"
+    files = build_personnel_collection_files(pd.DataFrame(people), tmp_path, 2026, 9, file_extension=".xlsx")
+    output = pd.read_excel(files[0], dtype=str).fillna("")
+    assert output.loc[0, "手机号码"] == "13902251110"
 
 
 def test_personnel_collection_drops_declaration_only_columns_for_all_person_types(tmp_path: Path):

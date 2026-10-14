@@ -229,6 +229,16 @@ def test_intern_tax_builds_legacy_personnel_and_declaration_data():
     assert row["本期收入"] == 500
 
 
+def test_intern_tax_removes_numeric_phone_suffix():
+    intern = pd.DataFrame([{
+        "营业部名称": "广州昌岗中路", "*姓名": "张三", "*证件类型": "居民身份证",
+        "*证件号码": "110101199001010011", "实习开始时间": "2026-06-01",
+        "发放补贴数\n（元）": 500, "联系方式": 13902251110.0,
+    }])
+    row = intern_tax_transform({"intern_salary_sheet": intern})["detail"].iloc[0]
+    assert row["手机号码"] == "13902251110"
+
+
 def test_intern_tax_uses_broker_headers_and_fills_foreign_fields():
     intern = pd.DataFrame([{
         "营业部名称": "广州昌岗中路", "工号": "I-001", "*姓名": "港籍实习生",

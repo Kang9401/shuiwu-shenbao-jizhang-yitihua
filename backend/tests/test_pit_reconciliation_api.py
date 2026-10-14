@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import Base, get_db
 from app.main import app
 from app.models.core import Company, Period
+from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 from app.services.pit_reconciliation.domain import BalanceRow, DeclarationRow, OrganizationRow, PitSourceBundle, SalaryRow, SourceResult
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
@@ -175,6 +176,41 @@ def test_pit_sheet_data_exposes_reference_columns_and_pagination():
         assert len(payload["rows"]) == 2
         assert all("描述" in row for row in payload["rows"])
     finally:
+        app.dependency_overrides.clear()
+
+
+def test_balance_sheet_data_filters_company_segment_before_pagination():
+    client, period_id = _client_with_workpaper()
+    session_generator = app.dependency_overrides[get_db]()
+    db = next(session_generator)
+    try:
+        batch = ReconciliationImportBatch(company_id=1, period_id=period_id, import_type="balance_sheet",
+            original_name="balance.xlsx", stored_path="balance.xlsx", row_count=3)
+        db.add(batch); db.flush()
+        for index, org in enumerate(("10002", "10001", "10001.0"), 1):
+            db.add(ReconciliationImportRow(company_id=1, period_id=period_id, batch_id=batch.id,
+                import_type="balance_sheet", row_number=index, raw_data={
+                    "公司段": org, "会计科目": "21510008", "币种": "CNY",
+                    "期初余额": "0", "借方金额": "10", "贷方金额": "20", "期末余额": "30",
+                }))
+        db.commit()
+        for page in (1, 2):
+            response = client.get("/api/pit-reconciliations/sheet-data", params={
+                "period_id": period_id, "stage": "pre_payment", "sheet_name": "科目余额表",
+                "org_code": "10001", "page": page, "page_size": 1,
+            })
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["total"] == 2
+            assert len(payload["rows"]) == 1
+            row = payload["rows"][0]
+            assert row["公司段"].removesuffix(".0") == "10001"
+            assert row["期初余额(N)"] == "0"
+            assert row["借方金额(N)"] == "10"
+            assert row["贷方金额(N)"] == "20"
+            assert row["期末余额(N)"] == "30"
+    finally:
+        session_generator.close()
         app.dependency_overrides.clear()
 
 

@@ -1,28 +1,31 @@
 from decimal import Decimal
-from ..keys import employee_identity
+from ..keys import employee_identity, reliable_id_number
 from ..money import has_difference
 
 
 def salary_taxable_income_details(salaries, declarations):
+    def key_for(row):
+        return (row.org_code, reliable_id_number(getattr(row, "id_number", "")) or row.person_name)
+
     grouped={}
     typed_payroll = any(getattr(row, "salary_kind", "") for row in salaries)
     supported_kinds = {"five_digit", "seven_digit"}
     excluded_keys = {
-        (row.org_code, row.person_name)
+        key_for(row)
         for row in salaries
         if typed_payroll and getattr(row, "salary_kind", "") not in supported_kinds
     }
     for row in salaries:
         if typed_payroll and getattr(row, "salary_kind", "") not in supported_kinds:
             continue
-        grouped.setdefault((row.org_code,row.person_name), [[],[]])[0].append(row)
+        grouped.setdefault(key_for(row), [[],[]])[0].append(row)
     for row in declarations:
-        key = (row.org_code, row.person_name)
+        key = key_for(row)
         if key in excluded_keys and key not in grouped:
             continue
         if "工资薪金" in row.income_item and "证券经纪" not in row.income_item: grouped.setdefault(key, [[],[]])[1].append(row)
     output=[]
-    for (org,name),(payroll,declared) in sorted(grouped.items()):
+    for (org,identity),(payroll,declared) in sorted(grouped.items()):
         remaining=list(payroll); pairs=[]; unmatched_declarations=[]
         # Legacy pairing: consume all exact taxable-income matches first, then
         # pair the remaining records by their original order.
@@ -54,5 +57,5 @@ def salary_taxable_income_details(salaries, declarations):
                 declared_other=(dec.cumulative_other_deduction if dec else None) or Decimal("0.00")
                 payroll_tax=(pay.pit_tax if pay else None) or Decimal("0.00")
                 declared_tax=(dec.tax_amount if dec else None) or Decimal("0.00")
-                output.append({"detail_type":"salary_taxable_income","org_code":org,"name":name,"id_number":reference.id_number,"identity_key":employee_identity(getattr(reference,"employee_no","") or "",reference.id_number,org,name,index),"source_amount":source_value,"target_amount":target_value,"difference":difference,"auto_reason":f"累计应纳税所得额：工资 {source:.2f}，申报 {target:.2f}，差异 {difference:.2f}","detail_json":{"declared_taxable_income":str(target_value) if target_value is not None else None,"payroll_taxable_income":str(source_value) if source_value is not None else None,"taxable_income_difference":str(difference),"specific_deduction_difference":str(payroll_special-declared_special),"special_additional_deduction_difference":str(additional_difference),"other_deduction_difference":str(payroll_other-declared_other),"housing_fund_adjustment":str(dec.housing_fund_adjustment) if dec and dec.housing_fund_adjustment is not None else None,"declaration_rate":dec.tax_rate if dec else "","payroll_tax":str(payroll_tax),"declared_tax":str(declared_tax),"tax_difference":str(payroll_tax-declared_tax)}})
+                output.append({"detail_type":"salary_taxable_income","org_code":org,"name":getattr(reference,"person_name","") or "","id_number":reference.id_number,"identity_key":employee_identity(getattr(reference,"employee_no","") or "",reference.id_number,org,getattr(reference,"person_name","") or "",index),"source_amount":source_value,"target_amount":target_value,"difference":difference,"auto_reason":f"累计应纳税所得额：工资 {source:.2f}，申报 {target:.2f}，差异 {difference:.2f}","detail_json":{"declared_taxable_income":str(target_value) if target_value is not None else None,"payroll_taxable_income":str(source_value) if source_value is not None else None,"taxable_income_difference":str(difference),"specific_deduction_difference":str(payroll_special-declared_special),"special_additional_deduction_difference":str(additional_difference),"other_deduction_difference":str(payroll_other-declared_other),"housing_fund_adjustment":str(dec.housing_fund_adjustment) if dec and dec.housing_fund_adjustment is not None else None,"declaration_rate":dec.tax_rate if dec else "","payroll_tax":str(payroll_tax),"declared_tax":str(declared_tax),"tax_difference":str(payroll_tax-declared_tax)}})
     return output
