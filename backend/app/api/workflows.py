@@ -4,18 +4,30 @@ import io
 from urllib.parse import quote
 
 import pandas as pd
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.api.dependencies import require_company
+from app.api.dependencies import require_company, require_period
+from app.integrations.fmss.errors import FmssError, FmssNotAuthenticated
+from app.services.fmss_sources import fetch_security_sources
 from app.models.core import Company
 from app.models.accounting import OrganizationMapping
 from app.workflows import list_workflows
 from app.services.part_time_tax import PAYROLL_COLUMNS
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+@router.post("/restricted-stock-interest/fmss-sources")
+def extract_security_sources(period_id: int, company: Company = Depends(require_company), db: Session = Depends(get_db)) -> dict:
+    period = require_period(db, period_id)
+    try:
+        return fetch_security_sources(db, company, period)
+    except FmssError as exc:
+        db.rollback()
+        raise HTTPException(401 if isinstance(exc, FmssNotAuthenticated) else 409, detail=exc.user_message) from exc
 
 @router.get("/part-time-tax/template")
 def download_part_time_template(_company: Company = Depends(require_company)) -> Response:

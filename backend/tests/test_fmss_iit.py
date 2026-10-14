@@ -112,7 +112,7 @@ def test_fmss_session_validation_reads_sheets_without_exposing_token(monkeypatch
 
     assert result == {
         "connected": True,
-        "environment": "dev",
+        "environment": "production",
         "username": None,
         "displayName": None,
     }
@@ -123,7 +123,7 @@ def test_fmss_session_without_token_never_exposes_secret_fields():
     fmss_session.clear()
     assert fmss_iit.session_state() == {
         "connected": False,
-        "environment": "dev",
+        "environment": "production",
         "username": None,
         "displayName": None,
     }

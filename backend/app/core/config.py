@@ -21,17 +21,18 @@ class Settings(BaseSettings):
     finance_ai_api_key: str = ""
     finance_ai_model: str = ""
     finance_ai_timeout_seconds: float = 60.0
-    # FMSS endpoints are deliberately explicit.  The test host happens to use a
-    # prod-api gateway; do not derive this value from the hostname.
-    fmss_login_url: str = "https://fmssdev.gf.com.cn/fmss/login"
-    fmss_api_base_url: str = "https://fmssdev.gf.com.cn/fmss/prod-api"
-    fmss_environment: str = "dev"
+    # FMSS endpoints are deliberately explicit; do not derive the gateway from
+    # the hostname. Production keeps the same prod-api gateway prefix.
+    fmss_login_url: str = "https://fmss.gf.com.cn/fmss"
+    fmss_api_base_url: str = "https://fmss.gf.com.cn/fmss/prod-api"
+    fmss_environment: str = "production"
     # Leave empty until FMSS confirms the real current-user endpoint.  The
     # identity resolver deliberately makes no speculative user-info calls.
     fmss_current_user_path: str = ""
     fmss_write_enabled: bool = True
     fmss_post_write_enabled: bool = True
-    fmss_production_write_enabled: bool = False
+    # Production submission is enabled; deployments can still disable it explicitly.
+    fmss_production_write_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -2,7 +2,7 @@
   <RpaMonitor v-if="isRpaMonitor" />
   <div v-else-if="fmssChecking" class="company-entry company-entry-loading">
     <el-icon class="company-entry-spinner"><Loading /></el-icon>
-    <strong>正在验证 FMSS 登录状态</strong>
+    <strong>正在验证智能税务平台登录状态</strong>
   </div>
   <FmssLoginGate v-else-if="!fmssReady" @connected="handleFmssConnected" />
   <div v-else-if="initializingCompanies" class="company-entry company-entry-loading">
@@ -31,7 +31,7 @@
         <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" placeholder="例如：广州分公司" /></label>
         <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" placeholder="例如：17001" /></label>
         <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" placeholder="请输入使用人" /></label>
-        <label>FMSS申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录FMSS后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
+        <label>申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
         <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" placeholder="选填" /></label>
         <el-button type="primary" :loading="savingCompany" @click="saveCompany(true)">创建并进入</el-button>
       </section>
@@ -73,10 +73,9 @@
           <p>{{ activeMeta.description }}</p>
         </div>
         <div class="topbar-right">
-          <div class="fmss-topbar-status" title="FMSS连接状态">
-            <span class="fmss-env-tag">{{ fmssEnvironment.toUpperCase() }}</span>
+          <div class="fmss-topbar-status" title="智能税务平台登录状态">
+            <span class="fmss-env-tag">已登录</span>
             <span v-if="fmssIdentity.displayName || fmssIdentity.username">用户：{{ fmssIdentity.displayName || fmssIdentity.username }}登录中</span>
-            <span v-else>FMSS已登录（账号信息未获取）</span>
             <el-button link type="primary" @click="switchFmssAccount">切换账号</el-button>
           </div>
           <div class="company-control">
@@ -231,7 +230,7 @@
         <el-table-column prop="name" label="分公司" min-width="150" />
         <el-table-column prop="code" label="编码" width="110" />
         <el-table-column prop="operator_name" label="使用人" width="120" />
-        <el-table-column label="FMSS申报分公司" min-width="160"><template #default="{ row }">{{ row.fmss_branch_name || row.fmss_branch_code || '未绑定' }}</template></el-table-column>
+        <el-table-column label="申报分公司" min-width="160"><template #default="{ row }">{{ row.fmss_branch_name || row.fmss_branch_code || '未绑定' }}</template></el-table-column>
         <el-table-column label="状态" width="80"><template #default="{ row }"><span class="tag" :class="row.active ? 'tag-success' : 'tag-info'">{{ row.active ? '启用' : '停用' }}</span></template></el-table-column>
         <el-table-column label="操作" width="180"><template #default="{ row }"><el-button link type="primary" @click="openCompanyEditor(row)">编辑</el-button><el-button link :type="row.active ? 'danger' : 'success'" @click="toggleCompany(row)">{{ row.active ? '停用' : '启用' }}</el-button></template></el-table-column>
       </el-table>
@@ -242,7 +241,7 @@
         <label>分公司名称<input v-model.trim="companyDraft.name" maxlength="120" /></label>
         <label>分公司编码<input v-model.trim="companyDraft.code" maxlength="60" /></label>
         <label>使用人<input v-model.trim="companyDraft.operator_name" maxlength="120" /></label>
-        <label>FMSS申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录FMSS后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
+        <label>申报分公司<el-select v-model="companyDraft.fmss_branch_code" clearable filterable placeholder="登录后可选择" @change="selectFmssBranch"><el-option v-for="branch in fmssBranches" :key="branch.code" :label="`${branch.name}（${branch.code}）`" :value="branch.code" /></el-select></label>
         <label>补充信息<textarea v-model.trim="companyDraft.notes" maxlength="500" rows="3" /></label>
       </div>
       <template #footer><el-button @click="companyEditorVisible = false">取消</el-button><el-button type="primary" :loading="savingCompany" @click="saveCompany(false)">保存</el-button></template>
@@ -373,7 +372,7 @@ const isRpaMonitor = new URLSearchParams(window.location.search).get('window') =
 const workflows = ref<Workflow[]>([])
 const selectedPeriodId = ref<number | null>(null)
 const session = ref<TaxSession | null>(null)
-const activeView = ref<ViewKey>('tax_declaration')
+const activeView = ref<ViewKey>('personnel_masters')
 const periodDialogVisible = ref(false)
 const newPeriodMonth = ref('')
 const creatingPeriod = ref(false)
@@ -390,7 +389,6 @@ const companyDraft = reactive(emptyCompanyDraft())
 const fmssBranches = ref<Array<{ code: string; name: string }>>([])
 const fmssReady = ref(false)
 const fmssChecking = ref(!isRpaMonitor)
-const fmssEnvironment = ref('dev')
 const fmssIdentity = reactive<{ username: string | null; displayName: string | null }>({ username: null, displayName: null })
 
 const flatItems = computed(() => navSections.flatMap((section) => section.items))
@@ -518,7 +516,6 @@ async function validateFmssSession(): Promise<boolean> {
       return false
     }
     const { data: branchData } = await fmssApi.branches()
-    fmssEnvironment.value = data.environment || 'dev'
     fmssIdentity.username = data.username
     fmssIdentity.displayName = data.displayName
     fmssBranches.value = normalizeFmssBranches(branchData)
@@ -534,6 +531,7 @@ async function validateFmssSession(): Promise<boolean> {
 }
 
 async function initializeWorkspace() {
+  activeView.value = 'personnel_masters'
   await loadCompanies()
   const storedId = Number(window.localStorage.getItem(COMPANY_STORAGE_KEY))
   if (companies.value.some((item) => item.id === storedId)) await selectCompany(storedId, false)

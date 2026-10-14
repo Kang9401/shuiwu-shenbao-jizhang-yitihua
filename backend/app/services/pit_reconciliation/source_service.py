@@ -9,10 +9,31 @@ import pandas as pd
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 from app.models.core import Artifact, Job
 from app.models.tax import TaxMonthlyArtifact
+from app.services.bank_accounts import normalize_bank_account
 from .constants import BALANCE_FIELD_ALIASES
 from .domain import (BalanceRow, BankRow, BondInterestRow, BrokerRow, DeclarationRow, PitSourceBundle, RestrictedStockRow, SalaryRow, SourceResult, TaxCertificateRow)
 from .money import money_or_none
 from .organization_resolver import PitOrganizationResolver
+
+
+def declaration_snapshot_rows(db, workpaper) -> list[dict]:
+    """Read the calculated declaration version, never the newest import."""
+    snapshot = (workpaper.source_snapshot_json or {}).get("pit_declaration", {})
+    if isinstance(snapshot.get("rows"), list):
+        return snapshot["rows"]
+    batch_id = snapshot.get("source_id")
+    if batch_id is None:
+        if snapshot.get("row_count", 0):
+            raise ValueError("缴款前申报表快照来源已丢失，不能使用新导入数据替代")
+        return []
+    batch = db.query(ReconciliationImportBatch).filter_by(
+        id=batch_id, company_id=workpaper.company_id, period_id=workpaper.period_id, import_type="pit_declaration",
+    ).first()
+    if batch is None:
+        raise ValueError("缴款前申报表快照来源已丢失，不能使用新导入数据替代")
+    return [row.raw_data or {} for row in db.query(ReconciliationImportRow).filter_by(
+        batch_id=batch.id, company_id=workpaper.company_id,
+    ).order_by(ReconciliationImportRow.row_number).all()]
 
 
 def _text(value: Any) -> str:
@@ -206,12 +227,24 @@ class PitSourceService:
     def load_bank_source(self) -> SourceResult:
         batch, rows=self._batch_rows("bank_statement")
         if batch is None:return SourceResult("bank_statement","missing",required=False)
-        result=[]; issues=[]
+        result=[]; unmatched={}
         for row in rows:
             raw=row.raw_data or {}; account=_text(_pick(raw,"本方账号","账号","银行账号") or row.account_code); name=_text(_pick(raw,"本方户名","账户名称","户名")); resolved=self.resolver.resolve_by_bank_account(account) or self.resolver.resolve_by_full_name(name) or self.resolver.resolve_by_branch_name(name)
             org=(resolved.org_code if resolved else "") or _text(row.organization_code)
-            if not org: issues.append({"issue_type":"unresolved_bank_organization","message":"银行流水未识别本方机构，已排除自动匹配","row_id":row.id,"bank_account":account})
+            if not org:
+                key = (normalize_bank_account(account), name)
+                issue = unmatched.setdefault(key, {
+                    "issue_type": "unresolved_bank_organization", "row_id": row.id,
+                    "bank_account": key[0], "account_name": name, "transaction_count": 0,
+                })
+                issue["transaction_count"] += 1
             result.append(BankRow(org,account,_text(row.transaction_date),_text(row.summary),money_or_none(_pick(raw,"借方金额") or row.amount),batch.id,row.id))
+        issues = list(unmatched.values())
+        for issue in issues:
+            issue["message"] = (
+                f"银行账号：{issue['bank_account'] or '未提供'}；户名：{issue['account_name'] or '未提供'}；"
+                f"流水共 {issue['transaction_count']} 条"
+            )
         return SourceResult("bank_statement","ready_empty" if not rows else "ready",result,False,"reconciliation_import_batch",batch.id,batch.stored_path,issues)
 
     def load_bundle(self) -> PitSourceBundle:

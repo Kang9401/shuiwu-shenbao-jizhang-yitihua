@@ -79,6 +79,38 @@ def test_same_name_with_distinct_ids_matches_separately(tmp_path):
     assert len(result["rows"]) == 2
 
 
+def test_optional_payroll_org_code_distinguishes_same_person_across_orgs(tmp_path):
+    db = _db()
+    previous, current = _periods(db)
+    db.add(OrganizationMapping(branch_name="营业部二", org_code="13209", active=1))
+    db.commit()
+    _master(tmp_path, db, previous, [
+        {"姓名": "张伟", "证件号码": "110101199003072015", "归属机构代码": "13208", "人员状态": "正常"},
+        {"姓名": "张伟", "证件号码": "110101199003072015", "归属机构代码": "13209", "人员状态": "正常"},
+    ])
+    result = process_part_time(db, pd.DataFrame([
+        {"姓名": "张伟", "证件号码": "110101199003072015", "机构编号": "13208", "本期收入": 1000},
+        {"姓名": "张伟", "证件号码": "110101199003072015", "机构编号": "13209", "本期收入": 2000},
+    ]), None, period_id=current.id)
+    assert not result["blocking"]
+    assert set(result["rows"]["归属机构代码"]) == {"13208", "13209"}
+
+
+def test_optional_payroll_org_code_is_required_for_ambiguous_same_id(tmp_path):
+    db = _db()
+    previous, current = _periods(db)
+    db.add(OrganizationMapping(branch_name="营业部二", org_code="13209", active=1))
+    db.commit()
+    _master(tmp_path, db, previous, [
+        {"姓名": "张伟", "证件号码": "110101199003072015", "归属机构代码": "13208", "人员状态": "正常"},
+        {"姓名": "张伟", "证件号码": "110101199003072015", "归属机构代码": "13209", "人员状态": "正常"},
+    ])
+    result = process_part_time(db, pd.DataFrame([
+        {"姓名": "张伟", "证件号码": "110101199003072015", "本期收入": 1000},
+    ]), None, period_id=current.id)
+    assert any(issue["issue_type"] == "multiple_org_match_requires_org_code" for issue in result["blocking"])
+
+
 def test_id_mismatch_is_warning_and_master_id_wins(tmp_path):
     db = _db()
     previous, current = _periods(db)

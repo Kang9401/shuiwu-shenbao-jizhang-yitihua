@@ -1,6 +1,6 @@
 <template>
   <section class="decision-panel">
-    <div><strong>审批操作</strong><p>FMSS提交版本只读；退回原因必填。</p></div>
+    <div><strong>审批操作</strong><p>提交版本只读；退回原因必填。</p></div>
     <el-input v-if="allowReview" v-model="comment" type="textarea" :rows="3" maxlength="500" show-word-limit :disabled="loading" placeholder="通过意见可选；退回原因必填" />
     <div class="decision-panel__actions">
       <el-button v-if="allowReview" type="success" :loading="loading && pendingDecision === 'approved'" :disabled="loading" @click="emitDecision('approved')">复核通过</el-button>

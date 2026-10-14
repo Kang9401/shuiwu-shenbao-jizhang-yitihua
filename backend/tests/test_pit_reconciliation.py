@@ -21,6 +21,7 @@ from app.services.pit_reconciliation.rules.occurrence import calc_vat
 from app.services.pit_reconciliation.rules.payment import find_subset_sum
 from app.services.pit_reconciliation.rules.bond_interest import bond_interest_details
 from app.services.pit_reconciliation.rules.restricted_stock import restricted_stock_details
+from app.services.pit_reconciliation.keys import preferred_id_number
 from app.services.pit_reconciliation.rules.salary_tax import salary_tax_details
 from app.services.pit_reconciliation.rules.salary_taxable_income import salary_taxable_income_details
 
@@ -92,6 +93,36 @@ def test_missing_salary_does_not_become_zero():
     tax=next(row for row in result["tax_checks"] if row["subject_code"]=="21510006")
     assert tax["business_tax_amount"] is None
     assert tax["business_declared_difference"] is None
+
+
+def test_duplicate_customer_identity_keys_get_stable_suffixes():
+    bundle = _bundle()
+    bundle.bond_interest = SourceResult(
+        "bond_interest", "ready", [
+            BondInterestRow("10001", "甲", "ID1", Decimal("100"), Decimal("10")),
+        ],
+    )
+    bundle.declarations.rows.append(
+        DeclarationRow(
+            "10001", "利息", person_name="乙", id_number="ID1",
+            income_item="其他利息、股息、红利所得", income_amount=Decimal("100"), tax_amount=Decimal("20"),
+        )
+    )
+    result = PitReconciliationEngine().calculate(bundle)
+    details = [row for row in result["details"] if row["detail_type"] == "bond_interest_tax"]
+    assert len(details) == 2
+    assert len({row["identity_key"] for row in details}) == 2
+    assert any(row.get("detail_json", {}).get("identity_key_collision") for row in details)
+
+
+def test_masked_and_full_customer_ids_prefer_full_id_deterministically():
+    assert preferred_id_number({"4****************7", "440204196604284717"}) == "440204196604284717"
+    details = bond_interest_details(
+        [BondInterestRow("10001", "甲", "4****************7", Decimal("100"), Decimal("10"))],
+        [DeclarationRow("10001", "利息", person_name="甲", id_number="440204196604284717", income_item="其他利息、股息、红利所得", income_amount=Decimal("100"), tax_amount=Decimal("20"))],
+    )
+    assert details[0]["id_number"] == "440204196604284717"
+    assert details[0]["identity_key"] == "id:440204196604284717"
 
 
 def test_tax_and_summary_balance_amount_use_closing_balance_not_credit_movement():
@@ -279,22 +310,36 @@ def test_bank_source_reports_unresolved_rows_and_engine_excludes_them():
     period = Period(company_id=company.id, year=2026, month=7, name="2026-07")
     db.add(period); db.flush()
     db.add(OrganizationMapping(company_id=company.id, branch_name="测试营业部全称", org_code="10001", bank_subaccount="001.02"))
-    batch = ReconciliationImportBatch(company_id=company.id, period_id=period.id, import_type="bank_statement", original_name="bank.xlsx", stored_path="bank.xlsx", row_count=2)
+    db.add(OrganizationMapping(company_id=company.id, branch_name="另一营业部", org_code="10002", bank_account="002.03"))
+    batch = ReconciliationImportBatch(company_id=company.id, period_id=period.id, import_type="bank_statement", original_name="bank.xlsx", stored_path="bank.xlsx", row_count=4)
     db.add(batch); db.flush()
     db.add_all([
-        ReconciliationImportRow(company_id=company.id, batch_id=batch.id, period_id=period.id, import_type="bank_statement", row_number=1, transaction_date="2026-07-10", summary="缴税", amount=Decimal("100"), raw_data={"本方户名": "测试营业部全称", "本方账号": "001.02", "借方金额": "100"}),
+        ReconciliationImportRow(company_id=company.id, batch_id=batch.id, period_id=period.id, import_type="bank_statement", row_number=1, transaction_date="2026-07-10", summary="缴税", amount=Decimal("100"), raw_data={"本方户名": "另一营业部", "本方账号": " 001.02 ", "借方金额": "100"}),
         ReconciliationImportRow(company_id=company.id, batch_id=batch.id, period_id=period.id, import_type="bank_statement", row_number=2, transaction_date="2026-07-11", summary="缴税", amount=Decimal("100"), raw_data={"本方户名": "未知机构", "本方账号": "999.99", "借方金额": "100"}),
+        ReconciliationImportRow(company_id=company.id, batch_id=batch.id, period_id=period.id, import_type="bank_statement", row_number=3, amount=Decimal("200"), raw_data={"本方户名": "未知机构", "本方账号": "９９９.９９", "借方金额": "200"}),
+        ReconciliationImportRow(company_id=company.id, batch_id=batch.id, period_id=period.id, import_type="bank_statement", row_number=4, amount=Decimal("50"), raw_data={"本方户名": "另一未知机构", "本方账号": "888.88", "借方金额": "50"}),
     ])
     db.commit()
 
     source = PitSourceService(db, company.id, period.id).load_bank_source()
 
-    assert [row.org_code for row in source.rows] == ["10001", ""]
+    # The account wins even when the holder name resolves to a different branch.
+    assert source.status == "ready"
+    assert [row.org_code for row in source.rows] == ["10001", "", "", ""]
     assert source.issues == [{
         "issue_type": "unresolved_bank_organization",
-        "message": "银行流水未识别本方机构，已排除自动匹配",
+        "message": "银行账号：999.99；户名：未知机构；流水共 2 条",
         "row_id": source.rows[1].source_row_id,
         "bank_account": "999.99",
+        "account_name": "未知机构",
+        "transaction_count": 2,
+    }, {
+        "issue_type": "unresolved_bank_organization",
+        "message": "银行账号：888.88；户名：另一未知机构；流水共 1 条",
+        "row_id": source.rows[3].source_row_id,
+        "bank_account": "888.88",
+        "account_name": "另一未知机构",
+        "transaction_count": 1,
     }]
 
 

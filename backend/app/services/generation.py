@@ -93,7 +93,7 @@ def generate_declarations(
 
         fname = f"{org_str}_3-个税申报表({year}年{month:02d}月).xls"
         fpath = out / fname
-        org_sheet.to_excel(fpath, index=False)
+        org_sheet.rename(columns={"住房公积金调整": "住房公积金和年金调整"}).to_excel(fpath, index=False)
         files.append(str(fpath))
 
     # ---- 个税差异一览表 ----

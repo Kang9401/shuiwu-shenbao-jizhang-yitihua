@@ -4,7 +4,7 @@
       <div class="card-header"><div><strong>{{ workflow.name }}</strong><p>{{ workflow.description }}</p></div><span class="tag tag-info">{{ workflow.domain }}</span></div>
       <div class="card-body">
         <div class="workflow-stepbar"><span class="tag tag-success">1 上传收入资料</span><span class="tag" :class="job ? 'tag-success' : 'tag-info'">2 人员核对</span><span class="tag" :class="metrics.can_generate ? 'tag-success' : 'tag-info'">3 补录复核</span><span class="tag" :class="metrics.finalized ? 'tag-success' : 'tag-info'">4 生成申报</span></div>
-        <p class="action-hint">复用工资薪金的人员主数据和核对流程。本月收入资料中未出现的在职人员自动列为离职；零收入记录仍视为本月有记录。</p>
+        <p class="action-hint">复用工资薪金的人员主数据和核对流程。本月收入资料中未出现的在职人员自动列为离职；零收入记录仍视为本月有记录。<span v-if="workflow.code === 'part_time_tax'">劳务报酬工资单可选填机构编号；同一姓名和证件号在多个机构任职时请填写。</span></p>
         <div class="upload-item workflow-upload-item" :class="{ 'has-file': incomeFiles.length }">
           <label>{{ workflow.code === 'broker_tax' ? '经纪人工资单' : workflow.code === 'intern_tax' ? '实习生工资单' : '劳务报酬工资单' }}</label><input type="file" multiple accept=".xls,.xlsx,.xlsb" :disabled="busy" @change="pickIncome" />
           <span class="upload-status" :class="incomeFiles.length ? 'ready' : 'empty'">{{ incomeFiles.map(f => f.name).join('、') || '请选择工资单文件' }}</span>

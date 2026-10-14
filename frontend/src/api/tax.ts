@@ -196,6 +196,9 @@ export const taxApi = {
 }
 
 export const workflowApi = {
+  extractSecuritySources: (periodId: number) => api.post<{ files: Array<{ id: number; file_role: string; row_count: number }>; branch_code: string; month: string }>(
+    '/workflows/restricted-stock-interest/fmss-sources', {}, { params: { period_id: periodId }, timeout: 300000 },
+  ),
   partTimeTemplateUrl: () => companyUrl('/api/workflows/part-time-tax/template'),
   list: () => api.get<Workflow[]>('/workflows'),
 

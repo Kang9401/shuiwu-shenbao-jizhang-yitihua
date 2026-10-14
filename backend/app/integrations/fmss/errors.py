@@ -8,7 +8,7 @@ class FmssError(Exception):
 
 
 class FmssNotAuthenticated(FmssError):
-    user_message = "FMSS登录已失效，请重新登录。"
+    user_message = "智能税务平台登录已失效，请重新登录。"
 
 
 class FmssPermissionDenied(FmssError):

@@ -2,6 +2,7 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -24,9 +25,10 @@ def _db_session():
     return testing_session_local()
 
 
-def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_path: Path):
+@pytest.mark.parametrize("workflow_code", ["intern_tax", "part_time_tax", "broker_tax", "restricted_stock_interest_tax"])
+def test_batch_download_contains_only_declaration_and_personnel_collection(tmp_path: Path, workflow_code):
     db = _db_session()
-    job = Job(workflow_code="restricted_stock_interest_tax", input_file_ids=[], status="success")
+    job = Job(workflow_code=workflow_code, input_file_ids=[], status="success")
     db.add(job)
     db.commit()
     db.refresh(job)

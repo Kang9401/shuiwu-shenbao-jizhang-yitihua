@@ -255,8 +255,13 @@ def apply_staff_info_update(
         "人员状态", "证件号码", "机构代码", "国籍(地区)", "性别", "出生日期", "离职日期",
     ])
     change = _ensure_columns(change, [
-        "机构代码(工资单)", "任职受雇从业类型", "国籍(地区)", "性别", "出生日期", "离职日期",
+        "机构代码(工资单)", "任职受雇从业类型", "国籍(地区)", "性别", "出生日期", "离职日期", "任职受雇从业日期",
     ])
+    # A rehire without an explicit date starts on the first day of the
+    # current filing period.  Keep an explicitly supplied date unchanged.
+    active_changes = change[change["人员状态"].map(_clean).isin(["正常", "在职"])]
+    missing_hire = active_changes["任职受雇从业日期"].map(_clean) == ""
+    change.loc[active_changes.index[missing_hire], "任职受雇从业日期"] = f"{year}-{month:02d}-01"
     before_count = _active_staff_count(staff)
 
     # 离职：按证件号码 + 原人员信息表机构匹配正常人员，更新为非正常。
@@ -296,7 +301,25 @@ def apply_staff_info_update(
         matched_leaver_updates.append((int(matches[0]), row))
 
     # 入职/调岗新增：旧脚本把变动表中正常状态行追加到人员信息表。
-    additions = change[change["人员状态"].map(_clean) == "正常"].copy()
+    additions = change[change["人员状态"].map(_clean).isin(["正常", "在职"])].copy()
+    # Rehire an existing non-normal record in place.  Appending another row
+    # with the same identity would make the later master and declaration
+    # comparison reuse the historical hire date or create duplicate staff.
+    rehire_updates: list[tuple[int, pd.Series]] = []
+    remaining_additions = []
+    for change_idx, row in additions.iterrows():
+        id_num = _clean(row.get("证件号码"))
+        org_code = _clean(row.get("机构代码(人员信息表)")) or _clean(row.get("机构代码(工资单)"))
+        matches = staff[
+            (staff["人员状态"].map(_clean) != "正常")
+            & (staff["证件号码"].map(_clean) == id_num)
+            & (staff["机构代码"].map(_clean) == org_code)
+        ].index if id_num and org_code else []
+        if len(matches) == 1:
+            rehire_updates.append((int(matches[0]), row))
+        else:
+            remaining_additions.append((change_idx, row))
+    additions = pd.DataFrame([row for _, row in remaining_additions], columns=change.columns)
     duplicate_additions = _find_duplicate_additions(staff, additions)
     blocking_issues = match_failures
     if blocking_issues:
@@ -306,6 +329,15 @@ def apply_staff_info_update(
         staff.loc[idx, "人员状态"] = "非正常"
         for col in ["国籍(地区)", "性别", "出生日期", "离职日期"]:
             staff.loc[idx, col] = row.get(col, "")
+
+    for idx, row in rehire_updates:
+        values = {column: _clean(row.get(column)) for column in staff.columns}
+        values["机构代码"] = _clean(row.get("机构代码(人员信息表)")) or _clean(row.get("机构代码(工资单)"))
+        values["人员状态"] = "正常"
+        values["离职日期"] = ""
+        for column, value in values.items():
+            if column in staff.columns and (value or column == "离职日期"):
+                staff.loc[idx, column] = value
 
     if not additions.empty:
         if "机构代码(工资单)" in additions.columns:
@@ -321,7 +353,7 @@ def apply_staff_info_update(
 
     headcount = _headcount_reconciliation(
         before_count=before_count,
-        additions=int(len(additions)),
+        additions=int(len(additions) + len(rehire_updates)),
         leavers=int(len(matched_leaver_updates)),
         after_count=_active_staff_count(staff),
     )
@@ -342,6 +374,7 @@ def apply_staff_info_update(
         "updated_staff_path": str(updated_staff_path),
         "full_staff_path": str(full_staff_path),
         "collection_files": collection_files,
+        "applied_changes": change.to_dict(orient="records"),
         "report": {
             "match_failures": match_failures,
             "duplicate_additions": duplicate_additions,

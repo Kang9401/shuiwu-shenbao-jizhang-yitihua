@@ -243,6 +243,8 @@ def main() -> int:
         try:
             import webview
 
+            # Enable ZIP downloads when the frontend uses the browser fallback.
+            webview.settings["ALLOW_DOWNLOADS"] = True
             manager = DesktopWindowManager()
             main_window = webview.create_window(
                 PRODUCT_NAME,

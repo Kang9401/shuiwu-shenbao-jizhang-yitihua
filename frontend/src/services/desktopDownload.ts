@@ -12,7 +12,8 @@ function downloadBlob(blob: Blob, filename: string) {
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  // WebView downloads can start after the click handler has returned.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
 export async function downloadJobArtifacts(jobId: number, suggestedName = '个税申报文件.zip'): Promise<void> {
@@ -20,9 +21,15 @@ export async function downloadJobArtifacts(jobId: number, suggestedName = '个�
   if (desktopApi?.choose_directory) {
     const result = await desktopApi.choose_directory()
     if (!result?.path) return
-    const { data } = await workflowApi.saveAll(jobId, result.path)
-    ElMessage.success('已保存 ' + data.saved_count + ' 个文件到：' + data.directory)
-    return
+    try {
+      const { data } = await workflowApi.saveAll(jobId, result.path)
+      ElMessage.success('已保存 ' + data.saved_count + ' 个文件到：' + data.directory)
+      return
+    } catch (error: any) {
+      // A desktop window may be connected to a development/browser backend.
+      // Keep the backend's local-write restriction and download a ZIP instead.
+      if (error?.response?.status !== 403 || error?.response?.data?.detail !== '仅桌面版允许保存文件到本机目录') throw error
+    }
   }
   const { data } = await workflowApi.downloadAll(jobId)
   downloadBlob(data, suggestedName)

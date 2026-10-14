@@ -33,7 +33,7 @@ CHANGE_COLUMNS = [
 ]
 PAYROLL_COLUMNS = [
     "姓名", "证件号码（同名必填）", "本期收入", "本期免税收入", "商业健康保险",
-    "税延养老保险", "其他", "允许扣除的税费", "减免税额", "协定减免", "备注",
+    "税延养老保险", "其他", "允许扣除的税费", "减免税额", "协定减免", "备注", "机构编号",
 ]
 DECLARATION_COLUMNS = [
     "工号", "*姓名", "*证件类型", "*证件号码", "*所得项目", "本期收入", "本期免税收入",
@@ -243,6 +243,7 @@ def _normalize_payroll(frame: pd.DataFrame) -> pd.DataFrame:
         "本期收入": ["本期收入", "收入"], "本期免税收入": ["本期免税收入", "免税收入"],
         "商业健康保险": ["商业健康保险"], "税延养老保险": ["税延养老保险"], "其他": ["其他"],
         "允许扣除的税费": ["允许扣除的税费"], "减免税额": ["减免税额"], "协定减免": ["协定减免"], "备注": ["备注"],
+        "机构编号": ["机构编号", "归属机构代码", "机构代码", "机构代码(人员信息表)", "单位编号"],
     }
     result = pd.DataFrame(index=frame.index)
     for column, candidates in aliases.items():
@@ -259,9 +260,12 @@ def _apply_change(master: pd.DataFrame, row: pd.Series, org_names: dict[str, str
     name = normalize_part_time_name(row["姓名"])
     change_type = _clean(row["变更类型"])
     id_number = _clean(row["证件号码"])
+    org_hint = _clean(row.get("归属机构代码"))
     matches = master.index[master["姓名"].map(normalize_part_time_name) == name]
     if id_number and len(matches) > 1:
         matches = master.index[master["证件号码"].map(_clean) == id_number]
+    if org_hint:
+        matches = matches[master.loc[matches, "归属机构代码"].map(_clean) == org_hint]
     if change_type in {"新增", "重新任职"}:
         required = ["归属机构代码", "证件类型", "证件号码", "国籍（地区）", "性别", "出生日期", "手机号码", "任职/从业日期"]
         missing = [column for column in required if not _clean(row[column])]
@@ -345,7 +349,15 @@ def process_part_time(
     # A name alone is not a unique person.  Same-name employees with distinct IDs
     # are valid; only repeated IDs (or repeated name rows without IDs) are duplicates.
     duplicate_keys = payroll.apply(
-        lambda row: f"id:{row['证件号码']}" if _clean(row["证件号码"]) else f"name:{row['_name']}",
+        lambda row: (
+            f"id:{row['证件号码']}|org:{row['机构编号']}"
+            if _clean(row["证件号码"]) and _clean(row["机构编号"])
+            else f"id:{row['证件号码']}"
+            if _clean(row["证件号码"])
+            else f"name:{row['_name']}|org:{row['机构编号']}"
+            if _clean(row["机构编号"])
+            else f"name:{row['_name']}"
+        ),
         axis=1,
     )
     for key in duplicate_keys[duplicate_keys.duplicated(keep=False)].unique():
@@ -360,6 +372,7 @@ def process_part_time(
 
     matched_rows: list[dict[str, Any]] = []
     matched_payroll_keys: set[tuple[str, str]] = set()
+    matched_payroll_org_keys: set[tuple[str, str, str]] = set()
     matched_payroll_names: set[str] = set()
     seen_master: set[int] = set()
     pending: list[dict[str, Any]] = []
@@ -370,11 +383,18 @@ def process_part_time(
         active = [index for index in candidates if _clean(master.loc[index, "人员状态"]) == "正常"]
         historical = list(candidates)
         id_number = _clean(row["证件号码"])
+        org_hint = _clean(row["机构编号"])
+        if org_hint:
+            active = [index for index in active if _clean(master.loc[index, "归属机构代码"]) == org_hint and (not id_number or _clean(master.loc[index, "证件号码"]) == id_number)]
+            historical = [index for index in historical if _clean(master.loc[index, "归属机构代码"]) == org_hint and (not id_number or _clean(master.loc[index, "证件号码"]) == id_number)]
         if len(active) > 1:
             if not id_number:
                 issues.append({"issue_type": "same_name_missing_id", "message": f"{name}存在同名人员，请在工资表填写证件号码。"})
                 continue
             active = [index for index in active if _clean(master.loc[index, "证件号码"]) == id_number]
+            if len(active) > 1 and not org_hint:
+                issues.append({"issue_type": "multiple_org_match_requires_org_code", "message": f"{name}和证件号码 {id_number} 对应多个机构，请在工资表填写机构编号。"})
+                continue
         if len(active) == 0 and historical:
             rehire = [index for index in historical if _clean(master.loc[index, "人员状态"]) != "正常"]
             if len(rehire) == 1:
@@ -411,6 +431,7 @@ def process_part_time(
             "归属机构代码": org_code, "归属机构名称": _clean(master.loc[index, "归属机构名称"]) or org_names.get(org_code, ""),
         })
         matched_payroll_keys.add((name, id_number))
+        matched_payroll_org_keys.add((name, id_number, org_hint))
         matched_payroll_names.add(name)
 
     if period is not None:
@@ -424,10 +445,16 @@ def process_part_time(
     for row in payroll.to_dict("records"):
         name = normalize_part_time_name(row.get("姓名"))
         id_number = _clean(row.get("证件号码"))
-        matched = (name, id_number) in matched_payroll_keys if id_number else name in matched_payroll_names
+        org_hint = _clean(row.get("机构编号"))
+        matched = (
+            (name, id_number, org_hint) in matched_payroll_org_keys
+            if org_hint
+            else (name, id_number) in matched_payroll_keys if id_number else name in matched_payroll_names
+        )
         matching.append({
             "工资表姓名": row.get("姓名", ""),
             "工资表证件号码": row.get("证件号码", ""),
+            "工资表机构编号": org_hint,
             "匹配状态": "已匹配" if matched else "待补充",
         })
     changes_log = [{"姓名": row["姓名"], "变化类型": row["变更类型"]} for _, row in changes.iterrows() if _clean(row["姓名"])] if stage == "recheck" else []

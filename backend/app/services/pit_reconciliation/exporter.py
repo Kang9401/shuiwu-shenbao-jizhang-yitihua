@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .rules.income_classification import income_category
 from .workpaper_layout import HEADERS
+from .source_service import declaration_snapshot_rows
 
 import io
 from collections.abc import Iterable
@@ -158,7 +159,7 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
             rows.append({**row, **extra})
         return rows
 
-    declarations = _batch_rows(db, company_id, period_id, "pit_declaration")
+    declarations = declaration_snapshot_rows(db, workpaper)
     certificates = _batch_rows(db, company_id, period_id, "tax_certificate")
     banks = _batch_rows(db, company_id, period_id, "bank_statement")
     balances = _batch_rows(db, company_id, period_id, "balance_sheet")

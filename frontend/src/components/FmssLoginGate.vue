@@ -1,10 +1,12 @@
 <template>
   <section class="fmss-login-page">
     <div class="fmss-login-panel">
-      <div class="fmss-login-mark">FMSS</div>
-      <h1>FMSS DEV测试环境</h1>
+      <div class="fmss-login-brand"><img src="/gf-logo.jpg" alt="广发证券" /><span>广发证券</span></div>
+      <h1>智能税务平台</h1>
+      <p class="fmss-login-description">登录后进入税务工作台</p>
       <p class="fmss-login-status">{{ status }}</p>
-      <el-button type="primary" :loading="opening" @click="openLogin">登录 FMSS</el-button>
+      <el-button class="fmss-login-button" type="primary" size="large" :loading="opening" @click="openLogin">登录智能税务平台</el-button>
+      <p class="fmss-login-note">使用广发证券 OA 账号登录</p>
     </div>
   </section>
 </template>
@@ -23,10 +25,10 @@ async function openLogin() {
   opening.value = true
   try {
     await fmssApi.openBrowserLogin()
-    status.value = '正在等待FMSS登录，请在新窗口完成OA登录'
+    status.value = '正在等待智能税务平台登录，请在新窗口完成OA登录'
     pollStartedAt = Date.now()
   } catch {
-    status.value = 'FMSS登录窗口启动失败，请检查Chrome环境'
+    status.value = '智能税务平台登录窗口启动失败，请检查Chrome环境'
   } finally {
     opening.value = false
   }
@@ -35,7 +37,7 @@ async function openLogin() {
 async function checkSession() {
   if (pollStartedAt && Date.now() - pollStartedAt > 180000) {
     stopPolling()
-    status.value = '当前登录状态：登录超时，请重新点击登录 FMSS'
+    status.value = '当前登录状态：登录超时，请重新点击登录智能税务平台'
     return
   }
   try {
@@ -43,7 +45,7 @@ async function checkSession() {
     if (!data.connected) {
       const browser = await fmssApi.browserStatus()
       if (browser.data.status === 'error') {
-        status.value = browser.data.message || 'FMSS登录失败，请重新登录'
+        status.value = browser.data.message || '智能税务平台登录失败，请重新登录'
         stopPolling()
       }
       return
@@ -52,7 +54,7 @@ async function checkSession() {
     stopPolling()
     emit('connected')
   } catch {
-    status.value = '当前登录状态：FMSS登录已失效'
+    status.value = '当前登录状态：智能税务平台登录已失效'
   }
 }
 
@@ -76,9 +78,13 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.fmss-login-page { min-height: 62vh; display: grid; place-items: center; padding: 32px; }
-.fmss-login-panel { width: min(520px, 100%); padding: 36px; background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; box-shadow: var(--el-box-shadow-light); }
-.fmss-login-mark { width: 52px; height: 52px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 8px; background: #8b1e2d; color: #fff; font-weight: 700; letter-spacing: 0; }
-.fmss-login-panel h1 { margin: 0; font-size: 24px; color: var(--el-text-color-primary); }
-.fmss-login-status { margin: 14px 0 22px; color: var(--el-text-color-secondary); }
+.fmss-login-page { min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; background: linear-gradient(135deg, #eef5ff, #f8fafc 60%, #e8effa); }
+.fmss-login-panel { width: min(460px, 100%); padding: 40px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 16px; box-shadow: var(--shadow-md); }
+.fmss-login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; color: var(--brand-dark); font-size: 19px; font-weight: 700; }
+.fmss-login-brand img { width: 52px; height: 52px; object-fit: contain; border-radius: 8px; }
+.fmss-login-panel h1 { margin: 0; font-size: 28px; color: var(--ink); }
+.fmss-login-description { margin: 10px 0 26px; color: var(--muted); }
+.fmss-login-status { min-height: 44px; margin: 0 0 20px; line-height: 1.6; color: var(--muted); }
+.fmss-login-button { width: 100%; }
+.fmss-login-note { margin: 18px 0 0; text-align: center; font-size: 13px; color: var(--muted); }
 </style>

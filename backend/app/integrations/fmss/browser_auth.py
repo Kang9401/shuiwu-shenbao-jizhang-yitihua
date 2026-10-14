@@ -122,11 +122,11 @@ class FmssBrowserAuth:
             if not self._stop_event.is_set():
                 with self._lock:
                     self._status = "error"
-                    self._last_error = "FMSS登录超时，请重新登录"
+                    self._last_error = "智能税务平台登录超时，请重新登录"
         except Exception as exc:
             with self._lock:
                 self._status = "error"
-                self._last_error = f"FMSS浏览器启动失败：{type(exc).__name__}"
+                self._last_error = f"智能税务平台登录窗口启动失败：{type(exc).__name__}"
             logger.warning("FMSS browser failed: %s", type(exc).__name__)
         finally:
             if context is not None:

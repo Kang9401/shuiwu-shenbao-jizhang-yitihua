@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
@@ -85,15 +86,23 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
     previous_workflow_status = workpaper.workflow_status
     workpaper.calculation_status="running"; db.commit()
     try:
-        bundle = PitSourceService(db,current_company_id(),period_id).load_bundle()
-        if bundle.salary.status == "invalid":
-            messages = [str(issue.get("message", "")) for issue in bundle.salary.issues if issue.get("message")]
-            raise ValueError("；".join(messages) or "工资底稿字段无效")
+        source_service = PitSourceService(db,current_company_id(),period_id)
+        if stage == "post_payment":
+            pre_result = repository.pre_payment_result()
+            bundle = SimpleNamespace(certificates=source_service.load_certificate_source(), bank=source_service.load_bank_source())
+        else:
+            bundle = source_service.load_bundle()
+            if bundle.salary.status == "invalid":
+                messages = [str(issue.get("message", "")) for issue in bundle.salary.issues if issue.get("message")]
+                raise ValueError("；".join(messages) or "工资底稿字段无效")
         if stage == "post_payment" and bundle.certificates.status in {"missing", "invalid"}:
             raise ValueError("扣款后核对需要先导入完税凭证")
         if stage == "post_payment" and bundle.bank.status in {"missing", "invalid"}:
             raise ValueError("扣款后核对需要先导入银行流水")
-        result=PitReconciliationEngine().calculate(bundle)
+        if stage == "post_payment":
+            result = PitReconciliationEngine().calculate_post(pre_result, bundle.certificates, bundle.bank)
+        else:
+            result = PitReconciliationEngine().calculate(bundle)
         result["stage"] = stage
         stage_sources = _stage_sources(bundle, stage)
         complete = all(

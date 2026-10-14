@@ -3,16 +3,49 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.core.config import Settings, settings
 from app.integrations.fmss.browser_auth import FmssBrowserAuth
 from app.integrations.fmss.client import FmssClient
-from app.integrations.fmss.errors import FmssApiError
+from app.integrations.fmss.errors import FmssApiError, FmssWriteDisabled
 from app.integrations.fmss.session import FmssSession, fmss_session
+from app.services.pit_online_service import PitOnlineService
 
 
 def _client() -> FmssClient:
     session = FmssSession()
     session.connect("token-for-test-only", "reviewer-test")
     return FmssClient(session)
+
+
+def test_production_configuration_enables_submission(monkeypatch):
+    for name in ("FMSS_WRITE_ENABLED", "FMSS_POST_WRITE_ENABLED", "FMSS_PRODUCTION_WRITE_ENABLED",
+                 "FMSS_ENVIRONMENT", "FMSS_LOGIN_URL", "FMSS_API_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    config = Settings(_env_file=None)
+    assert config.fmss_environment == "production"
+    assert config.fmss_login_url == "https://fmss.gf.com.cn/fmss"
+    assert config.fmss_api_base_url == "https://fmss.gf.com.cn/fmss/prod-api"
+    assert config.fmss_write_enabled and config.fmss_post_write_enabled and config.fmss_production_write_enabled
+    for name in ("fmss_environment", "fmss_write_enabled", "fmss_post_write_enabled", "fmss_production_write_enabled"):
+        monkeypatch.setattr(settings, name, getattr(config, name))
+    service = PitOnlineService(None, client=_client())
+    service._assert_write_enabled("PRE")
+    service._assert_write_enabled("POST")
+
+
+@pytest.mark.parametrize("switch,stage", [("fmss_write_enabled", "PRE"), ("fmss_post_write_enabled", "POST"),
+                                         ("fmss_production_write_enabled", "PRE"), ("fmss_production_write_enabled", "POST")])
+def test_explicit_write_disable_still_blocks_production(monkeypatch, switch, stage):
+    monkeypatch.setattr(settings, "fmss_environment", "production")
+    for name in ("fmss_write_enabled", "fmss_post_write_enabled", "fmss_production_write_enabled"):
+        monkeypatch.setattr(settings, name, name != switch)
+    with pytest.raises(FmssWriteDisabled):
+        PitOnlineService(None, client=_client())._assert_write_enabled(stage)
+
+
+def test_production_submission_can_be_disabled_by_environment(monkeypatch):
+    monkeypatch.setenv("FMSS_PRODUCTION_WRITE_ENABLED", "false")
+    assert Settings(_env_file=None).fmss_production_write_enabled is False
 
 
 def test_import_uses_real_multipart_fields_and_post_stage(tmp_path, monkeypatch):
@@ -104,9 +137,9 @@ def test_fmss_browser_reads_only_matching_admin_token():
     class FakeContext:
         def cookies(self, _url):
             return [
-                {"name": "Other", "domain": "fmssdev.gf.com.cn", "value": "ignored"},
+                {"name": "Other", "domain": "fmss.gf.com.cn", "value": "ignored"},
                 {"name": "Admin-Token", "domain": "testoauth2.gf.com.cn", "value": "wrong-host"},
-                {"name": "Admin-Token", "domain": ".fmssdev.gf.com.cn", "value": "fake-admin-token"},
+                {"name": "Admin-Token", "domain": ".fmss.gf.com.cn", "value": "fake-admin-token"},
             ]
 
     assert FmssBrowserAuth()._read_admin_token(FakeContext()) == "fake-admin-token"

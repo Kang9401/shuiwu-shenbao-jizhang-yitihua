@@ -199,6 +199,8 @@ class TaxTransformWorkflow(ExcelWorkflow):
             file_name = f"{org_text}_{self.split_file_label}({year}年{month:02d}月).xlsx"
             output = artifact_path(job_id, file_name)
             export = group.drop(columns=[org_col], errors="ignore")
+            if self.info.code == "general_salary_tax":
+                export = export.rename(columns={"住房公积金调整": "住房公积金和年金调整"})
             write_workbook(output, {self.detail_sheet: export}, text_values=True)
             artifacts.append((self.split_artifact_type, str(output)))
         return artifacts

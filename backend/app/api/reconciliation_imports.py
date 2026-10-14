@@ -14,6 +14,8 @@ from app.models.pit_reconciliation import PitReconciliationWorkpaper
 from app.db.session import get_db
 from app.api.dependencies import require_company, require_period
 from app.models.accounting import ReconciliationImportBatch
+from app.integrations.fmss.errors import FmssError, FmssNotAuthenticated
+from app.services.fmss_sources import fetch_balance_source
 from app.services.reconciliation_import import (
     ReconciliationImportValidationError,
     import_reconciliation_file,
@@ -72,6 +74,9 @@ def _mark_pit_workpapers_stale(db: Session, period_id: int, message: str, import
     ):
         if import_type in {"tax_certificate", "bank_statement"} and workpaper.stage != "post_payment":
             continue
+        if import_type is not None and import_type not in {"tax_certificate", "bank_statement"} and workpaper.stage == "post_payment":
+            # POST uses PRE's calculated version, not newly imported PRE sources.
+            continue
         if workpaper.workflow_status in {"submitted", "reviewed"}:
             continue
         workpaper.calculation_status = "stale"
@@ -124,6 +129,18 @@ def import_balance_sheet(
     db: Session = Depends(get_db),
 ) -> dict:
     return _import("balance_sheet", period_id, file, db)
+
+
+@router.post("/balance-sheet/fmss")
+def extract_balance_sheet(period_id: int, db: Session = Depends(get_db)) -> dict:
+    period = require_period(db, period_id)
+    try:
+        batch = fetch_balance_source(db, period)
+    except FmssError as exc:
+        db.rollback()
+        raise HTTPException(401 if isinstance(exc, FmssNotAuthenticated) else 409, detail=exc.user_message) from exc
+    _mark_pit_workpapers_stale(db, period_id, "余额表来源已更新，请重新核对", "balance_sheet")
+    return _batch_payload(batch)
 
 
 @router.post("/pit-declaration")

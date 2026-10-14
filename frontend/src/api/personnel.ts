@@ -74,6 +74,7 @@ export const personnelMasterApi = {
 }
 
 export const reconciliationImportApi = {
+  extractBalanceSheet: (periodId: number) => api.post<ReconciliationImportBatch>('/reconciliation-imports/balance-sheet/fmss', {}, { params: { period_id: periodId }, timeout: 300000 }),
   clear: (period_id: number, import_type: ReconciliationImportType, batch_ids: number[]) => api.post<{deleted_batches:number;deleted_rows:number}>('/reconciliation-imports/clear', {period_id, import_type, batch_ids}),
   importFiles: (files: File[], periodId: number, importType: ReconciliationImportType) => {
     const pathByType: Record<ReconciliationImportType, string> = {

@@ -10,7 +10,7 @@
       </div>
 
       <div class="card-body">
-        <div v-if="!isRestrictedStockInterest || restrictedStep === 1" class="workflow-grid">
+        <div v-if="!isRestrictedStockInterest" class="workflow-grid">
           <div v-if="usesSharedStaffInfo" class="shared-staff-note">
             <strong>人员主数据已共享</strong>
             <p>本流程自动使用当前所属期间维护的人员主数据；需要调整时请到“人员主数据”页面更新。</p>
@@ -30,18 +30,15 @@
           </div>
         </div>
 
-        <input
-          v-if="isRestrictedStockInterest && restrictedStep === 1"
-          ref="folderInput"
-          type="file"
-          webkitdirectory
-          multiple
-          style="display:none"
-          @change="onFolderPicked"
-        />
+        <div v-if="isRestrictedStockInterest && restrictedStep === 1" class="shared-staff-note">
+          <strong>自动提取限售股、利息税</strong>
+          <p>使用当前登录账号，按所选分公司和所属月份提取全部分页数据。</p>
+          <p v-if="hasRestrictedSource">限售股 {{ restrictedSourceCounts.tax_sheet || 0 }} 条，利息税 {{ restrictedSourceCounts.interest_tax || 0 }} 条。</p>
+          <el-button type="primary" :loading="running" :disabled="!periodId" @click="extractRestrictedSources">自动提取</el-button>
+        </div>
 
         <div v-if="isRestrictedStockInterest" class="workflow-stepbar">
-          <span class="tag" :class="restrictedStep >= 1 ? 'tag-success' : 'tag-info'">1 上传并生成</span>
+          <span class="tag" :class="restrictedStep >= 1 ? 'tag-success' : 'tag-info'">1 提取并生成</span>
           <span class="tag" :class="restrictedStep >= 2 ? 'tag-success' : 'tag-info'">2 核对或跳过</span>
           <span class="tag" :class="restrictedStep >= 3 ? 'tag-success' : 'tag-info'">3 批量下载</span>
         </div>
@@ -51,15 +48,9 @@
           <span class="tag" :class="partTimeStep >= 2 ? 'tag-success' : 'tag-info'">2 上传变更并生成</span>
         </div>
 
-        <div v-if="isRestrictedStockInterest && restrictedStep === 2" class="workflow-grid">
-          <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFiles.balance_sheet }">
-            <label>{{ roleLabel('balance_sheet') }}</label>
-            <input type="file" accept=".xls,.xlsx,.csv" @change="onFilePicked('balance_sheet', $event)" />
-            <span class="upload-status" :class="selectedFiles.balance_sheet ? 'ready' : 'empty'">
-              {{ selectedFiles.balance_sheet?.name || '可选' }}
-            </span>
-            <button class="btn btn-xs btn-ghost" :disabled="!selectedFiles.balance_sheet" @click="clearFile('balance_sheet')">清除</button>
-          </div>
+        <div v-if="isRestrictedStockInterest && restrictedStep === 2" class="shared-staff-note">
+          <strong>自动获取余额表</strong>
+          <p>点击“核对余额表”后，按当前公司的机构主数据和所属月份提取，再执行核对。</p>
         </div>
 
         <div class="action-bar">
@@ -69,14 +60,6 @@
             <span v-else-if="missingRequired.length">缺少：{{ missingRequired.map(roleLabel).join('、') }}</span>
             <span v-else>文件已就绪，可以运行迁移后的处理流程。</span>
           </div>
-          <button
-            v-if="isRestrictedStockInterest && restrictedStep === 1"
-            class="btn btn-outline btn-lg"
-            :disabled="running"
-            @click="openFolderPicker"
-          >
-            选择文件夹
-          </button>
           <button v-if="isRestrictedStockInterest && restrictedStep === 1" class="btn btn-primary btn-lg" :disabled="running || !hasRestrictedSource" @click="runRestrictedGeneration">
             <span v-if="running" class="spinner"></span>
             <el-icon v-else><VideoPlay /></el-icon>
@@ -188,7 +171,7 @@
               </table>
             </div>
           </div>
-          <div v-else-if="restrictedStep === 2" class="empty-inline">余额表尚未核对，可上传余额表核对或选择跳过。</div>
+          <div v-else-if="restrictedStep === 2" class="empty-inline">余额表尚未核对，可自动获取并核对或选择跳过。</div>
           <div v-else-if="restrictedStep === 3 && !reconciliationJob" class="empty-inline">已跳过余额表核对。</div>
 
           <div v-if="generationArtifacts.length" class="download-grid workflow-downloads">
@@ -299,7 +282,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, VideoPlay } from '@element-plus/icons-vue'
-import { workflowApi, type Job, type Workflow } from '../api'
+import { workflowApi, reconciliationImportApi, type Job, type Workflow } from '../api'
 import { downloadJobArtifacts } from '../services/desktopDownload'
 
 const props = defineProps<{
@@ -311,12 +294,12 @@ const selectedFiles = reactive<Record<string, File | null>>({})
 const job = ref<Job | null>(null)
 const running = ref(false)
 const batchDownloading = ref(false)
-const folderInput = ref<HTMLInputElement | null>(null)
 const restrictedStep = ref(1)
 const partTimeStep = ref(1)
 const generationJob = ref<Job | null>(null)
 const reconciliationJob = ref<Job | null>(null)
 const restrictedUploadIds = reactive<Record<string, number>>({})
+const restrictedSourceCounts = reactive<Record<string, number>>({})
 const brokerIncomeFiles = ref<File[]>([])
 const annualBonusFiles = ref<File[]>([])
 
@@ -373,12 +356,12 @@ const isBroker = computed(() => props.workflow.code === 'broker_tax')
 const isAnnualBonus = computed(() => props.workflow.code === 'annual_bonus_tax')
 const isPartTime = computed(() => props.workflow.code === 'part_time_tax')
 const isAutoGenerateWorkflow = computed(() => isIntern.value || isBroker.value)
-const hasRestrictedSource = computed(() => Boolean(selectedFiles.tax_sheet || selectedFiles.interest_tax))
+const hasRestrictedSource = computed(() => Boolean(restrictedUploadIds.tax_sheet || restrictedUploadIds.interest_tax))
 const restrictedActionHint = computed(() => {
   if (restrictedStep.value === 1) return hasRestrictedSource.value
-    ? '已识别申报源文件，可直接运行并生成申报表。余额表可选。'
-    : '请至少选择限售股申报表或利息税申报表。'
-  if (restrictedStep.value === 2) return '可上传余额表进行核对，也可跳过核对后下载。'
+    ? '数据已提取，可运行并生成申报表。余额表可选。'
+    : '请先自动提取限售股、利息税数据。'
+  if (restrictedStep.value === 2) return '可自动获取余额表进行核对，也可跳过核对后下载。'
   return '申报文件已就绪，可批量下载。'
 })
 const generationMetrics = computed(() => generationJob.value?.result_summary || {})
@@ -433,6 +416,7 @@ watch(
     generationJob.value = null
     reconciliationJob.value = null
     Object.keys(restrictedUploadIds).forEach((key) => delete restrictedUploadIds[key])
+    Object.keys(restrictedSourceCounts).forEach((key) => delete restrictedSourceCounts[key])
     brokerIncomeFiles.value = []
     annualBonusFiles.value = []
     void restoreLatestJobs()
@@ -502,20 +486,21 @@ function roleFileSummary(role: string) {
   return selectedFiles[role]?.name || (isRequired(role) ? '必传' : '可选')
 }
 
-function openFolderPicker() {
-  folderInput.value?.click()
-}
-
-function onFolderPicked(event: Event) {
-  const files = Array.from((event.target as HTMLInputElement).files || [])
-  for (const file of files) {
-    const name = file.name.replace(/\s/g, '')
-    if (name.includes('限售股')) selectedFiles.tax_sheet = file
-    else if (name.includes('债券兑息') || name.includes('利息税')) selectedFiles.interest_tax = file
-    else if (name.includes('余额表')) selectedFiles.balance_sheet = file
-  }
-  Object.keys(restrictedUploadIds).forEach((key) => delete restrictedUploadIds[key])
-  ;(event.target as HTMLInputElement).value = ''
+async function extractRestrictedSources() {
+  if (!props.periodId || running.value) return
+  const periodId = props.periodId
+  running.value = true
+  try {
+    const { data } = await workflowApi.extractSecuritySources(periodId)
+    if (periodId !== props.periodId || !isRestrictedStockInterest.value) return
+    Object.keys(restrictedUploadIds).forEach((key) => delete restrictedUploadIds[key])
+    for (const file of data.files) {
+      restrictedUploadIds[file.file_role] = file.id
+      restrictedSourceCounts[file.file_role] = file.row_count
+    }
+    ElMessage.success('限售股、利息税数据提取完成')
+  } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '平台数据提取失败，原数据已保留') }
+  finally { running.value = false }
 }
 
 function skipReconciliation() {
@@ -535,27 +520,8 @@ async function batchDownloadRestricted() {
   await batchDownload(generationJob.value.id)
 }
 
-async function uploadRestrictedFiles() {
-  if (!hasRestrictedSource.value) return
-  for (const role of ['tax_sheet', 'interest_tax', 'balance_sheet']) {
-    if (restrictedUploadIds[role] && selectedFiles[role]) continue
-    const file = selectedFiles[role]
-    if (!file) continue
-    const { data } = await workflowApi.uploadFile(file, role, props.periodId)
-    restrictedUploadIds[role] = data.id
-  }
-}
-
 async function runRestrictedGeneration() {
-  running.value = true
-  try {
-    await uploadRestrictedFiles()
-    await runRestrictedWorkflow('generate')
-  } catch {
-    ElMessage.error('文件上传或申报生成失败，请检查文件后重试')
-  } finally {
-    running.value = false
-  }
+  await runRestrictedWorkflow('generate')
 }
 
 async function runPartTimeInitial() {
@@ -592,23 +558,24 @@ async function runPartTimeWorkflow(operation: 'initial' | 'recheck', files: Arra
 }
 
 async function runRestrictedWorkflow(operation: 'generate' | 'reconcile') {
-  const sourceIds = ['tax_sheet', 'interest_tax']
+  const fetchedIds = ['tax_sheet', 'interest_tax']
     .map((role) => restrictedUploadIds[role])
     .filter((id): id is number => Boolean(id))
+  const sourceIds = fetchedIds.length ? fetchedIds : generationJob.value?.input_file_ids || []
   if (!sourceIds.length) {
-    ElMessage.error('请至少上传限售股申报表或利息税申报表')
+    ElMessage.error('请先自动提取限售股、利息税数据')
     return
   }
+  if (!props.periodId || running.value) return
+  const periodId = props.periodId
   running.value = true
-  job.value = null
   try {
-    if (operation === 'reconcile' && selectedFiles.balance_sheet && !restrictedUploadIds.balance_sheet) {
-      await uploadRestrictedFiles()
+    if (operation === 'reconcile') {
+      await reconciliationImportApi.extractBalanceSheet(periodId)
+      if (periodId !== props.periodId || !isRestrictedStockInterest.value) return
     }
-    const inputIds = operation === 'reconcile' && restrictedUploadIds.balance_sheet
-      ? [...sourceIds, restrictedUploadIds.balance_sheet]
-      : sourceIds
-    const { data } = await workflowApi.createJob(props.workflow.code, inputIds, props.periodId, operation)
+    const { data } = await workflowApi.createJob(props.workflow.code, sourceIds, periodId, operation)
+    if (periodId !== props.periodId || !isRestrictedStockInterest.value) return
     job.value = data
     if (operation === 'generate') {
       generationJob.value = data
@@ -620,8 +587,8 @@ async function runRestrictedWorkflow(operation: 'generate' | 'reconcile') {
     if (data.status === 'failed') ElMessage.error('流程运行失败')
     else if (data.status === 'needs_review') ElMessage.warning('核对发现问题，请处理后重新核对')
     else ElMessage.success(operation === 'generate' ? '申报文件生成完成' : '余额表核对完成')
-  } catch {
-    ElMessage.error('流程运行失败，请检查后端服务或上传文件')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '平台提取或流程运行失败')
   } finally {
     running.value = false
   }

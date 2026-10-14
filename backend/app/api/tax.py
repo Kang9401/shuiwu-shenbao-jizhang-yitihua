@@ -35,6 +35,7 @@ from app.services.personnel_master import (
 )
 from app.services.salary_classifier import normalize_payroll_files
 from app.services.personnel_review import (
+    PERSONNEL_CHANGE_COLUMNS,
     build_personnel_change_review_table,
     write_personnel_change_review_table,
 )
@@ -218,6 +219,25 @@ def _build_monthly_personnel_declaration_changes(db: Session, period: Period | N
     if not previous_path or not current_path:
         return pd.DataFrame()
     return build_monthly_personnel_change_table(previous_path, current_path, period.year, period.month)
+
+
+def _personnel_changes_for_generation(
+    db: Session,
+    period: Period | None,
+    personnel_update_result: dict | None,
+    fallback_changes: list[dict] | None = None,
+) -> pd.DataFrame:
+    """Use the applied upload as the declaration source for this round."""
+    if personnel_update_result is not None and "applied_changes" in personnel_update_result:
+        applied_changes = personnel_update_result.get("applied_changes") or []
+        return pd.DataFrame(applied_changes).reindex(
+            columns=PERSONNEL_CHANGE_COLUMNS, fill_value=""
+        )
+    if fallback_changes is not None:
+        return pd.DataFrame(fallback_changes).reindex(
+            columns=PERSONNEL_CHANGE_COLUMNS, fill_value=""
+        )
+    return _build_monthly_personnel_declaration_changes(db, period)
 
 
 def _resolve_employee_master_for_verification(db: Session, period: Period | None) -> str:
@@ -563,7 +583,26 @@ async def run_verify(
             "has_issues": bool(employee_id_changes),
             "items": employee_id_changes,
         }
-        monthly_personnel_changes = _build_monthly_personnel_declaration_changes(db, period)
+        # If the user supplied and applied a personnel change table this round,
+        # preserve that exact data for generation.  Rebuilding a master-data
+        # diff here can resurrect a historical hire date or omit an explicit
+        # rehire/leave row that was just confirmed.
+        previous_round = (
+            db.query(VerificationRound)
+            .filter(
+                VerificationRound.session_id == session_id,
+                VerificationRound.round_number < round_num,
+            )
+            .order_by(VerificationRound.round_number.desc())
+            .first()
+        )
+        previous_saved_changes = (
+            (previous_round.report_data or {}).get("monthly_personnel_changes")
+            if previous_round is not None else None
+        )
+        monthly_personnel_changes = _personnel_changes_for_generation(
+            db, period, personnel_update_result, previous_saved_changes
+        )
         report["monthly_personnel_changes"] = monthly_personnel_changes.to_dict(orient="records")
 
         # 保存轮次

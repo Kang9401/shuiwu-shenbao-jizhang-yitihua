@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.session import Base
-from app.integrations.fmss.errors import FmssStateConflict
+from app.integrations.fmss.errors import FmssStateConflict, FmssImportFailed
 from app.integrations.fmss.iit.schemas import FmssSheet
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 from app.models.core import Company, Period
@@ -51,6 +51,13 @@ def _post_context(tmp_path):
     )
     db.add(workpaper)
     db.flush()
+    pre = PitReconciliationWorkpaper(
+        company_id=company.id, period_id=period.id, tax_type="pit", stage="pre_payment",
+        workflow_status="reviewed", data_status="ready", calculation_status="success", rule_version="test", draft_revision=1,
+    )
+    db.add(pre); db.flush()
+    db.add(PitReconciliationOrgSummary(workpaper_id=pre.id, company_id=company.id, period_id=period.id,
+                                      org_code="17020", org_name="成都", org_full_name="成都分公司", declared_tax_amount=Decimal("100.00")))
     db.add(PitReconciliationOrgSummary(
         workpaper_id=workpaper.id, company_id=company.id, period_id=period.id,
         org_code="17020", org_name="成都", org_full_name="成都分公司",
@@ -122,6 +129,63 @@ def test_post_certificate_file_id_is_reused_for_multiple_tax_rows(tmp_path):
     assert [row[-1] for row in rows["iit_post_certificate"]] == [26, 26]
 
 
+def test_post_uses_latest_upload_file_id_for_all_rows_of_the_same_pdf(tmp_path):
+    db, company, period, workpaper = _post_context(tmp_path)
+    old_row = db.query(ReconciliationImportRow).filter_by(import_type="tax_certificate").one()
+    batch = ReconciliationImportBatch(
+        company_id=company.id, period_id=period.id, import_type="tax_certificate",
+        original_name="再次上传", stored_path="", row_count=2,
+        file_results=[{"file_name": "17020_综合所得申报.pdf", "status": "success", "fmss_file_id": 99}],
+    )
+    db.add(batch); db.flush()
+    for index in (1, 2):
+        db.add(ReconciliationImportRow(
+            company_id=company.id, period_id=period.id, batch_id=batch.id, import_type="tax_certificate",
+            row_number=index, organization_code="17020", amount=Decimal("49.50"),
+            raw_data={**old_row.raw_data, "amount": "49.50"},
+        ))
+    db.commit()
+    rows = PitFmssMapper().map_post(db, company.id, period.id, workpaper.id, _sheets())
+    assert [row[9] for row in rows["iit_post_certificate"]] == [99, 99]
+    assert PitOnlineService(db, SimpleNamespace())._post_certificate_file_ids(workpaper) == {
+        "17020_综合所得申报.pdf": 99,
+    }
+
+
+def test_post_checks_actual_attachment_bindings_in_addition_to_file_id_column():
+    payload = {"document": {"id": 3}, "sheets": {"iit_post_certificate": [
+        ["税收完税证明", "one.pdf", "成都", "9130", "个人所得税", "工资薪金", "2026-07", "2026-07-01", "99", "26"],
+        ["税收完税证明", "one.pdf", "成都", "9130", "个人所得税", "利息税", "2026-07", "2026-07-01", "1", "26"],
+    ]}, "attachmentBindings": [
+        {"fileId": 26, "fileName": "one.pdf", "sheetCode": "iit_post_certificate", "rowNo": 1},
+        {"fileId": 26, "fileName": "one.pdf", "sheetCode": "iit_post_certificate", "rowNo": 2},
+    ]}
+    assert PitOnlineService._assert_post_certificate_file_ids(payload, {"one.pdf": 26})["matched_rows"] == 2
+    for bad in ([], payload["attachmentBindings"][:1],
+                [payload["attachmentBindings"][0], {**payload["attachmentBindings"][1], "fileId": 99}],
+                [payload["attachmentBindings"][0], {**payload["attachmentBindings"][1], "rowNo": 1}]):
+        with pytest.raises(FmssImportFailed, match="FMSS完税凭证文件绑定失败，已停止提交审核"):
+            PitOnlineService._assert_post_certificate_file_ids({**payload, "attachmentBindings": bad}, {"one.pdf": 26})
+
+
+def test_post_mapper_blocks_legacy_totals_that_differ_from_pre(tmp_path):
+    db, company, period, workpaper = _post_context(tmp_path)
+    db.query(PitReconciliationOrgSummary).filter_by(workpaper_id=workpaper.id).one().declared_tax_amount = Decimal("999")
+    db.commit()
+    with pytest.raises(FmssStateConflict, match="与缴款前版本不一致"):
+        PitFmssMapper().map_post(db, company.id, period.id, workpaper.id, _sheets())
+
+
+def test_post_mapper_requires_recalculation_after_pre_revision_changes(tmp_path):
+    db, company, period, workpaper = _post_context(tmp_path)
+    pre = db.query(PitReconciliationWorkpaper).filter_by(stage="pre_payment").one()
+    workpaper.source_snapshot_json = {"pre_payment_snapshot": {"workpaper_id": pre.id, "draft_revision": pre.draft_revision}}
+    pre.draft_revision += 1
+    db.commit()
+    with pytest.raises(FmssStateConflict, match="提交审核不会自动重算"):
+        PitFmssMapper().map_post(db, company.id, period.id, workpaper.id, _sheets())
+
+
 def test_post_submission_requires_fmss_pre_approval(tmp_path):
     db, company, period, workpaper = _post_context(tmp_path)
 
@@ -161,6 +225,7 @@ def test_submit_does_not_block_on_local_data_preparation(tmp_path, monkeypatch):
         calculation_status="idle",
         data_status="incomplete",
         draft_revision=1,
+        platform_submission_id=None,
     )
     monkeypatch.setattr(service, "_assert_write_enabled", lambda _stage: None)
     monkeypatch.setattr(service, "prepare_pre_upload", lambda _workpaper: path)
@@ -183,14 +248,16 @@ def test_post_submit_pipeline_imports_draft_binds_certificates_then_reviews(tmp_
     db, company, period, workpaper = _post_context(tmp_path)
     monkeypatch.setattr(settings, "fmss_write_enabled", True)
     monkeypatch.setattr(settings, "fmss_post_write_enabled", True)
+    monkeypatch.setattr(settings, "fmss_production_write_enabled", True)
 
     class Client:
         def __init__(self):
             self.imported = False
             self.submitted = False
-            self.certificate_names = []
+            self.declaration_calls = []
 
         def declaration(self, _branch, _month, stage):
+            self.declaration_calls.append(stage)
             if stage == "PRE":
                 return {"document": {"id": 2, "status": "APPROVED"}}
             return {"document": {"id": 3, "status": "REVIEWING" if self.submitted else "DRAFT", "sheets": {"iit_post_certificate": [["税收完税证明", "17020_综合所得申报.pdf", "成都分公司", "9130", "个人所得税", "工资薪金", "2026-07", "2026-07-01", "99.00", 26]]}}}
@@ -209,9 +276,6 @@ def test_post_submit_pipeline_imports_draft_binds_certificates_then_reviews(tmp_
             self.imported = True
             return {"documents": [{"branchCode": "19020", "id": 3}], "sheets": {"iit_post_tax_check": {"imported": 1, "skipped": 0}, "iit_post_certificate": {"imported": 1, "skipped": 0}, "iit_post_bank_flow": {"imported": 0, "skipped": 0}, "iit_post_bank_tax": {"imported": 1, "skipped": 0}}, "totalImported": 3}
 
-        def upload_iit_certificates(self, *_args):
-            raise AssertionError("旧完税凭证batch接口不应再被调用")
-
         def reviewers(self, _branch, _month, stage):
             assert stage == "POST"
             return [{"username": "LIUWT"}]
@@ -221,24 +285,20 @@ def test_post_submit_pipeline_imports_draft_binds_certificates_then_reviews(tmp_
             self.submitted = True
             return 20
 
-        def approval_log(self, _branch, _month):
-            return {"rows": [{"approvalId": 20, "declarationId": 3, "stage": "POST", "approvalStatus": "REVIEWING", "reviewer": "LIUWT"}]}
-
     client = Client()
     result = PitOnlineService(db, client).submit_workpaper(workpaper, "LIUWT")
     assert client.imported is True
     assert result["status"] == "REVIEWING"
-    assert result["approval_id"] == "20"
     assert workpaper.workflow_status == "submitted"
+    assert client.declaration_calls == ["POST", "PRE", "POST", "POST"]
 
 
 def test_double_review_completion_requires_both_fmss_stages(tmp_path):
     db, company, period, post = _post_context(tmp_path)
-    pre = PitReconciliationWorkpaper(
-        company_id=company.id, period_id=period.id, tax_type="pit", stage="pre_payment",
-        workflow_status="submitted", data_status="ready", calculation_status="success", rule_version="test",
-    )
-    db.add(pre)
+    pre = db.query(PitReconciliationWorkpaper).filter_by(
+        company_id=company.id, period_id=period.id, stage="pre_payment",
+    ).one()
+    pre.workflow_status = "submitted"
     db.commit()
 
     class Client:

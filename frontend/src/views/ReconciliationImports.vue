@@ -13,7 +13,7 @@
       <div class="card-header">
         <div>
           <strong>核对数据导入</strong>
-          <p>导入银行流水、个税申报 Excel、完税证明和余额表，用于个税核对。</p>
+          <p>导入银行流水、个税申报 Excel、完税证明，或自动获取余额表，用于个税核对。</p>
         </div>
         <span class="tag tag-info">{{ importTypeLabel }}</span>
       </div>
@@ -30,7 +30,10 @@
           </label>
         </div>
 
-        <div class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFiles.length }">
+        <div v-if="importType === 'balance_sheet'" class="shared-staff-note">
+          <p>按当前分公司机构主数据和所属月份，自动获取余额表。</p>
+        </div>
+        <div v-else class="upload-item workflow-upload-item" :class="{ 'has-file': selectedFiles.length }">
           <label>{{ importTypeLabel }}</label>
           <input type="file" multiple :accept="importType === 'tax_certificate' ? '.pdf' : importType === 'pit_declaration' ? '.xls,.xlsx' : '.xls,.xlsx,.csv'" @change="onFilePicked" />
           <span class="upload-status" :class="selectedFiles.length ? 'ready' : 'empty'">
@@ -46,12 +49,12 @@
 
         <div class="action-bar">
           <div class="action-hint">
-            <span>本轮只做标准导入和归档，不自动生成三方核对差异。</span>
+            <span>{{ importType === 'balance_sheet' ? '提取成功后自动归档为本期余额表来源。' : '本轮只做标准导入和归档，不自动生成三方核对差异。' }}</span>
           </div>
           <button class="btn btn-primary btn-lg" :disabled="!canImport || loading" @click="importFile">
             <span v-if="loading" class="spinner"></span>
             <el-icon v-else><Upload /></el-icon>
-            导入
+            {{ importType === 'balance_sheet' ? '自动获取' : '导入' }}
           </button>
         </div>
       </div>
@@ -121,7 +124,7 @@ let fetchTimer: number | undefined
 const fetchRunning = computed(() => ['starting', 'running', 'waiting-login', 'importing'].includes(fetchStatus.value.status))
 
 const importTypeLabel = computed(() => typeLabel(importType.value))
-const canImport = computed(() => !!props.periodId && selectedFiles.value.length > 0)
+const canImport = computed(() => !!props.periodId && (importType.value === 'balance_sheet' || selectedFiles.value.length > 0))
 const allBatchesSelected = computed(() => batches.value.length > 0 && batches.value.every((batch) => selectedBatchIds.value.includes(batch.id)))
 
 onMounted(() => { loadBatches(); pollBankFetch(); fetchTimer = window.setInterval(pollBankFetch, 1500) })
@@ -190,11 +193,13 @@ async function clearImported(all: boolean) {
 }
 
 async function importFile() {
-  if (!props.periodId || !selectedFiles.value.length) return
+  if (!props.periodId || !canImport.value) return
   loading.value = true
   errorText.value = ''
   try {
-    const { data } = await reconciliationImportApi.importFiles(selectedFiles.value, props.periodId, importType.value)
+    const { data } = importType.value === 'balance_sheet'
+      ? await reconciliationImportApi.extractBalanceSheet(props.periodId)
+      : await reconciliationImportApi.importFiles(selectedFiles.value, props.periodId, importType.value)
     selectedFiles.value = []
     const failures = data.validation_issues?.length || 0
     ElMessage[failures ? 'warning' : 'success'](failures ? `批量导入完成，${failures} 项需要处理` : '批量导入完成')

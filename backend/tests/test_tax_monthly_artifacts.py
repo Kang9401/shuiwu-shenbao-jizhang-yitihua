@@ -432,3 +432,28 @@ def test_generate_uses_saved_monthly_personnel_changes_without_new_upload(tmp_pa
     assert {file.file_type for file in result.files} == {"declaration", "personnel_collection"}
     assert any("_1-人员信息采集_员工" in file.name for file in result.files)
     db.close()
+
+
+def test_generation_prefers_applied_personnel_change_upload(tmp_path: Path):
+    db = _db_session()
+    period = Period(year=2025, month=2, name="2025年02月")
+    db.add(period)
+    db.commit()
+
+    changes = tax_api._personnel_changes_for_generation(
+        db,
+        period,
+        {"applied_changes": [{
+            "*姓名": "重新任职员工",
+            "证件类型": "居民身份证",
+            "证件号码": "110101199202020022",
+            "人员状态": "正常",
+            "任职受雇从业日期": "2025-02-01",
+            "机构代码(人员信息表)": "11801",
+        }]},
+    )
+
+    assert len(changes) == 1
+    assert changes.iloc[0]["*姓名"] == "重新任职员工"
+    assert changes.iloc[0]["任职受雇从业日期"] == "2025-02-01"
+    db.close()

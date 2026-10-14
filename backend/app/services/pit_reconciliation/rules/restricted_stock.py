@@ -1,6 +1,6 @@
 from collections import defaultdict
 from decimal import Decimal
-from ..keys import customer_identity
+from ..keys import customer_identity, preferred_id_number
 from ..money import has_difference
 
 
@@ -12,5 +12,6 @@ def restricted_stock_details(rows, declarations):
     output=[]
     for org,name in sorted(set(business)|set(declared)):
         difference=declared[(org,name)]-business[(org,name)]
-        if has_difference(difference): output.append({"detail_type":"restricted_stock_tax","org_code":org,"name":name,"id_number":next(iter(ids[(org,name)]),""),"identity_key":customer_identity(next(iter(ids[(org,name)]),""),org,name),"source_amount":business[(org,name)],"target_amount":declared[(org,name)],"difference":difference,"auto_reason":f"限售股个税：业务 {business[(org,name)]:.2f}，申报 {declared[(org,name)]:.2f}，差异 {difference:.2f}","detail_json":{"security_names":sorted(item for item in securities[(org,name)] if item),"sale_amount":str(sales[(org,name)]),"business_tax_amount":str(business[(org,name)]),"declared_tax_amount":str(declared[(org,name)]),"id_numbers":sorted(item for item in ids[(org,name)] if item)}})
+        selected_id = preferred_id_number(ids[(org,name)])
+        if has_difference(difference): output.append({"detail_type":"restricted_stock_tax","org_code":org,"name":name,"id_number":selected_id,"identity_key":customer_identity(selected_id,org,name),"source_amount":business[(org,name)],"target_amount":declared[(org,name)],"difference":difference,"auto_reason":f"限售股个税：业务 {business[(org,name)]:.2f}，申报 {declared[(org,name)]:.2f}，差异 {difference:.2f}","detail_json":{"security_names":sorted(item for item in securities[(org,name)] if item),"sale_amount":str(sales[(org,name)]),"business_tax_amount":str(business[(org,name)]),"declared_tax_amount":str(declared[(org,name)]),"id_numbers":sorted(item for item in ids[(org,name)] if item)}})
     return output

@@ -7,7 +7,7 @@
           <el-tag :type="workflowStatusMeta.type" effect="light">{{ workflowStatusMeta.label }}</el-tag>
           <span>{{ workflowStatusMeta.description }}</span>
           <el-tag v-if="fmssState !== 'APPROVED'" effect="plain" :type="fmssState === 'REVIEWING' ? 'warning' : 'info'">
-            {{ activeStage === 'post_payment' ? '线上状态：' : 'FMSS：' }}{{ fmssStateLabel }}
+            {{ activeStage === 'post_payment' ? '申报状态：' : '审核状态：' }}{{ fmssStateLabel }}
           </el-tag>
         </div>
         <div class="pit-refresh-time"><small>数据刷新时间</small><strong>{{ dataRefreshedAt || '—' }}</strong></div>
@@ -15,7 +15,7 @@
           <el-tooltip :content="periodId ? '重新获取当前阶段底稿、数据准备和当前核对结果' : '请先选择所属期'">
             <span><el-button :disabled="!periodId" @click="refreshPreparationData">刷新准备数据</el-button></span>
           </el-tooltip>
-          <el-button :disabled="!periodId" :loading="fmssRefreshing" @click="refreshFmssState()">刷新线上状态</el-button>
+          <el-button :disabled="!periodId" :loading="fmssRefreshing" @click="refreshFmssState()">刷新状态</el-button>
           <el-tooltip :content="recalculateDisabledReason">
             <span><el-button type="primary" :loading="recalculateLoading" :disabled="Boolean(recalculateDisabledReason)" @click="recalculate(activeStage)"><el-icon><RefreshRight /></el-icon>重算</el-button></span>
           </el-tooltip>
@@ -31,7 +31,15 @@
 
     <section class="card workflow-card pit-source-panel">
       <div class="card-header"><div class="pit-readiness-heading"><strong>数据准备</strong><el-tag :type="readinessMeta.type" effect="light">{{ readinessMeta.label }}</el-tag><p>{{ readinessSummary }}</p></div><div class="pit-readiness-actions"><el-tooltip content="仅重新获取当前阶段的数据准备情况"><el-button circle :loading="readinessLoading" :disabled="!periodId || readinessLoading" @click="refreshReadiness"><el-icon><RefreshRight /></el-icon></el-button></el-tooltip><el-button link @click="sourcesExpanded = !sourcesExpanded"><el-icon><ArrowUp v-if="sourcesExpanded" /><ArrowDown v-else /></el-icon></el-button></div></div>
-      <div v-if="sourcesExpanded" class="card-body pit-source-grid"><div v-for="source in readiness" :key="source.source_type" class="pit-source-card"><div class="source-name">{{ sourceLabels[source.source_type] ?? source.source_type }}</div><strong :class="`source-${source.source_status}`">{{ sourceStatusLabels[source.source_status] ?? source.source_status }}</strong><small>{{ source.row_count ?? 0 }} 条</small><small v-if="source.issues_json?.length" class="source-issue">{{ source.issues_json.map(item => item.message).filter(Boolean).join('；') }}</small></div></div>
+      <div v-if="sourcesExpanded" class="card-body pit-source-grid">
+        <div v-for="source in readiness" :key="source.source_type" class="pit-source-card">
+          <div class="source-name">{{ sourceLabels[source.source_type] ?? source.source_type }}</div>
+          <strong :class="`source-${source.source_status}`">{{ sourceStatusLabels[source.source_status] ?? source.source_status }}</strong>
+          <small>{{ source.source_type === 'bank_statement' ? '总流水 ' : '' }}{{ source.row_count ?? 0 }} 条</small>
+          <small v-if="unmatchedBankCount(source)" class="source-issue">未匹配机构共 {{ unmatchedBankCount(source) }} 条，仅提示，不阻断重算。</small>
+          <small v-for="(issue, index) in source.issues_json" :key="index" class="source-issue">{{ issue.message }}</small>
+        </div>
+      </div>
     </section>
 
     <el-alert v-if="overview?.workpaper?.calculation_status === 'stale'" title="核对来源已改变，请重新计算" type="warning" :closable="false" />
@@ -39,9 +47,9 @@
       <div class="card-body pit-filter-bar"><div class="pit-filter-controls"><el-select v-model="orgFilter" clearable filterable placeholder="全部机构" class="pit-filter-org" @change="applySearch"><el-option v-for="item in organizationOptions" :key="item" :label="item" :value="item" /></el-select><el-input v-model="keyword" clearable placeholder="搜索机构、姓名、客户、证件、科目或所得项目" class="pit-filter-keyword" @keyup.enter="applySearch" @clear="applySearch" /><el-radio-group v-model="displayMode" @change="applySearch"><el-radio-button label="all">全部</el-radio-button><el-radio-button label="difference">仅差异</el-radio-button><el-radio-button label="missing">仅缺失</el-radio-button></el-radio-group><el-button @click="applySearch">搜索</el-button><el-button @click="resetFilters">重置</el-button></div><div class="pit-workspace-actions"><el-button type="primary" plain @click="toggleFullscreen"><el-icon><Close v-if="isFullscreen" /><FullScreen v-else /></el-icon>{{ isFullscreen ? '退出全屏' : '全屏查看' }}</el-button></div></div>
       <div class="card-body">
         <el-tabs v-model="activeTab" @tab-change="handleTabChange">
-          <el-tab-pane v-if="activeStage === 'pre_payment'" label="汇总税额核对" name="summary"><div class="pit-table-wrap"><el-table v-loading="tabLoading.summary" :data="filteredSummaryRows" border stripe show-summary :summary-method="summarySummaryMethod" :height="tableHeight" class="pit-reconciliation-table" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_full_name" label="营业部全称" width="220" fixed="left" /><el-table-column label="税款所属期" width="190"><template #default>{{ taxPeriodLabel }}</template></el-table-column><MoneyColumn label="申报表税额" field="declared_tax_amount" /><MoneyColumn label="科目余额表期末余额税额" field="balance_tax_amount" /><SummaryDifferenceColumn label="申报表与余额表税额差异1" field="difference_1" tab="taxAmount" /><ReasonColumn label="差异原因1" field="difference_1_manual_reason" kind="summary" /><MoneyColumn label="申报表税额（仅正常工资薪金、经纪人、限售股、利息税）" field="scoped_declared_tax_amount" /><MoneyColumn label="工资表、支撑平台税额" field="payroll_business_tax_amount" /><SummaryDifferenceColumn label="申报表与工资表、支撑平台税额差异2" field="difference_2" tab="taxAmount" /><ReasonColumn label="差异原因2" field="difference_2_manual_reason" kind="summary" /><SummaryDifferenceColumn label="当期工资薪金累计应纳税所得额差异3" field="taxable_income_difference" tab="salaryTaxableIncome" /><ReasonColumn label="差异原因3" field="difference_3_manual_reason" kind="summary" /><SummaryDifferenceColumn label="科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6" field="broker_occurrence_difference" tab="occurrence" /><ReasonColumn label="差异原因6" field="difference_6_manual_reason" kind="summary" /><SummaryDifferenceColumn label="部分税种发生额差异7" field="other_income_difference" tab="occurrence" /><ReasonColumn label="差异原因7" field="difference_7_manual_reason" kind="summary" /></el-table></div></el-tab-pane>
+          <el-tab-pane v-if="activeStage === 'pre_payment'" label="汇总税额核对" name="summary"><div class="pit-table-wrap"><el-table v-loading="tabLoading.summary" :data="filteredSummaryRows" border stripe show-summary :summary-method="summarySummaryMethod" :height="tableHeight" class="pit-reconciliation-table" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_full_name" label="营业部全称" width="220" fixed="left" /><el-table-column label="税款所属期" width="190"><template #default>{{ taxPeriodLabel }}</template></el-table-column><MoneyColumn label="申报表税额" field="declared_tax_amount" /><MoneyColumn label="科目余额表期末余额税额" field="balance_tax_amount" /><SummaryDifferenceColumn label="申报表与余额表税额差异1" field="difference_1" tab="taxAmount" /><ReasonColumn label="差异原因1" field="difference_1_manual_reason" kind="summary" /><MoneyColumn label="申报表税额（仅正常工资薪金、经纪人、限售股、利息税）" field="scoped_declared_tax_amount" /><MoneyColumn label="工资表及其他税额" field="payroll_business_tax_amount" /><SummaryDifferenceColumn label="申报表与工资表及其他税额差异2" field="difference_2" tab="taxAmount" /><ReasonColumn label="差异原因2" field="difference_2_manual_reason" kind="summary" /><SummaryDifferenceColumn label="当期工资薪金累计应纳税所得额差异3" field="taxable_income_difference" tab="salaryTaxableIncome" /><ReasonColumn label="差异原因3" field="difference_3_manual_reason" kind="summary" /><SummaryDifferenceColumn label="科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6" field="broker_occurrence_difference" tab="occurrence" /><ReasonColumn label="差异原因6" field="difference_6_manual_reason" kind="summary" /><SummaryDifferenceColumn label="部分税种发生额差异7" field="other_income_difference" tab="occurrence" /><ReasonColumn label="差异原因7" field="difference_7_manual_reason" kind="summary" /></el-table></div></el-tab-pane>
           <el-tab-pane v-if="activeStage === 'pre_payment'" label="申报表汇总数" name="declaration"><div class="pit-table-wrap"><el-table v-loading="tabLoading.declaration" :data="filteredDeclarationRows" border stripe :height="tableHeight" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_name" label="营业部名称" width="190" fixed="left" /><el-table-column prop="declaration_type" label="申报类型" width="150" /><el-table-column prop="income_item" label="所得项目" width="240" /><el-table-column prop="person_count" label="填写人次" width="95" align="right" /><MoneyColumn label="收入合计（元）" field="income_amount" /><MoneyColumn label="应补/退税额（元）" field="tax_amount" /></el-table></div></el-tab-pane>
-          <el-tab-pane v-if="activeStage === 'pre_payment'" label="个税明细税额核对" name="taxAmount"><div class="pit-table-wrap"><el-table v-loading="tabLoading.taxAmount" :data="filteredTaxRows" border stripe show-summary :summary-method="taxSummaryMethod" :height="tableHeight" class="pit-reconciliation-table" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_name" label="营业部名称" width="190" fixed="left" /><el-table-column prop="subject_code" label="会计科目" width="110" fixed="left" /><el-table-column prop="subject_name" label="描述" width="180" fixed="left" /><MoneyColumn v-for="column in balanceColumns" :key="column.key" :label="column.label" :field="column.key" /><MoneyColumn label="申报表税额" field="declared_tax_amount" /><DifferenceColumn label="本期差异金额8（申报表-余额表贷方）" field="current_difference" /><ReasonColumn label="差异原因8" field="current_manual_reason" kind="tax" /><DifferenceColumn label="累计差异金额9（申报表-余额表期末余额）" field="cumulative_difference" /><ReasonColumn label="差异原因9" field="cumulative_manual_reason" kind="tax" /><MoneyColumn label="工资表、支撑平台税额" field="business_tax_amount" /><MoneyColumn label="申报表税额（仅正常工资薪金、经纪人、限售股、利息税）" field="scoped_declared_tax_amount" /><TaxDifferenceColumn /><ReasonColumn label="差异原因10" field="business_declared_manual_reason" kind="tax" /></el-table></div></el-tab-pane>
+          <el-tab-pane v-if="activeStage === 'pre_payment'" label="个税明细税额核对" name="taxAmount"><div class="pit-table-wrap"><el-table v-loading="tabLoading.taxAmount" :data="filteredTaxRows" border stripe show-summary :summary-method="taxSummaryMethod" :height="tableHeight" class="pit-reconciliation-table" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_name" label="营业部名称" width="190" fixed="left" /><el-table-column prop="subject_code" label="会计科目" width="110" fixed="left" /><el-table-column prop="subject_name" label="描述" width="180" fixed="left" /><MoneyColumn v-for="column in balanceColumns" :key="column.key" :label="column.label" :field="column.key" /><MoneyColumn label="申报表税额" field="declared_tax_amount" /><DifferenceColumn label="本期差异金额8（申报表-余额表贷方）" field="current_difference" /><ReasonColumn label="差异原因8" field="current_manual_reason" kind="tax" /><DifferenceColumn label="累计差异金额9（申报表-余额表期末余额）" field="cumulative_difference" /><ReasonColumn label="差异原因9" field="cumulative_manual_reason" kind="tax" /><MoneyColumn label="工资表及其他税额" field="business_tax_amount" /><MoneyColumn label="申报表税额（仅正常工资薪金、经纪人、限售股、利息税）" field="scoped_declared_tax_amount" /><TaxDifferenceColumn /><ReasonColumn label="差异原因10" field="business_declared_manual_reason" kind="tax" /></el-table></div></el-tab-pane>
           <el-tab-pane v-if="activeStage === 'pre_payment'" label="其他个税发生额核对" name="occurrence"><div class="pit-table-actions"><el-button :loading="occurrenceDescriptionLoading" @click="exportOccurrenceDescriptions">导出说明</el-button><el-button :loading="occurrenceDescriptionLoading" :disabled="!isEditable" @click="occurrenceDescriptionInput?.click()">导入说明</el-button><input ref="occurrenceDescriptionInput" type="file" accept=".xlsx,.xls" hidden @change="importOccurrenceDescriptions" /></div><div class="pit-table-wrap"><el-table v-loading="tabLoading.occurrence" :data="filteredOccurrenceRows" border stripe show-summary :summary-method="occurrenceSummaryMethod" :height="tableHeight" class="pit-reconciliation-table" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_name" label="营业部名称" width="190" fixed="left" /><el-table-column prop="subject_code" label="会计科目" width="110" fixed="left" /><el-table-column prop="subject_name" label="描述" width="180" fixed="left" /><el-table-column prop="income_type" label="对应税种" width="190" /><MoneyColumn v-for="column in occurrenceBalanceColumns" :key="column.key" :label="column.label" :field="column.key" /><MoneyColumn label="经纪人工资表应发" field="broker_payroll_amount" /><DifferenceColumn label="差异金额11（工资表应发-余额表发生额）" field="broker_occurrence_difference" /><ReasonColumn label="差异原因11" field="broker_occurrence_manual_reason" kind="occurrence" /><MoneyColumn label="发生额应申报收入" field="expected_declared_income" /><el-table-column prop="expected_income_description" label="发生额应申报收入说明" width="220" show-overflow-tooltip /><MoneyColumn label="申报表申报收入" field="actual_declared_income" /><DifferenceColumn label="差异金额12（申报表申报收入-应申报收入）" field="declared_income_difference" /><ReasonColumn label="差异原因12" field="declared_income_manual_reason" kind="occurrence" /></el-table></div></el-tab-pane>
           <el-tab-pane v-if="activeStage === 'pre_payment'" label="附A1 工资薪金等个税差异" name="salaryTax"><div class="pit-table-wrap"><el-table v-loading="tabLoading.salaryTax" :data="filteredSalaryTaxRows" border stripe :height="tableHeight" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="org_name" label="营业部名称" width="170" /><el-table-column label="期间" width="110"><template #default>{{ periodLabel }}</template></el-table-column><el-table-column prop="person_or_customer_name" label="姓名" width="130" /><DetailMoneyColumn label="申报税额" :keys="['declared_tax_amount']" fallback="target_amount" /><DetailMoneyColumn label="工资表税额" :keys="['payroll_tax_amount']" fallback="source_amount" /><DetailDifferenceColumn label="差异金额" /><el-table-column label="差异原因" width="250"><template #default="{ row }"><ReasonCell :reason="row.manual_reason ?? row.auto_reason" @open="openReasonEditor(row, 'manual_reason', 'difference')" /></template></el-table-column><el-table-column label="核对项目" width="105"><template #default="{ row }"><el-button link type="primary" @click="openSalaryDrawer(row)">查看</el-button></template></el-table-column></el-table></div></el-tab-pane>
           <el-tab-pane v-if="activeStage === 'pre_payment'" label="附A2 累计应纳税所得额差异明细" name="salaryTaxableIncome"><div class="pit-table-wrap"><el-table v-loading="tabLoading.salaryTaxableIncome" :data="filteredSalaryTaxableIncomeRows" border stripe :height="tableHeight" :header-cell-class-name="headerCellClassName" :cell-class-name="pitCellClassName"><el-table-column prop="org_code" label="机构代码" width="105" fixed="left" /><el-table-column prop="person_or_customer_name" label="姓名" width="130" /><DetailMoneyColumn label="累计应纳税所得额差异（工资表-申报表）" :keys="['taxable_income_difference']" fallback="difference" /><DetailMoneyColumn label="累计专项扣除差异（工资表-申报表）" :keys="['specific_deduction_difference']" /><DetailMoneyColumn label="累计专项附加扣除差异（含个人养老金）（工资表-申报表）" :keys="['special_additional_deduction_difference']" /><DetailMoneyColumn label="其它差异（工资表-申报表）" :keys="['other_deduction_difference', 'other_difference']" /><el-table-column label="申报表税率" width="105"><template #default="{ row }">{{ detailValue(row, 'declaration_rate') ?? '—' }}</template></el-table-column><DetailMoneyColumn label="应纳税额差异（工资表-申报表）" :keys="['tax_difference']" /><el-table-column label="差异原因" width="250"><template #default="{ row }"><ReasonCell :reason="row.manual_reason ?? row.auto_reason" @open="openReasonEditor(row, 'manual_reason', 'difference')" /></template></el-table-column></el-table></div></el-tab-pane>
@@ -53,7 +61,7 @@
       </div>
     </section>
     <ReasonEditorDialog v-model="reasonDialogVisible" :field-label="editingReasonFieldLabel" :reason="editingReasonText" :editable="isEditable" :saving="reasonSaving" @save="saveReason" />
-    <el-dialog v-model="reviewerDialogVisible" title="选择FMSS复核人" width="420px"><el-select v-model="selectedReviewer" style="width:100%" placeholder="请选择复核人"><el-option v-for="item in reviewerOptions" :key="item.username" :label="item.label" :value="item.username" /></el-select><template #footer><el-button @click="reviewerDialogVisible = false">取消</el-button><el-button type="primary" :loading="submitOnlineLoading" :disabled="!selectedReviewer" @click="submitOnline">提交审核</el-button></template></el-dialog>
+          <el-dialog v-model="reviewerDialogVisible" title="选择复核人" width="420px"><el-select v-model="selectedReviewer" style="width:100%" placeholder="请选择复核人" no-data-text="暂无可选复核人"><el-option v-for="item in reviewerOptions" :key="item.username" :label="item.label" :value="item.username" /></el-select><template #footer><el-button @click="reviewerDialogVisible = false">取消</el-button><el-button type="primary" :loading="submitOnlineLoading" :disabled="!selectedReviewer" @click="submitOnline">提交审核</el-button></template></el-dialog>
     <el-drawer v-model="detailDrawerVisible" title="工资薪金核对项目" size="560px"><el-table :data="salaryComparisonItems" border size="small"><el-table-column prop="name" label="项目" min-width="150" /><el-table-column label="工资金额" width="110"><template #default="{ row }">{{ formatMoney(row.payroll_amount) }}</template></el-table-column><el-table-column label="申报金额" width="110"><template #default="{ row }">{{ formatMoney(row.declaration_amount) }}</template></el-table-column><el-table-column label="差异金额" width="105"><template #default="{ row }">{{ formatMoney(row.difference) }}</template></el-table-column><el-table-column prop="tax_rate" label="税率" width="75" /><el-table-column label="税额影响" width="105"><template #default="{ row }">{{ formatMoney(row.tax_effect) }}</template></el-table-column></el-table><div v-if="!salaryComparisonItems.length" class="empty-inline">该记录没有可展开的扣除项目。</div></el-drawer>
   </div>
 </template>
@@ -83,7 +91,7 @@ const postPaymentReady = computed(() => readiness.value.some((item) => item.sour
 const postPaymentPreparationReason = computed(() => {
   if (activeStage.value !== 'post_payment') return ''
   const missing = readiness.value
-    .filter((item) => item.source_status === 'missing' || item.source_status === 'invalid' || item.issues_json?.length)
+    .filter((item) => item.source_status === 'missing' || item.source_status === 'invalid' || hasBlockingSourceIssues(item))
     .map((item) => sourceLabels[item.source_type] ?? item.source_type)
   return missing.length ? `请先完成必要数据准备：${[...new Set(missing)].join('、')}` : ''
 })
@@ -109,10 +117,10 @@ const balanceColumns = [{ key:'opening_balance',label:'期初余额' },{ key:'de
 const activeStage = ref<PaymentStage>(props.initialStage || 'pre_payment')
 const workflowStatus = computed(() => String(overview.value?.workpaper?.workflow_status || 'data_preparation'))
 const fmssStateLabel = computed(() => doubleReviewCompleted.value ? '双复核完成' : ({ NOT_SUBMITTED:'未提交', DRAFT:'线上草稿', REVIEWING:'审核中', APPROVED:'已复核', RETURNED:'已退回' }[fmssState.value] || fmssState.value))
-const workflowStatusMeta = computed(() => doubleReviewCompleted.value ? { label:'双复核完成', type:'success' as const, description:'缴款前、缴款后底稿均已通过FMSS复核，当前期间已永久锁定。' } : ({
+const workflowStatusMeta = computed(() => doubleReviewCompleted.value ? { label:'双复核完成', type:'success' as const, description:'缴款前、缴款后底稿均已通过复核，当前期间已永久锁定。' } : ({
   data_preparation: { label:'数据准备', type:'warning' as const, description:'来源数据尚未齐全或需要重新计算。当前可修改、重算，也可按需要提交。' },
   pending_submission: { label:'待提交', type:'primary' as const, description:'当前底稿已完成重算，可继续填写差异原因；确认后可以提交。' },
-  submitted: { label:'已提交', type:'info' as const, description:'当前版本已提交支撑平台，正在等待复核，底稿已锁定。' },
+  submitted: { label:'已提交', type:'info' as const, description:'当前版本已提交，正在等待复核，底稿已锁定。' },
   returned: { label:'已退回', type:'danger' as const, description:'当前版本已被复核退回，可修改或重新计算；修改后进入待提交。' },
   reviewed: { label:'已复核', type:'success' as const, description:'当前版本已复核通过，底稿已锁定。' },
 }[workflowStatus.value] || { label:workflowStatus.value, type:'info' as const, description:'当前底稿状态未知。' }))
@@ -128,8 +136,8 @@ const recalculateDisabledReason = computed(() => {
 const submitDisabledReason = computed(() => {
   if (!props.periodId) return '请先选择所属期'
   if (fmssStateUnavailable.value) return '线上状态无法确认，当前已保守锁定'
-  if (fmssState.value === 'REVIEWING') return 'FMSS正在审核中'
-  if (fmssState.value === 'APPROVED') return 'FMSS已经复核通过'
+  if (fmssState.value === 'REVIEWING') return '当前正在审核中'
+  if (fmssState.value === 'APPROVED') return '当前已复核通过'
   return ''
 })
 const aggregateDisabledReason = computed(() => {
@@ -140,12 +148,19 @@ const aggregateDisabledReason = computed(() => {
 })
 const aggregateButtonTooltip = computed(() => aggregateDisabledReason.value || '根据下级人工原因更新空白或已有自动汇总内容，不覆盖人工填写内容。')
 const organizationOptions = computed(() => [...new Set(summaryRows.value.map((row) => row.org_code).filter(Boolean))])
+function hasBlockingSourceIssues(source: PitReadinessItem): boolean {
+  return Boolean(source.issues_json?.some(issue => activeStage.value !== 'post_payment' || source.source_type !== 'bank_statement' || issue.issue_type !== 'unresolved_bank_organization'))
+}
+function unmatchedBankCount(source: PitReadinessItem): number {
+  if (source.source_type !== 'bank_statement') return 0
+  return (source.issues_json || []).reduce((total, issue) => total + (issue.issue_type === 'unresolved_bank_organization' ? issue.transaction_count ?? 1 : 0), 0)
+}
 const readinessMeta = computed(() => {
-  const abnormal = readiness.value.some((item) => item.source_status === 'invalid' || !!item.issues_json?.length)
+  const abnormal = readiness.value.some((item) => item.source_status === 'invalid' || hasBlockingSourceIssues(item))
   const missing = readiness.value.some((item) => item.source_status === 'missing')
   return abnormal ? { label:'有异常', type:'danger' as const } : missing ? { label:'待补充', type:'warning' as const } : { label:'已完成', type:'success' as const }
 })
-const readinessSummary = computed(() => { const normal=readiness.value.filter(item => ['ready','ready_empty','not_applicable'].includes(item.source_status) && !item.issues_json?.length).length; const abnormal=readiness.value.filter(item => item.source_status === 'invalid' || !!item.issues_json?.length).length; const missing=readiness.value.filter(item => item.source_status === 'missing').length; return `正常 ${normal} ｜ 异常 ${abnormal} ｜ 未上传 ${missing} ｜ 共 ${readiness.value.length}` })
+const readinessSummary = computed(() => { const normal=readiness.value.filter(item => ['ready','ready_empty','not_applicable'].includes(item.source_status) && !hasBlockingSourceIssues(item)).length; const abnormal=readiness.value.filter(item => item.source_status === 'invalid' || hasBlockingSourceIssues(item)).length; const missing=readiness.value.filter(item => item.source_status === 'missing').length; return `正常 ${normal} ｜ 异常 ${abnormal} ｜ 未上传 ${missing} ｜ 共 ${readiness.value.length}` })
 const salaryComparisonItems = computed(() => Array.isArray(detailDrawerRow.value?.detail_json?.comparison_items) ? detailDrawerRow.value?.detail_json?.comparison_items as TableRow[] : [])
 function formatMoney(value: unknown): string { if (value === null || value === undefined || value === '') return '—'; const numeric = Number(value); return Number.isFinite(numeric) ? numeric.toLocaleString('zh-CN',{ minimumFractionDigits:2,maximumFractionDigits:2 }) : '—' }
 function formatDateTime(value: Date) { const pad = (number: number) => String(number).padStart(2, '0'); return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}` }
@@ -291,7 +306,7 @@ async function refreshFmssState(silent = false, reloadOverview = true) {
     if (fmssGeneration !== fmssRequestGeneration || pageGeneration !== requestGeneration || stage !== activeStage.value) return false
     applyFmssState(data.status, data.declaration_id, Boolean(data.double_review_completed))
     if (reloadOverview) await loadOverview(true, pageGeneration)
-    if (!silent) ElMessage.success('FMSS线上状态已刷新')
+    if (!silent) ElMessage.success('状态已刷新')
     return true
   } catch (error: any) {
     if (fmssGeneration === fmssRequestGeneration && overview.value?.workpaper?.platform_submission_id) fmssStateUnavailable.value = true
@@ -304,17 +319,23 @@ async function refreshFmssState(silent = false, reloadOverview = true) {
 function localWorkpaperReady() { const workpaper = overview.value?.workpaper; return workpaper?.calculation_status === 'success' && ['ready', 'complete'].includes(String(workpaper?.data_status || '')) }
 async function openSubmitReviewer() {
   if (!props.periodId || submitDisabledReason.value) return
+  selectedReviewer.value = ''
+  reviewerOptions.value = []
   try {
     const { data } = await fmssApi.reviewers(props.periodId, activeStage.value)
     const rows = Array.isArray(data) ? data : data?.rows || []
     reviewerOptions.value = rows.map((row: any) => { const username = String(row?.username || row?.userName || row?.loginName || row?.account || row || '').trim(); return { username, label: String(row?.name || row?.displayName || username) } }).filter((row: { username: string }) => row.username)
+    if (!reviewerOptions.value.length) {
+      ElMessage.warning('未返回当前分公司的可选复核人，请检查审核权限。')
+      return
+    }
     if (reviewerOptions.value.length === 1) selectedReviewer.value = reviewerOptions.value[0].username
     reviewerDialogVisible.value = true
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || 'FMSS复核人列表获取失败')
+    ElMessage.error(error?.response?.data?.detail || '复核人列表获取失败')
   }
 }
-async function submitOnline() { if (!props.periodId || !selectedReviewer.value || submitOnlineLoading.value) return; submitOnlineLoading.value = true; try { await fmssApi.submit(props.periodId, selectedReviewer.value, activeStage.value); reviewerDialogVisible.value = false; const refreshed = await refreshFmssState(); if (!refreshed) { fmssStateUnavailable.value = true; return } if (activeStage.value === 'post_payment' && fmssState.value !== 'REVIEWING') { ElMessage.error(`FMSS提交接口已响应，但线上状态为${fmssStateLabel.value}`); return } ElMessage.success('FMSS提交审核已完成') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || 'FMSS提交审核失败') } finally { submitOnlineLoading.value = false } }
+async function submitOnline() { if (!props.periodId || !selectedReviewer.value || submitOnlineLoading.value) return; submitOnlineLoading.value = true; try { await fmssApi.submit(props.periodId, selectedReviewer.value, activeStage.value); reviewerDialogVisible.value = false; const refreshed = await refreshFmssState(); if (!refreshed) { fmssStateUnavailable.value = true; return } if (activeStage.value === 'post_payment' && fmssState.value !== 'REVIEWING') { ElMessage.error(`提交接口已响应，但当前状态为${fmssStateLabel.value}`); return } ElMessage.success('提交审核已完成') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '提交审核失败') } finally { submitOnlineLoading.value = false } }
 async function applySearch() { if (isRawTab(activeTab.value)) { tabLoaded[activeTab.value] = false; await loadRawSheet(activeTab.value,1,requestGeneration) } }
 async function resetFilters() { orgFilter.value=''; keyword.value=''; displayMode.value='all'; await applySearch() }
 async function recalculate(stage: 'pre_payment' | 'post_payment') { if (!props.periodId || !isEditable.value) return; recalculateLoading.value = true; try { await pitReconciliationApi.recalculate(props.periodId, stage); overviewCache.delete(overviewCacheKey(stage)); resetPitPage(); await initializePage(); ElMessage.success(stage === 'pre_payment' ? '缴款前底稿已重新计算' : '缴款后底稿已重新计算') } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '计算失败') } finally { recalculateLoading.value = false } }

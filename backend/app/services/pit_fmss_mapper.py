@@ -11,7 +11,7 @@ from app.integrations.fmss.iit.schemas import FmssSheet
 from app.models.core import Period
 from app.models.pit_reconciliation import (
     PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck,
-    PitReconciliationDifferenceDetail, PitReconciliationOrgSummary, PitTaxAmountCheck,
+    PitReconciliationDifferenceDetail, PitReconciliationOrgSummary, PitReconciliationWorkpaper, PitTaxAmountCheck,
 )
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 
@@ -107,6 +107,19 @@ class PitFmssMapper:
     def map_post(self, db: Session, company_id: int, period_id: int, workpaper_id: int, sheets: list[FmssSheet]) -> dict[str, list[list[Any]]]:
         self.validate_post_template(sheets)
         summaries = db.query(PitReconciliationOrgSummary).filter_by(workpaper_id=workpaper_id, company_id=company_id).all()
+        pre = db.query(PitReconciliationWorkpaper).filter_by(
+            company_id=company_id, period_id=period_id, tax_type="pit", stage="pre_payment",
+        ).first()
+        post = db.query(PitReconciliationWorkpaper).filter_by(id=workpaper_id, company_id=company_id, period_id=period_id).one()
+        if pre is None:
+            raise FmssStateConflict("缺少缴款前底稿版本，不能使用新导入的申报表提交缴款后底稿。")
+        pre_amounts = {row.org_code: row.declared_tax_amount for row in db.query(PitReconciliationOrgSummary).filter_by(
+            workpaper_id=pre.id, company_id=company_id,
+        )}
+        inherited = (post.source_snapshot_json or {}).get("pre_payment_snapshot")
+        if ({row.org_code: row.declared_tax_amount for row in summaries} != pre_amounts
+                or (inherited and inherited != {"workpaper_id": pre.id, "draft_revision": pre.draft_revision})):
+            raise FmssStateConflict("缴款后申报表与缴款前版本不一致，请重算缴款后底稿；提交审核不会自动重算。")
         bank_taxes = db.query(PitBankTaxMatch).filter_by(workpaper_id=workpaper_id, company_id=company_id).all()
         certificate_batch = (
             db.query(ReconciliationImportBatch)
@@ -120,11 +133,12 @@ class PitFmssMapper:
             .order_by(ReconciliationImportRow.row_number)
             .all()
         )
+        file_results = (certificate_batch.file_results or []) if certificate_batch else []
         file_ids = {
             str(item.get("file_name")).strip(): item.get("fmss_file_id")
-            for item in (certificate_batch.file_results or []) if isinstance(item, dict) and item.get("file_name") and item.get("fmss_file_id") is not None and item.get("status") == "success"
+            for item in file_results if isinstance(item, dict) and item.get("file_name") and item.get("fmss_file_id") is not None and item.get("status") == "success"
         }
-        failed_files = [item.get("file_name") for item in (certificate_batch.file_results or []) if isinstance(item, dict) and item.get("status") != "success"] if certificate_batch else []
+        failed_files = [item.get("file_name") for item in file_results if isinstance(item, dict) and item.get("status") != "success"]
         if failed_files:
             raise FmssStateConflict(f"完税凭证未全部上传FMSS：{'、'.join(str(name) for name in failed_files if name)}")
         rows: dict[str, list[list[Any]]] = {key: [] for key in POST_SHEET_KEYS}
