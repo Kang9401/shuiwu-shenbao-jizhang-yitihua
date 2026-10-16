@@ -225,7 +225,19 @@ def _previous_payroll_files(period: Period | None, roles: set[str]) -> list[tupl
     if not root.is_dir():
         return []
     selected: dict[str, Path] = {}
-    for path in root.rglob("*"):
+    # save_upload 按 file_role 建目录。只扫描工资单角色目录，不能对整个期间
+    # 目录做表头分类，否则人员信息表可能被误判成 5 位职级工资单。
+    payroll_role_dirs = {
+        "rank_salary", "marketing_salary", "branch_salary",
+        "digital_ops_salary", "advisor_salary", "headquarters_salary",
+    }
+    paths = (
+        path
+        for role_dir in root.iterdir()
+        if role_dir.is_dir() and role_dir.name in payroll_role_dirs
+        for path in role_dir.rglob("*")
+    )
+    for path in paths:
         if not path.is_file() or path.suffix.lower() not in {".xls", ".xlsx"}:
             continue
         try:

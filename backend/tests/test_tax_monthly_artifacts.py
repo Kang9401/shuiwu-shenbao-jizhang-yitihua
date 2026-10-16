@@ -28,6 +28,30 @@ def _db_session():
     return TestingSessionLocal()
 
 
+def test_previous_payroll_scan_ignores_personnel_master_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(tax_api.settings, "storage_root", tmp_path)
+    monkeypatch.setattr(tax_api, "current_company_id", lambda default=None: 7)
+    previous_root = tmp_path / "uploads" / "7" / "2"
+    payroll_dir = previous_root / "rank_salary"
+    personnel_dir = previous_root / "personnel_master_employee_month"
+    payroll_dir.mkdir(parents=True)
+    personnel_dir.mkdir(parents=True)
+    pd.DataFrame([{
+        "员工编号": "10001", "姓名": "工资人员", "机构代码": "13248",
+        "累计预扣预缴应纳税所得额": 100,
+    }]).to_excel(payroll_dir / "payroll.xlsx", index=False)
+    pd.DataFrame([{
+        "员工编号": "10002", "*姓名": "人员主数据", "机构代码": "13248",
+        "人员状态": "正常",
+    }]).to_excel(personnel_dir / "staff.xlsx", index=False)
+
+    result = tax_api._previous_payroll_files(type("PeriodStub", (), {"id": 2})(), {"rank_salary"})
+
+    assert len(result) == 1
+    assert result[0][0] == "rank_salary"
+    assert result[0][1].endswith("payroll.xlsx")
+
+
 def test_monthly_working_sheet_is_overwritten_per_period(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(tax_api, "ARTIFACT_DIR", tmp_path / "artifacts")
     db = _db_session()
