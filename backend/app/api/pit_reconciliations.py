@@ -15,7 +15,8 @@ from app.api.dependencies import require_company, require_period
 from app.core.company_context import current_company_id
 from app.db.session import get_db
 from app.models.pit_reconciliation import (PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck, PitReconciliationDifferenceDetail, PitReconciliationOrgSummary, PitReconciliationSource, PitReconciliationWorkpaper, PitTaxAmountCheck)
-from app.schemas.pit_reconciliation import PitManualUpdate, PitOccurrenceCheckUpdate, PitReasonAggregationRequest, PitSummaryUpdate, PitTaxAmountCheckUpdate
+from app.schemas.pit_reconciliation import PitIdentityMappingUpdate, PitManualUpdate, PitOccurrenceCheckUpdate, PitReasonAggregationRequest, PitSummaryUpdate, PitTaxAmountCheckUpdate
+from app.services.pit_reconciliation.keys import identity_mapping_rows, payroll_mapping_options
 from app.services.pit_reconciliation.engine import PitReconciliationEngine
 from app.services.pit_reconciliation.repository import PitReconciliationRepository
 from app.services.pit_reconciliation.source_service import PitSourceService
@@ -102,7 +103,7 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
         if stage == "post_payment":
             result = PitReconciliationEngine().calculate_post(pre_result, bundle.certificates, bundle.bank)
         else:
-            result = PitReconciliationEngine().calculate(bundle)
+            result = PitReconciliationEngine().calculate(bundle, (workpaper.source_snapshot_json or {}).get("identity_mappings", {}))
         result["stage"] = stage
         stage_sources = _stage_sources(bundle, stage)
         complete = all(
@@ -130,6 +131,52 @@ def recalculate(period_id:int=Query(...),stage:Literal["pre_payment","post_payme
         workpaper.last_error=str(exc)
         db.commit()
         raise HTTPException(status_code=400,detail=f"个税底稿计算失败：{exc}") from exc
+
+
+def _identity_rows(db, period_id, workpaper):
+    source = PitSourceService(db, current_company_id(), period_id)
+    salary, declarations = source.load_salary_source(), source.load_declaration_source()
+    if salary.status == "invalid" or declarations.status == "invalid":
+        raise HTTPException(status_code=400, detail="人员来源数据无效，请检查工资表和申报表")
+    return identity_mapping_rows(salary.rows, declarations.rows, (workpaper.source_snapshot_json or {}).get("identity_mappings", {}))
+
+
+@router.get("/identity-mappings")
+def get_identity_mappings(period_id: int = Query(...), db: Session = Depends(get_db)):
+    workpaper = _workpaper(db, period_id, "pre_payment", allow_stale=True)
+    return _identity_rows(db, period_id, workpaper)
+
+
+@router.get("/identity-mapping-options")
+def get_identity_mapping_options(period_id: int = Query(...), db: Session = Depends(get_db)):
+    _workpaper(db, period_id, "pre_payment", allow_stale=True)
+    source = PitSourceService(db, current_company_id(), period_id).load_salary_source()
+    if source.status == "invalid":
+        raise HTTPException(status_code=400, detail="工资来源数据无效，请检查工资表")
+    return payroll_mapping_options(source.rows)
+
+
+@router.put("/identity-mappings")
+def update_identity_mappings(payload: PitIdentityMappingUpdate, period_id: int = Query(...), db: Session = Depends(get_db)):
+    workpaper = _workpaper(db, period_id, "pre_payment", allow_stale=True)
+    _ensure_online_editable(db, workpaper)
+    if workpaper.workflow_status in {"submitted", "reviewed"} or workpaper.calculation_status == "running":
+        raise HTTPException(status_code=409, detail="当前底稿已锁定，不能维护身份映射")
+    rows = {row["row_key"]: row for row in _identity_rows(db, period_id, workpaper)}
+    payroll_options = payroll_mapping_options(PitSourceService(db, current_company_id(), period_id).load_salary_source().rows)
+    options = {row["target_key"] for row in payroll_options}
+    mappings = dict((workpaper.source_snapshot_json or {}).get("identity_mappings", {}))
+    for row_key, target in payload.mappings.items():
+        if row_key not in rows or (target and target not in options and target not in rows[row_key]["candidates"]):
+            raise HTTPException(status_code=400, detail="身份映射无效，请选择当前公司、当前所属期已有的工资人员")
+        if target:
+            mappings[row_key] = target
+        else:
+            mappings.pop(row_key, None)
+    workpaper.source_snapshot_json = {**(workpaper.source_snapshot_json or {}), "identity_mappings": mappings}
+    workpaper.draft_revision += 1
+    db.commit()
+    return {"message": "身份映射已保存，请重算缴款前底稿使映射生效"}
 
 
 @router.post("/aggregate-reasons")
@@ -167,7 +214,7 @@ def _list(model,period_id,stage,db):
     row=_workpaper(db,period_id,stage); return [_payload(item) for item in db.query(model).filter_by(workpaper_id=row.id,company_id=current_company_id()).all()]
 
 def _has_difference(*values):
-    return any(value is not None and abs(value) > Decimal("0.01") for value in values)
+    return any(value is not None and abs(value) >= Decimal("0.01") for value in values)
 @router.get("/tax-amount-checks")
 def tax_amount_checks(period_id:int=Query(...),stage:Literal["pre_payment","post_payment"]=Query(...),org_code:str|None=Query(None),subject_code:str|None=Query(None),only_differences:bool=False,db:Session=Depends(get_db)):
     row=_workpaper(db,period_id,stage); query=db.query(PitTaxAmountCheck).filter_by(workpaper_id=row.id,company_id=current_company_id())
@@ -225,7 +272,7 @@ def sheet_data(
             frame = frame[frame.astype(str).apply(lambda row: row.str.lower().str.contains(needle, regex=False).any(), axis=1)]
     difference_columns = [column for column in frame.columns if "差异" in str(column)]
     if display_mode == "difference" and difference_columns:
-        frame = frame[frame[difference_columns].apply(lambda row: any(value not in (None, "", 0, 0.0) and abs(float(value)) > 0.01 if str(value).replace(".", "", 1).replace("-", "", 1).isdigit() else False for value in row), axis=1)]
+        frame = frame[frame[difference_columns].apply(lambda row: any(value not in (None, "", 0, 0.0) and abs(float(value)) >= 0.01 if str(value).replace(".", "", 1).replace("-", "", 1).isdigit() else False for value in row), axis=1)]
     if display_mode == "missing":
         frame = frame[frame.isna().any(axis=1) | frame.eq("").any(axis=1)]
     total = len(frame)

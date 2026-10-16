@@ -91,7 +91,7 @@ def _official_total_issue(sheet: pd.DataFrame, numbering_row: int, columns: dict
     declared_tax = _money(total_row.iloc[columns["应补退税额"]])
     visible_income = sum((_money(row.get("收入")) or Decimal("0.00") for row in records), Decimal("0.00"))
     visible_tax = sum((_money(row.get("应补退税额")) or Decimal("0.00") for row in records), Decimal("0.00"))
-    if (declared_income is not None and abs(visible_income - declared_income) > Decimal("0.01")) or (declared_tax is not None and abs(visible_tax - declared_tax) > Decimal("0.01")):
+    if (declared_income is not None and abs(visible_income - declared_income) >= Decimal("0.01")) or (declared_tax is not None and abs(visible_tax - declared_tax) >= Decimal("0.01")):
         return {"issue_type": "declaration_detail_total_mismatch", "message": "申报表可见明细合计与文件合计不一致", "visible_income_sum": str(visible_income), "declared_total_income": str(declared_income) if declared_income is not None else None, "visible_tax_sum": str(visible_tax), "declared_total_tax": str(declared_tax) if declared_tax is not None else None, "income_difference": str(visible_income - declared_income) if declared_income is not None else None, "tax_difference": str(visible_tax - declared_tax) if declared_tax is not None else None}
     return None
 
@@ -179,9 +179,17 @@ def _parse_official_restricted(sheet: pd.DataFrame, sheet_name: str) -> tuple[li
         "纳税人姓名": ("客户姓名",),
         "证件类型": ("纳税人有效身份证件_证件类型",),
         "证券账户号": ("证券账号",),
+        "股票代码": ("证券代码",),
+        "股票名称": ("证券名称",),
         "每股计税价格": ("每股计税价格（元/股)", "每股计税价格(元/股)"),
         "转让股数": ("转让股数(股)", "转让股数（股）"),
-        "原值及合理税费小计": ("限售股原值及合理税费_小计", "小计"),
+        "转让收入额": ("成交金额", "卖出金额"),
+        "原值及合理税费小计": ("限售股原值及合理税费_小计", "限售股原值及合理税费小计", "小计"),
+        "原值": ("限售股原值", "原值总金额"),
+        "合理税费": ("合理费用", "合理税费"),
+        "准予扣除的捐赠额": ("准予扣除捐赠额",),
+        "应纳税所得额": ("累计应纳税所得额",),
+        "协定减免": ("协定减免税额",),
     }
     data_start = next(
         (int(index) for index, row in sheet.iloc[header_row + 1:].iterrows()

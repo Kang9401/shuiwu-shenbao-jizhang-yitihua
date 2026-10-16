@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .rules.income_classification import income_category
 from .workpaper_layout import HEADERS
-from .source_service import declaration_snapshot_rows
+from .source_service import declaration_snapshot_rows, security_income_kind
 
 import io
 from collections.abc import Iterable
@@ -68,9 +68,11 @@ def _declaration_display_rows(rows: list[dict], columns: list[str] = DECLARATION
         "其他扣除_年金": "年金", "累计情况_累计收入额": "累计收入额",
         "累计专项附加扣除_子女教育": "子女教育", "税款计算_应纳税所得额": "累计应纳税所得额",
         "应补/退税额": "应补退税额", "税款所属期": "tax_period", "扣缴义务人名称": "agent_name",
-        "扣缴义务人纳税人识别号（统一社会信用代码）": "agent_id",
+        "扣缴义务人纳税人识别号（统一社会信用代码）": "agent_id", "文件名": "file_name",
+        "纳税人有效身份证件_证件类型": "证件类型", "每股计税价格（元/股)": "每股计税价格",
+        "转让股数(股)": "转让股数", "限售股原值及合理税费_小计": "原值及合理税费小计",
     }
-    return [{column: row.get(aliases.get(column, column)) for column in columns} for row in rows]
+    return [{column: row.get(column) if row.get(column) not in (None, "") else row.get(aliases.get(column, column)) for column in columns} for row in rows]
 
 
 def _certificate_display_rows(rows: list[dict]) -> list[dict]:
@@ -80,6 +82,24 @@ def _certificate_display_rows(rows: list[dict]) -> list[dict]:
         "税种": row.get("tax_type"), "品目": row.get("income_item"), "税款所属时期": row.get("tax_period"),
         "入(退)库日期": row.get("payment_date"), "实缴（退）金额": row.get("amount"),
     } for row in rows]
+
+
+def _security_display_rows(rows: list[dict], columns: list[str]) -> list[dict]:
+    """Map normalized FMSS security fields to the detailed sheet columns."""
+    aliases = {
+        "分支机构代码": ("分支机构代码", "机构代码", "branchNo"), "分支机构名称": ("分支机构名称", "营业部名称", "branchName"),
+        "交易日期": ("交易日期", "业务日期", "交易时间", "initDate"), "客户编号": ("客户编号", "clientId"), "资产账号": ("资产账号", "fundAccount"),
+        "证券账号": ("证券账号", "stockAccount"), "客户姓名": ("客户姓名", "clientName"), "证件号码": ("证件号码", "idNo"), "手机号码": ("手机号码", "mobileTel"),
+        "家庭电话": ("家庭电话", "homePhone"), "联系地址": ("联系地址", "address"), "国籍": ("国籍", "国籍(地区)", "nationality"), "生日": ("生日", "出生日期", "birthday"),
+        "客户性别": ("客户性别", "性别", "clientGender"), "证券代码": ("证券代码", "stockCode"), "证券名称": ("证券名称", "股票名称", "stockName"),
+        "交易类别": ("交易类别", "tradeType"), "席位编号": ("席位编号", "seatNo"), "成交编号": ("成交编号", "dealNo"), "资产属性代码": ("资产属性代码", "assetType"),
+        "债券兑息": ("债券兑息", "interest_amount", "businessBalance"), "兑息扣税": ("兑息扣税", "withheld_tax", "totalTax"), "税率（%）": ("税率（%）", "税率(%)", "taxRatio"), "备注": ("备注", "remark"),
+        "成交数量": ("成交数量", "businessAmount"), "成交价格": ("成交价格", "businessPrice"), "成交金额": ("成交金额", "sdsBalance"), "原值总金额": ("原值总金额", "originalBalance"), "利息税": ("利息税", "withheld_tax", "taxFare"),
+        "卖出经手费": ("卖出经手费", "sellFare0"), "卖出印花税": ("卖出印花税", "sellFare1"), "手续费": ("手续费", "totalFare"), "卖出过户费": ("卖出过户费", "sellFare2"), "企业名称": ("企业名称", "corpName"), "上市公司纳税人识别号": ("上市公司纳税人识别号", "uscc"),
+        "出生年月日": ("出生年月日", "出生日期", "birthday"), "资产账户": ("资产账户", "资产账号", "fundAccount"),
+        "客户手机号码": ("客户手机号码", "手机号码", "mobileTel"), "卖出金额": ("卖出金额", "成交金额", "sdsBalance"),
+    }
+    return [{column: next((row.get(candidate) for candidate in aliases.get(column, (column,)) if row.get(candidate) not in (None, "")), None) for column in columns} for row in rows]
 
 
 def _batch_rows(db, company_id: int, period_id: int, import_type: str) -> list[dict]:
@@ -158,7 +178,7 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
 
     summary_columns = [
         "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差异1", "差异原因1",
-        "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
+        "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
         "当期工资薪金累计应纳税所得额差异3", "差异原因3", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
     ]
     period = db.query(Period).filter_by(id=period_id, company_id=company_id).first()
@@ -168,7 +188,7 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
         summary_rows.append({
             "机构代码": row["org_code"], "营业部全称": row.get("org_full_name") or row.get("org_name", ""), "税款所属期": tax_period,
             "申报表税额": row.get("declared_tax_amount"), "科目余额表期末余额税额": row.get("balance_tax_amount"), "申报表与余额表税额差异1": row.get("difference_1"), "差异原因1": row.get("difference_1_manual_reason"),
-            "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）": row.get("scoped_declared_tax_amount"), "工资表、支撑平台税额": row.get("payroll_business_tax_amount"), "申报表与工资表、支撑平台税额差异2": row.get("difference_2"), "差异原因2": row.get("difference_2_manual_reason"),
+            "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）": row.get("scoped_declared_tax_amount"), "工资表、支撑平台税额": row.get("payroll_business_tax_amount"), "申报表与工资表、支撑平台税额差异2": row.get("difference_2"), "差异原因2": row.get("difference_2_manual_reason"),
             "当期工资薪金累计应纳税所得额差异3": row.get("taxable_income_difference"), "差异原因3": row.get("difference_3_manual_reason"), "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6": row.get("broker_occurrence_difference"), "差异原因6": row.get("difference_6_manual_reason"), "部分税种发生额差异7": row.get("other_income_difference"), "差异原因7": row.get("difference_7_manual_reason"),
         })
 
@@ -196,13 +216,12 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
     classification_rows = [row for row in declarations if category(row) == "分类所得"]
     restricted_declaration_rows = [row for row in declarations if category(row) == "限售股所得"]
 
-    bond_keys = ("债券兑息", "债券利息", "兑息扣税", "利息税原始收入", "利息税申报金额", "利息税税费(申报表)")
-    bond_rows = [row for row in securities if any(row.get(key) not in (None, "") for key in bond_keys)]
-    restricted_rows = [row for row in securities if row not in bond_rows]
+    bond_rows = [row for row in securities if security_income_kind(row) == "利息税"]
+    restricted_rows = [row for row in securities if security_income_kind(row) == "限售股"]
     declaration_summary_columns = ["机构代码", "营业部名称", "申报类型", "所得项目", "填写人次", "收入合计（元）", "应补/退税额（元）"]
     declaration_summary_rows = [{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "申报类型": row.get("declaration_type"), "所得项目": row.get("income_item"), "填写人次": row.get("person_count"), "收入合计（元）": row.get("income_amount"), "应补/退税额（元）": row.get("tax_amount")} for row in declaration_summaries]
-    tax_columns = ["机构代码", "营业部名称", "会计科目", "描述", "期初余额", "借方金额", "贷方金额", "期末余额", "工资表、支撑平台税额", "申报表税额", "本期差异8", "差异原因8", "累计差异9", "差异原因9", "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "差异10", "差异原因10"]
-    tax_rows = [{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "会计科目": row.get("subject_code"), "描述": row.get("subject_name"), "期初余额": row.get("opening_balance"), "借方金额": row.get("debit_amount"), "贷方金额": row.get("credit_amount"), "期末余额": row.get("closing_balance"), "工资表、支撑平台税额": row.get("business_tax_amount"), "申报表税额": row.get("declared_tax_amount"), "本期差异8": row.get("current_difference"), "差异原因8": row.get("current_manual_reason"), "累计差异9": row.get("cumulative_difference"), "差异原因9": row.get("cumulative_manual_reason"), "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）": row.get("scoped_declared_tax_amount"), "差异10": row.get("business_declared_difference"), "差异原因10": row.get("business_declared_manual_reason")} for row in tax_checks]
+    tax_columns = ["机构代码", "营业部名称", "会计科目", "描述", "期初余额", "借方金额", "贷方金额", "期末余额", "工资表、支撑平台税额", "申报表税额", "本期差异8", "差异原因8", "累计差异9", "差异原因9", "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）", "差异10", "差异原因10"]
+    tax_rows = [{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "会计科目": row.get("subject_code"), "描述": row.get("subject_name"), "期初余额": row.get("opening_balance"), "借方金额": row.get("debit_amount"), "贷方金额": row.get("credit_amount"), "期末余额": row.get("closing_balance"), "工资表、支撑平台税额": row.get("business_tax_amount"), "申报表税额": row.get("declared_tax_amount"), "本期差异8": row.get("current_difference"), "差异原因8": row.get("current_manual_reason"), "累计差异9": row.get("cumulative_difference"), "差异原因9": row.get("cumulative_manual_reason"), "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）": row.get("scoped_declared_tax_amount"), "差异10": row.get("business_declared_difference"), "差异原因10": row.get("business_declared_manual_reason")} for row in tax_checks]
     occurrence_columns = ["机构代码", "营业部名称", "会计科目", "描述", "对应税种", "期初余额", "借方金额", "贷方金额", "期末余额", "科目余额表当期发生额", "经纪人工资表应发", "差异11", "差异原因11", "发生额应申报收入", "发生额应申报收入说明", "申报表申报收入", "差异12", "差异原因12"]
     occurrence_rows = [{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "会计科目": row.get("subject_code"), "描述": row.get("subject_name"), "对应税种": row.get("income_type"), "期初余额": row.get("opening_balance"), "借方金额": row.get("debit_amount"), "贷方金额": row.get("credit_amount"), "期末余额": row.get("closing_balance"), "科目余额表当期发生额": row.get("occurrence_amount"), "经纪人工资表应发": row.get("broker_payroll_amount"), "差异11": row.get("broker_occurrence_difference"), "差异原因11": row.get("broker_occurrence_manual_reason"), "发生额应申报收入": row.get("expected_declared_income"), "发生额应申报收入说明": _income_description(row.get("expected_income_description")), "申报表申报收入": row.get("actual_declared_income"), "差异12": row.get("declared_income_difference"), "差异原因12": row.get("declared_income_manual_reason")} for row in occurrence_checks]
     a1_columns = ["机构代码", "营业部名称", "期间", "姓名", "申报税额", "工资表税额", "差异", "差异原因"]
@@ -217,8 +236,8 @@ def build_pit_workpaper_sheets(db, company_id: int, period_id: int, workpaper) -
         "附A2 累计应纳税所得额差异明细": _frame([{"机构代码": row.get("org_code"), "姓名": row.get("person_or_customer_name"), "（工资表-申报表）累计应纳税所得额差异": (row.get("detail_json") or {}).get("taxable_income_difference"), "（工资表-申报表）累计专项扣除差异": (row.get("detail_json") or {}).get("specific_deduction_difference"), "（工资表-申报表）累计专项附加扣除差异（含个人养老金）": (row.get("detail_json") or {}).get("special_additional_deduction_difference"), "（工资表-申报表）其它差异": (row.get("detail_json") or {}).get("other_deduction_difference"), "申报表税率": (row.get("detail_json") or {}).get("declaration_rate"), "（工资表-申报表）应纳税额差异": (row.get("detail_json") or {}).get("tax_difference"), "差异原因": row.get("manual_reason") or row.get("auto_reason")} for row in detail_rows("salary_taxable_income", [])], a2_columns),
         "附A3 客户利息个税差异明细": _frame([{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "客户姓名": row.get("person_or_customer_name"), "证件号码": row.get("id_number"), "债券利息收入": (row.get("detail_json") or {}).get("interest_amount"), "兑息扣税": (row.get("detail_json") or {}).get("business_tax_amount"), "申报税额": (row.get("detail_json") or {}).get("declared_tax_amount"), "差异": row.get("difference"), "差异原因": row.get("manual_reason") or row.get("auto_reason")} for row in detail_rows("bond_interest_tax", [])], a3_columns),
         "附A4 限售股个税差异明细": _frame([{"机构代码": row.get("org_code"), "营业部名称": row.get("org_name"), "客户姓名": row.get("person_or_customer_name"), "证件号码": row.get("id_number"), "证券名称": "、".join((row.get("detail_json") or {}).get("security_names", [])), "转让收入额": (row.get("detail_json") or {}).get("sale_amount"), "利息税": (row.get("detail_json") or {}).get("business_tax_amount"), "申报税额": (row.get("detail_json") or {}).get("declared_tax_amount"), "差异": row.get("difference"), "差异原因": row.get("manual_reason") or row.get("auto_reason")} for row in detail_rows("restricted_stock_tax", [])], a4_columns),
-        "科目余额": _frame(_balance_display_rows(balances), BALANCE_COLUMNS), "债券信息明细": _frame(bond_rows, BOND_COLUMNS), "限售股明细": _frame(restricted_rows, RESTRICTED_COLUMNS),
-        "个税完税凭证": _frame(_certificate_display_rows(certificates), CERTIFICATE_COLUMNS), "综合所得个税申报": _frame(_declaration_display_rows(declaration_rows, COMPREHENSIVE_DECLARATION_COLUMNS), COMPREHENSIVE_DECLARATION_COLUMNS), "分类所得个税申报": _frame(_declaration_display_rows(classification_rows), DECLARATION_COLUMNS), "限售股所得申报": _frame(restricted_declaration_rows, RESTRICTED_DECLARATION_COLUMNS),
+        "科目余额": _frame(_balance_display_rows(balances), BALANCE_COLUMNS), "债券信息明细": _frame(_security_display_rows(bond_rows, BOND_COLUMNS), BOND_COLUMNS), "限售股明细": _frame(_security_display_rows(restricted_rows, RESTRICTED_COLUMNS), RESTRICTED_COLUMNS),
+        "个税完税凭证": _frame(_certificate_display_rows(certificates), CERTIFICATE_COLUMNS), "综合所得个税申报": _frame(_declaration_display_rows(declaration_rows, COMPREHENSIVE_DECLARATION_COLUMNS), COMPREHENSIVE_DECLARATION_COLUMNS), "分类所得个税申报": _frame(_declaration_display_rows(classification_rows), DECLARATION_COLUMNS), "限售股所得申报": _frame(_declaration_display_rows(restricted_declaration_rows, RESTRICTED_DECLARATION_COLUMNS), RESTRICTED_DECLARATION_COLUMNS),
         "银行流水": _frame(banks, BANK_COLUMNS), "银行流水个税税额明细": _frame([{"机构代码": row.get("org_code"), "营业部全称": row.get("org_full_name"), "本方账号": row.get("bank_account"), "交易时间": row.get("transaction_time"), "交易摘要": row.get("transaction_summary"), "借方金额": row.get("debit_amount")} for row in bank_matches], ["机构代码", "营业部全称", "本方账号", "交易时间", "交易摘要", "借方金额"]),
     })
     summary_renames = {}

@@ -79,6 +79,16 @@ PAYROLL_A2_HEADER_MAPS = {
         "工资表_累计企业年金员工部分": ("累计企业年金的员工部分",),
         "工资表_累计商业保险扣除": ("累计商业保险扣除",),
     },
+    "headquarters_salary": {
+        "工资表_累计应纳税所得额": ("累计预扣预缴应纳税所得额", "累计应纳税所得额", "本期累计应纳税所得额"),
+        "工资表_累计减除费用": ("累计减除费用", "本期累计减除费用"),
+        "工资表_累计养老保险金员工部分": ("累计养老保险金的员工部分", "累计基本养老保险费"),
+        "工资表_累计医疗保险金员工部分": ("累计医疗保险金的员工部分", "累计基本医疗保险费"),
+        "工资表_累计失业保险金员工部分": ("累计失业保险金的员工部分", "累计失业保险费"),
+        "工资表_累计住房公积金员工部分": ("累计住房公积金的员工部分", "累计住房公积金"),
+        "工资表_累计企业年金员工部分": ("累计企业年金的员工部分", "累计企业(职业)年金"),
+        "工资表_累计商业保险扣除": ("累计商业保险扣除",),
+    },
 }
 
 PAYROLL_A2_REQUIRED_FIELDS = ("工资表_累计应纳税所得额",)
@@ -271,7 +281,7 @@ def _copy_payroll_a2_fields(
         target: _first_col(headers, *aliases)
         for target, aliases in mapping.items()
     }
-    missing = [target for target in PAYROLL_A2_REQUIRED_FIELDS if not resolved.get(target)]
+    missing = [target for target in PAYROLL_A2_REQUIRED_FIELDS if not resolved.get(target)] if role != "headquarters_salary" else []
     if missing:
         raise PayrollHeaderValidationError(role, file_path, missing, headers)
     for target, source_column in resolved.items():
@@ -644,8 +654,77 @@ def load_headquarters_payroll(
     result["年累计专项附加扣除"] = 0
 
     _copy_payroll_reconciliation_fields(result, df)
+    _copy_payroll_a2_fields(result, df, "headquarters_salary", file_path)
 
     return result
+
+
+def _load_payroll_frames(
+    payroll_files: list[tuple[str, str]],
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> list[pd.DataFrame]:
+    """按既有角色加载工资单，供本期和上期商业保险计算复用。"""
+    frames: list[pd.DataFrame] = []
+    for role, path in payroll_files:
+        if not path:
+            continue
+        if role == "headquarters_salary":
+            frame = load_headquarters_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
+        else:
+            frame = load_employee_payroll(
+                path, taxpayer_org_map, duplicate_taxpayer_ids, payroll_role=role
+            )
+        if not frame.empty:
+            frame["工资单类型"] = PAYROLL_ROLE_LABELS.get(role, role)
+            frames.append(frame)
+    return frames
+
+
+def _apply_previous_commercial_insurance(
+    current: pd.DataFrame,
+    previous: list[pd.DataFrame],
+) -> None:
+    """把工资单累计商业保险转换为本期增量。
+
+    申报表的“商业健康保险”是本期发生额，而工资单提供的是年内累计值。
+    按员工编号取上期累计值计算差额；差额为正使用差额，否则使用本期值。
+    A2 专用的 ``工资表_累计商业保险扣除`` 保留原始累计口径。
+    """
+    if current.empty or not previous or "员工编号" not in current.columns:
+        return
+    current_field = "工资单_累计商业保险扣除"
+    if current_field not in current.columns:
+        return
+
+    previous_frames = [frame for frame in previous if "员工编号" in frame.columns and current_field in frame.columns]
+    if not previous_frames:
+        return
+    previous_sheet = pd.concat(previous_frames, ignore_index=True, sort=False)
+    previous_sheet["员工编号"] = _normalize_emp_id(previous_sheet["员工编号"])
+    previous_values = _to_numeric(previous_sheet[current_field])
+    previous_sheet[current_field] = previous_values
+    # 同一员工编号在多个工资来源中重复时，保留最后一条来源，避免把累计值重复求和。
+    previous_by_employee = (
+        previous_sheet.loc[previous_sheet["员工编号"].astype(str).str.strip().ne("")]
+        .drop_duplicates(subset=["员工编号"], keep="last")
+        .set_index("员工编号")[current_field]
+    )
+    if previous_by_employee.empty:
+        return
+
+    current["员工编号"] = _normalize_emp_id(current["员工编号"])
+    current_values = _to_numeric(current[current_field])
+    employee_ids = current["员工编号"]
+    previous_values_for_current = employee_ids.map(previous_by_employee)
+    has_previous = previous_values_for_current.notna()
+    delta = current_values - previous_values_for_current.fillna(0)
+    adjusted = current_values.where(~has_previous, delta.where(delta > 0, current_values))
+
+    # 该字段用于底稿核对展示，申报表实际使用“商业健康保险”。两者必须保持
+    # 相同的本期口径；A2 的工资表累计字段仍由原始工资单映射保留。
+    current[current_field] = adjusted
+    current["商业健康保险"] = adjusted
 
 
 def load_deduction_files(folder_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -815,6 +894,7 @@ def build_working_sheet(
     duplicate_taxpayer_ids: set[str] | None = None,
     retirement_welfare_path: str = "",
     retirement_welfare_column: str = "",
+    previous_payroll_files: list[tuple[str, str]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """构建完整底稿（大表）。返回 (sheet, staff_df)。"""
     # ---- 1. 加载人员信息表 ----
@@ -854,24 +934,17 @@ def build_working_sheet(
     )
 
     # ---- 2. 分类型加载工资单 ----
-    all_frames = []
-    for role, path in payroll_files:
-        if not path:
-            continue
-        if role == "headquarters_salary":
-            df = load_headquarters_payroll(path, taxpayer_org_map, duplicate_taxpayer_ids)
-        else:
-            df = load_employee_payroll(
-                path, taxpayer_org_map, duplicate_taxpayer_ids, payroll_role=role
-            )
-        if not df.empty:
-            df["工资单类型"] = PAYROLL_ROLE_LABELS.get(role, role)
-            all_frames.append(df)
+    all_frames = _load_payroll_frames(payroll_files, taxpayer_org_map, duplicate_taxpayer_ids)
 
     if not all_frames:
         return pd.DataFrame()
 
     all_payroll = pd.concat(all_frames, ignore_index=True, join="outer")
+
+    previous_frames = _load_payroll_frames(
+        previous_payroll_files or [], taxpayer_org_map, duplicate_taxpayer_ids
+    )
+    _apply_previous_commercial_insurance(all_payroll, previous_frames)
 
     # 确保关键列存在
     for col in ["员工编号", "*姓名", "机构代码"]:
@@ -1688,7 +1761,7 @@ def build_reconciliation_report(report: dict) -> dict[str, pd.DataFrame]:
     for item in tax_items:
         row = dict(item)
         row["容差"] = tolerance
-        row["是否超容差"] = abs(float(item.get("diff", 0))) > tolerance
+        row["是否超容差"] = abs(float(item.get("diff", 0))) >= tolerance
         tax_rows.append(row)
 
     missing_org_rows = [{"org_code": org, "issue": "专项附加扣除合计为0"} for org in report["deduction_warnings"]["missing_orgs"]]

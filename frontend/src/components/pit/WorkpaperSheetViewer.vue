@@ -22,7 +22,7 @@ import type { WorkpaperSheet } from '../../features/pit/contracts'
 const props = defineProps<{ sheet: WorkpaperSheet }>()
 const keyword = ref('')
 const differencesOnly = ref(false)
-function isDifference(value: unknown) { return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0.01 }
+function isDifference(value: unknown) { return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Math.abs(Number(value)) >= 0.01 }
 function formatValue(value: unknown, type: string) {
   if (value === null || value === undefined || value === '') return '—'
   if (type === 'money') return Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })

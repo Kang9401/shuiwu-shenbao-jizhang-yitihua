@@ -104,10 +104,18 @@ def _salary_kind(record: dict[str, Any]) -> str:
 
 
 def _sum_money_fields(record: dict[str, Any], names: tuple[str, ...]):
-    values = [money_or_none(record[name]) for name in names]
+    values = [money_or_none(record.get(name)) for name in names]
     if any(value is None for value in values):
         return None
     return sum(values, start=Decimal("0.00"))
+
+
+def security_income_kind(record):
+    if record.get("所得类型"):
+        return record["所得类型"]
+    if any(record.get(key) not in (None, "") for key in ("债券兑息", "债券利息", "兑息扣税", "利息税原始收入", "利息税申报金额", "利息税税费(申报表)")):
+        return "利息税"
+    return "限售股"
 
 
 class PitSourceService:
@@ -122,12 +130,12 @@ class PitSourceService:
         batch = self._latest_batch(import_type)
         return batch, ([] if batch is None else self.db.query(ReconciliationImportRow).filter(ReconciliationImportRow.company_id == self.company_id, ReconciliationImportRow.batch_id == batch.id).order_by(ReconciliationImportRow.row_number).all())
 
-    def _source_from_artifact(self, workflow: str, artifact_type: str, mapper):
+    def _source_from_artifact(self, workflow: str, artifact_type: str, mapper, predicate=None):
         artifact = self.db.query(Artifact).join(Job).filter(Artifact.company_id == self.company_id, Job.company_id == self.company_id, Job.period_id == self.period_id, Job.workflow_code == workflow, Job.status == "success", Artifact.artifact_type == artifact_type).order_by(Artifact.created_at.desc()).first()
         if artifact is None: return SourceResult(workflow, "missing")
         try:
             frame = pd.read_excel(artifact.stored_path).fillna("")
-            mapped_rows = [mapper(record) for record in frame.to_dict(orient="records")]
+            mapped_rows = [mapper(record) for record in frame.to_dict(orient="records") if predicate is None or predicate(record)]
             allowed_codes = set(self.resolver.items)
             rows = [row for row in mapped_rows if not getattr(row, "org_code", "") or row.org_code in allowed_codes]
             issues = []
@@ -150,7 +158,7 @@ class PitSourceService:
         if batch is None: return SourceResult("pit_declaration", "missing")
         result=[]; issues=[]
         for row in rows:
-            raw=row.raw_data or {}; declared_org=_text(_pick(raw,"机构代码","分支机构代码") or row.organization_code); file_org=_text(_pick(raw,"file_org_code")); agent=_text(_pick(raw,"agent_name","扣缴义务人名称","withholding_agent_name")); agent_id=_text(_pick(raw,"agent_id","扣缴义务人纳税人识别号（统一社会信用代码）","扣缴义务人编码")); tax_org=self.resolver.resolve_by_taxpayer_id(agent_id); name_org=self.resolver.resolve_by_full_name(agent) or self.resolver.resolve_by_branch_name(agent)
+            raw={**(row.raw_data or {}), "_identity_source_row": row.id, "row_number": row.row_number}; declared_org=_text(_pick(raw,"机构代码","分支机构代码") or row.organization_code); file_org=_text(_pick(raw,"file_org_code")); agent=_text(_pick(raw,"agent_name","扣缴义务人名称","withholding_agent_name")); agent_id=_text(_pick(raw,"agent_id","扣缴义务人纳税人识别号（统一社会信用代码）","扣缴义务人编码")); tax_org=self.resolver.resolve_by_taxpayer_id(agent_id); name_org=self.resolver.resolve_by_full_name(agent) or self.resolver.resolve_by_branch_name(agent)
             candidates={candidate.org_code for candidate in (tax_org, name_org) if candidate} | {value for value in (declared_org, file_org) if value}
             if len(candidates) > 1:
                 issues.append({"issue_type":"declaration_organization_conflict", "message":f"申报文件机构归属冲突：税号/营业部/文件名识别结果为 {', '.join(sorted(candidates))}", "row_id":row.id})
@@ -184,7 +192,7 @@ class PitSourceService:
                 )
             for record in records:
                 org=_text(_pick(record,"机构代码","机构代码_工资单","机构代码_人员信息表","分支机构代码")); kind=_salary_kind(record)
-                is_a2_payroll = kind in {"five_digit", "seven_digit"}
+                is_a2_payroll = kind in {"five_digit", "seven_digit", "headquarters"}
                 special_deduction = _sum_money_fields(record, (
                     "工资表_累计养老保险金员工部分", "工资表_累计医疗保险金员工部分",
                     "工资表_累计失业保险金员工部分", "工资表_累计住房公积金员工部分",
@@ -199,16 +207,16 @@ class PitSourceService:
                     _text(_pick(record,"员工编号","工号")),
                     kind,
                     money_or_none(_pick(record,"个人所得税 SUM","个人所得税")),
-                    money_or_none(record["工资表_累计应纳税所得额"]) if is_a2_payroll else None,
-                    money_or_none(record["工资表_累计减除费用"]) if is_a2_payroll else None,
+                    money_or_none(record.get("工资表_累计应纳税所得额")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资表_累计减除费用")) if is_a2_payroll else None,
                     special_deduction,
-                    money_or_none(record["工资单_累计子女教育扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计赡养老人扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计住房贷款利息扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计住房租金扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计继续教育扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计婴幼儿照护扣除"]) if is_a2_payroll else None,
-                    money_or_none(record["工资单_累计个人养老金"]) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计子女教育扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计赡养老人扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计住房贷款利息扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计住房租金扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计继续教育扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计婴幼儿照护扣除")) if is_a2_payroll else None,
+                    money_or_none(record.get("工资单_累计个人养老金")) if is_a2_payroll else None,
                     other_deduction,
                 ))
             return SourceResult("salary","ready_empty" if not rows else "ready",rows,source_kind="tax_monthly_artifact",source_id=artifact.id,source_ref=artifact.stored_path)
@@ -218,10 +226,10 @@ class PitSourceService:
         result=self._source_from_artifact("broker_tax", "broker_tax_result", lambda r: BrokerRow(_org_code(_pick(r,"分支机构代码","机构代码")), _text(_pick(r,"姓名","*姓名")), money_or_none(_pick(r,"个人所得税(经纪人)","个人所得税")), money_or_none(_pick(r,"应发合计（补足前）","经纪人本期收入","本期收入")), money_or_none(_pick(r,"增值税"))))
         result.source_type="broker"; return result
     def load_bond_source(self):
-        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: BondInterestRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),money_or_none(_pick(r,"债券兑息","利息税原始收入")),money_or_none(_pick(r,"兑息扣税","实际扣缴税额","利息税税费(申报表)"))))
+        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: BondInterestRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),money_or_none(_pick(r,"债券兑息","利息税原始收入")),money_or_none(_pick(r,"兑息扣税","实际扣缴税额","利息税税费(申报表)"))), predicate=lambda r: security_income_kind(r) == "利息税")
         result.source_type="bond_interest"; return result
     def load_restricted_source(self):
-        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: RestrictedStockRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),_text(_pick(r,"证券名称","股票名称")),money_or_none(_pick(r,"限售股申报金额","成交金额")),money_or_none(_pick(r,"利息税","限售股税费(申报表)","扣缴税额"))))
+        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: RestrictedStockRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),_text(_pick(r,"证券名称","股票名称")),money_or_none(_pick(r,"限售股申报金额","成交金额")),money_or_none(_pick(r,"利息税","限售股税费(申报表)","扣缴税额"))), predicate=lambda r: security_income_kind(r) == "限售股")
         result.source_type="restricted_stock"; return result
 
     def load_certificate_source(self) -> SourceResult:

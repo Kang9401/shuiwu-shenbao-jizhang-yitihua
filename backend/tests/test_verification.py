@@ -139,6 +139,45 @@ def test_real_five_and_seven_digit_payroll_headers_map_appendix_a2_fields(tmp_pa
         assert row["个人所得税 SUM"] == pytest.approx(88.66)
 
 
+@pytest.mark.parametrize(
+    ("current_value", "previous_value", "expected"),
+    [(100, 80, 20), (80, 100, 80), (100, None, 100), (100, 100, 100)],
+)
+def test_commercial_insurance_uses_employee_increment_from_previous_payroll(
+    tmp_path: Path, current_value: float, previous_value: float | None, expected: float
+):
+    current_path = tmp_path / "current.xlsx"
+    previous_path = tmp_path / "previous.xlsx"
+    row = {
+        "员工编号": "00123.0",
+        "姓名": "测试人员",
+        "机构代码": "13248",
+        "累计预扣预缴应纳税所得额": 1000,
+        "累计商业保险扣除": current_value,
+    }
+    pd.DataFrame([row]).to_excel(current_path, index=False)
+    previous_files = []
+    if previous_value is not None:
+        pd.DataFrame([{**row, "员工编号": "00123", "累计商业保险扣除": previous_value}]).to_excel(previous_path, index=False)
+        previous_files = [("rank_salary", str(previous_path))]
+
+    staff_path = tmp_path / "staff.xlsx"
+    pd.DataFrame([{
+        "员工编号": "00123", "*姓名": "测试人员", "机构代码": "13248",
+        "人员状态": "正常", "证件类型": "居民身份证", "证件号码": "110101199001010011",
+    }]).to_excel(staff_path, index=False)
+
+    sheet, _ = build_working_sheet(
+        [("rank_salary", str(current_path))], str(staff_path), "",
+        previous_payroll_files=previous_files,
+    )
+    result = sheet.iloc[0]
+    assert result["商业健康保险"] == pytest.approx(expected)
+    assert result["工资单_累计商业保险扣除"] == pytest.approx(expected)
+    # A2 专用字段仍保持工资单原始累计值。
+    assert result["工资表_累计商业保险扣除"] == pytest.approx(current_value)
+
+
 def test_missing_payroll_taxable_income_header_reports_all_actual_headers(tmp_path: Path):
     path = tmp_path / "缺字段的5位工资表.xlsx"
     pd.DataFrame([{"员工编号": "10001", "姓名": "张三", "个人所得税": 10}]).to_excel(path, index=False)

@@ -16,6 +16,87 @@ from app.services.pit_reconciliation.repository import PitReconciliationReposito
 from app.api import pit_reconciliations as pit_api
 
 
+def _mock_identity_sources(monkeypatch):
+    salary = SourceResult("salary", "ready", [
+        SalaryRow("10001", "同名", id_number="110101199001010011", pit_tax=Decimal("10"), cumulative_taxable_income=Decimal("100")),
+        SalaryRow("10001", "同名", id_number="110101199001010021", pit_tax=Decimal("20"), cumulative_taxable_income=Decimal("200")),
+    ])
+    declarations = SourceResult("pit_declaration", "ready", [DeclarationRow("10001", "综合所得", person_name="同名", id_number="1****************1",
+        income_item="正常工资薪金", tax_amount=Decimal("11"), cumulative_taxable_income=Decimal("110"), tax_rate="3%", raw_data={"_identity_source_row": 1})])
+    monkeypatch.setattr(pit_api.PitSourceService, "load_salary_source", lambda _: salary)
+    monkeypatch.setattr(pit_api.PitSourceService, "load_declaration_source", lambda _: declarations)
+    empty = lambda name: SourceResult(name, "ready_empty")
+    bundle = PitSourceBundle(SourceResult("organization_mapping", "ready", [OrganizationRow("10001", "测试", "测试")]),
+        salary, declarations, empty("balance_sheet"), empty("broker"), empty("bond_interest"), empty("restricted_stock"), empty("tax_certificate"), empty("bank_statement"))
+    monkeypatch.setattr(pit_api.PitSourceService, "load_bundle", lambda _: bundle)
+
+
+def test_identity_mapping_persists_across_reads_and_recalculations_and_can_be_cleared(monkeypatch):
+    from app.models.pit_reconciliation import PitReconciliationWorkpaper
+    client, period_id = _client_with_workpaper()
+    _mock_identity_sources(monkeypatch)
+    params = {"period_id": period_id}
+    url = "/api/pit-reconciliations/identity-mappings"
+    try:
+        response = client.get(url, params=params)
+        assert response.status_code == 200
+        row = response.json()[0]
+        assert row["status"] == "manual_review"
+        mapping = {row["row_key"]: row["candidates"][0]}
+        assert client.put(url, params=params, json={"mappings": mapping}).status_code == 200
+        assert client.get(url, params=params).json()[0]["selected_id"] == mapping[row["row_key"]]
+        for _ in range(2):
+            response = client.post("/api/pit-reconciliations/recalculate", params={**params, "stage": "pre_payment"})
+            assert response.status_code == 200, response.text
+            assert response.json()["workpaper"]["source_snapshot_json"]["identity_mappings"] == mapping
+            details = client.get("/api/pit-reconciliations/difference-details", params={**params, "stage": "pre_payment"}).json()
+            assert not any(item["identity_key"].startswith("manual:") for item in details)
+            assert any(item["detail_json"].get("identity_match_status") == "manual_confirmed" for item in details)
+        generator = app.dependency_overrides[get_db]()
+        db = next(generator)
+        try:
+            workpaper = db.query(PitReconciliationWorkpaper).one()
+            result = PitReconciliationRepository(db, 1, period_id, "post_payment").pre_payment_result()
+            assert all("source_type" in source for source in result["sources"])
+            assert "identity_mappings" in workpaper.source_snapshot_json
+        finally:
+            generator.close()
+        assert client.put(url, params=params, json={"mappings": {row["row_key"]: ""}}).status_code == 200
+        cleared = client.get(url, params=params).json()[0]
+        assert cleared["selected_id"] == "" and cleared["status"] == "manual_review"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_identity_mapping_validates_candidates_scope_and_lock(monkeypatch):
+    from app.models.pit_reconciliation import PitReconciliationWorkpaper
+    client, period_id = _client_with_workpaper()
+    _mock_identity_sources(monkeypatch)
+    params = {"period_id": period_id}
+    url = "/api/pit-reconciliations/identity-mappings"
+    try:
+        row = client.get(url, params=params).json()[0]
+        for invalid in ({row["row_key"]: "220101199001010011"}, {"unknown": row["candidates"][0]}):
+            assert client.put(url, params=params, json={"mappings": invalid}).status_code == 400
+        assert client.get(url, params=params).json()[0]["selected_id"] == ""
+        assert client.get(url, params=params, headers={"X-Company-ID": "2"}).status_code == 404
+        assert client.put(url, params={"period_id": period_id + 99}, json={"mappings": {}}).status_code == 404
+        generator = app.dependency_overrides[get_db]()
+        db = next(generator)
+        try:
+            for status in ("submitted", "reviewed"):
+                workpaper = db.query(PitReconciliationWorkpaper).one()
+                workpaper.workflow_status = status
+                db.commit()
+                # Locked data remains readable, while mappings cannot be changed.
+                assert client.get(url, params=params).status_code == 200
+                assert client.put(url, params=params, json={"mappings": {row["row_key"]: row["candidates"][0]}}).status_code == 409
+        finally:
+            generator.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_post_unresolved_bank_organization_issue_is_non_blocking():
     allowed = {
         "source_type": "bank_statement",
@@ -152,7 +233,7 @@ def test_pit_workpaper_export_contains_reference_template_sheets():
         assert workbook.sheetnames == list(PRE_PAYMENT_SHEET_NAMES)
         assert list(next(workbook["汇总税额核对"].values)) == [
             "机构代码", "营业部全称", "税款所属期", "申报表税额", "科目余额表期末余额税额", "申报表与余额表税额差异1", "差异原因1",
-            "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
+            "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）", "工资表、支撑平台税额", "申报表与工资表、支撑平台税额差异2", "差异原因2",
             "当期工资薪金累计应纳税所得额差异3", "差异原因3", "科目余额表经纪人支出当期发生额与经纪人工资应发金额差异6", "差异原因6", "部分税种发生额差异7", "差异原因7",
         ]
     finally:
@@ -170,7 +251,7 @@ def test_pit_sheet_data_exposes_reference_columns_and_pagination():
         assert payload["columns"] == [
             "机构代码", "营业部名称", "会计科目", "描述", "期初余额", "借方金额", "贷方金额", "期末余额",
             "申报表税额", "本期差异金额8（申报表-余额表贷方）", "差异原因8", "累计差异金额9（申报表-余额表期末余额）", "差异原因9",
-            "工资表、支撑平台税额", "申报表税额（仅正常工资薪金、经纪人、限售股、利息税）", "差异金额10（申报表-工资表、支撑平台税额）", "差异原因10",
+            "工资表、支撑平台税额", "申报表税额（仅正常工资薪金、一般劳务报酬所得、经纪人、限售股、利息税）", "差异金额10（申报表-工资表、支撑平台税额）", "差异原因10",
         ]
         assert payload["total"] == 4
         assert len(payload["rows"]) == 2

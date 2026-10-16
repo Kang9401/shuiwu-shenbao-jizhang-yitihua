@@ -848,7 +848,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
             lxs["利息税申报金额"] * 0.2
         ).round(2)
         source_withheld_mismatch = source_withheld_present & (
-            (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() > 0.01
+            (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() >= 0.01
         )
         if source_withheld_mismatch.any():
             interest_source_withheld_warnings = int(source_withheld_mismatch.sum())

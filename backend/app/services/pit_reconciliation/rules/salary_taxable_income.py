@@ -1,22 +1,30 @@
 from decimal import Decimal
-from ..keys import employee_identity, reliable_id_number
+from ..keys import identity_key_text, resolve_identity_keys
 from ..money import has_difference
 
 
-def salary_taxable_income_details(salaries, declarations):
+def salary_taxable_income_details(salaries, declarations, identity_mappings=None):
+    declaration_rows = [row for row in declarations if "工资薪金" in row.income_item and "证券经纪" not in row.income_item]
+    salary_matches, declaration_matches = resolve_identity_keys(salaries, declaration_rows, identity_mappings)
+    salary_key_map = {id(row): (row.org_code, match[0], match[1]) for row, match in zip(salaries, salary_matches)}
+    declaration_key_map = {id(row): (row.org_code, match[0], match[1]) for row, match in zip(declaration_rows, declaration_matches)}
     def key_for(row):
-        return (row.org_code, reliable_id_number(getattr(row, "id_number", "")) or row.person_name)
+        match = salary_key_map.get(id(row)) or declaration_key_map.get(id(row))
+        return (match[1][1], match[1]) if match else (row.org_code, ("name", row.org_code, getattr(row, "person_name", ""), id(row)))
 
     grouped={}
     typed_payroll = any(getattr(row, "salary_kind", "") for row in salaries)
-    supported_kinds = {"five_digit", "seven_digit"}
+    supported_kinds = {"five_digit", "seven_digit", "headquarters"}
+    def supported(row):
+        return (not typed_payroll or row.salary_kind in supported_kinds) and not (
+            row.salary_kind == "headquarters" and row.cumulative_taxable_income is None)
     excluded_keys = {
         key_for(row)
         for row in salaries
-        if typed_payroll and getattr(row, "salary_kind", "") not in supported_kinds
+        if not supported(row)
     }
     for row in salaries:
-        if typed_payroll and getattr(row, "salary_kind", "") not in supported_kinds:
+        if not supported(row):
             continue
         grouped.setdefault(key_for(row), [[],[]])[0].append(row)
     for row in declarations:
@@ -57,5 +65,14 @@ def salary_taxable_income_details(salaries, declarations):
                 declared_other=(dec.cumulative_other_deduction if dec else None) or Decimal("0.00")
                 payroll_tax=(pay.pit_tax if pay else None) or Decimal("0.00")
                 declared_tax=(dec.tax_amount if dec else None) or Decimal("0.00")
-                output.append({"detail_type":"salary_taxable_income","org_code":org,"name":getattr(reference,"person_name","") or "","id_number":reference.id_number,"identity_key":employee_identity(getattr(reference,"employee_no","") or "",reference.id_number,org,getattr(reference,"person_name","") or "",index),"source_amount":source_value,"target_amount":target_value,"difference":difference,"auto_reason":f"累计应纳税所得额：工资 {source:.2f}，申报 {target:.2f}，差异 {difference:.2f}","detail_json":{"declared_taxable_income":str(target_value) if target_value is not None else None,"payroll_taxable_income":str(source_value) if source_value is not None else None,"taxable_income_difference":str(difference),"specific_deduction_difference":str(payroll_special-declared_special),"special_additional_deduction_difference":str(additional_difference),"other_deduction_difference":str(payroll_other-declared_other),"housing_fund_adjustment":str(dec.housing_fund_adjustment) if dec and dec.housing_fund_adjustment is not None else None,"declaration_rate":dec.tax_rate if dec else "","payroll_tax":str(payroll_tax),"declared_tax":str(declared_tax),"tax_difference":str(payroll_tax-declared_tax)}})
+                match_status = next((value[2] for value in [declaration_key_map.get(id(dec)), salary_key_map.get(id(pay))] if value), "confirmed")
+                reason = f"累计应纳税所得额：工资 {source:.2f}，申报 {target:.2f}，差异 {difference:.2f}"
+                if match_status == "manual_review": reason += "；身份证脱敏且无法唯一确认，请人工判断"
+                identity_mapping = None
+                if match_status == "manual_confirmed" and pay and dec:
+                    identity_mapping = {"payroll_org_code": pay.org_code, "payroll_name": pay.person_name,
+                                        "declaration_org_code": dec.org_code, "declaration_name": dec.person_name,
+                                        "declaration_id_number": dec.id_number}
+                    reason += "；已按人工身份映射配对（保留双方原始机构及姓名）"
+                output.append({"detail_type":"salary_taxable_income","org_code":org,"name":getattr(reference,"person_name","") or "","id_number":reference.id_number,"identity_key":identity_key_text(identity) + (f":pair-{index}" if index else ""),"source_amount":source_value,"target_amount":target_value,"difference":difference,"auto_reason":reason,"detail_json":{"declared_taxable_income":str(target_value) if target_value is not None else None,"payroll_taxable_income":str(source_value) if source_value is not None else None,"taxable_income_difference":str(difference),"specific_deduction_difference":str(payroll_special-declared_special),"special_additional_deduction_difference":str(additional_difference),"other_deduction_difference":str(payroll_other-declared_other),"housing_fund_adjustment":str(dec.housing_fund_adjustment) if dec and dec.housing_fund_adjustment is not None else None,"declaration_rate":dec.tax_rate if dec else "","payroll_tax":str(payroll_tax),"declared_tax":str(declared_tax),"tax_difference":str(payroll_tax-declared_tax),"identity_match_status":match_status,"manual_identity_mapping":identity_mapping}})
     return output

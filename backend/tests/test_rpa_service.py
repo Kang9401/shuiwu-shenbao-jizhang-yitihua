@@ -64,6 +64,41 @@ def test_prepare_from_period_rejects_conflicting_existing_file_without_partial_c
     assert (app / "input" / source.name).read_bytes() == b"old"
 
 
+def test_prepare_from_period_includes_completed_tax_salary_outputs(tmp_path, monkeypatch):
+    service, app = make_service(tmp_path, monkeypatch)
+    service.company_id = 7
+    monkeypatch.setattr(service_module.settings, "storage_root", tmp_path / "storage")
+    source = service_module.settings.artifact_dir / "7" / "tax" / "42" / "output" / "19020_3-个税申报表(2026年07月).xls"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"salary-declaration")
+
+    class SessionQuery:
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def first(self):
+            return SimpleNamespace(id=42, updated_at=None)
+
+    class TaxOutputDb(FakeDb):
+        def __init__(self):
+            super().__init__([], [])
+            self.calls = 0
+
+        def query(self, model):
+            self.calls += 1
+            if self.calls == 1:
+                return super().query(model)
+            return SessionQuery()
+
+    result = service.prepare_from_period(TaxOutputDb(), 1, False)
+
+    assert [item["name"] for item in result] == [source.name]
+    assert (service._input_root() / source.name).read_bytes() == b"salary-declaration"
+
+
 def test_status_adds_new_task_column_to_existing_results(tmp_path, monkeypatch):
     service, _ = make_service(tmp_path, monkeypatch)
     state = service.store.read()

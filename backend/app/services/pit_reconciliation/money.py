@@ -36,4 +36,4 @@ def is_zero(value: Decimal | None, tolerance: Decimal = TOLERANCE) -> bool:
 
 
 def has_difference(value: Decimal | None, tolerance: Decimal = TOLERANCE) -> bool:
-    return value is not None and abs(value) > tolerance
+    return value is not None and abs(value) >= tolerance

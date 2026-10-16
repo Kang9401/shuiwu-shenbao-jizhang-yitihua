@@ -99,7 +99,7 @@ class PitReconciliationEngine:
                               "row_count": len(source.rows), "issues_json": source.issues} for source in (certificates, bank)]
         return result
 
-    def calculate(self, bundle):
+    def calculate(self, bundle, identity_mappings=None):
         sources=[bundle.organizations,bundle.salary,bundle.declarations,bundle.balance,bundle.broker,bundle.bond_interest,bundle.restricted_stock,bundle.certificates,bundle.bank]
         source_map={source.source_type: source for source in sources}
         # Source adapters name their workflow internally; normalize public source names.
@@ -133,7 +133,8 @@ class PitReconciliationEngine:
             for subject in TAX_SUBJECT_CODES:
                 item=balance[org_code].get(subject); source=source_map[required[subject]]; declared_missing=bundle.declarations.status in {"missing","invalid"}; business_value=None if source.status in {"missing","invalid"} else business[subject]; declared_value=None if declared_missing else declared[subject]; scoped_value=None if declared_missing else scoped[subject]
                 status="invalid_source" if source.status=="invalid" or bundle.declarations.status=="invalid" or bundle.balance.status=="invalid" else "missing_source" if source.status=="missing" or bundle.declarations.status=="missing" or bundle.balance.status=="missing" else "ok"
-                current=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); cumulative=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); business_diff=subtract_nullable(scoped_value,business_value)
+                # 差异8比较本期申报税额与科目余额表本期贷方发生额；累计差异9仍比较期末余额。
+                current=subtract_nullable(declared_value,item.credit_amount if item else Decimal("0.00")); cumulative=subtract_nullable(declared_value,item.closing_balance if item else Decimal("0.00")); business_diff=subtract_nullable(scoped_value,business_value)
                 if status=="ok" and any(has_difference(value) for value in (current,cumulative,business_diff)): status="difference"
                 tax_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":subject_description(subject, item),"opening_balance":item.opening_balance if item else Decimal("0.00"),"debit_amount":item.debit_amount if item else Decimal("0.00"),"credit_amount":item.credit_amount if item else Decimal("0.00"),"closing_balance":item.closing_balance if item else Decimal("0.00"),"business_tax_amount":business_value,"declared_tax_amount":declared_value,"current_difference":current,"cumulative_difference":cumulative,"scoped_declared_tax_amount":scoped_value,"business_declared_difference":business_diff,"check_status":status})
             broker_gross=sum((item.gross_before_topup or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00")); broker_vat=sum((item.vat_amount or Decimal("0.00") for item in bundle.broker.rows if item.org_code==org_code),Decimal("0.00"))
@@ -163,7 +164,7 @@ class PitReconciliationEngine:
                 status="invalid_source" if bundle.balance.status=="invalid" or bundle.declarations.status=="invalid" or (subject=="45019006" and bundle.broker.status=="invalid") else "missing_source" if bundle.balance.status=="missing" or bundle.declarations.status=="missing" or (subject=="45019006" and bundle.broker.status=="missing") else "difference" if has_difference(broker_diff) or has_difference(difference) else "ok"
                 occurrence_rows.append({"org_code":org_code,"org_name":org.org_name,"subject_code":subject,"subject_name":subject_description(subject, item),"income_type":income_type,"opening_balance":item.opening_balance if item else None,"debit_amount":item.debit_amount if item else None,"credit_amount":item.credit_amount if item else None,"closing_balance":item.closing_balance if item else None,"occurrence_amount":occurrence,"broker_payroll_amount":broker_value,"broker_occurrence_difference":broker_diff,"expected_declared_income":expected,"expected_income_description":expected_income(subject, occurrence, broker_value, broker_vat)[1],"actual_declared_income":actual,"declared_income_difference":difference,"check_status":status})
         details=[]
-        if bundle.salary.status=="ready" and bundle.declarations.status=="ready": details += salary_tax_details(bundle.salary.rows,bundle.declarations.rows)+salary_taxable_income_details(bundle.salary.rows,bundle.declarations.rows)
+        if bundle.salary.status=="ready" and bundle.declarations.status=="ready": details += salary_tax_details(bundle.salary.rows,bundle.declarations.rows,identity_mappings)+salary_taxable_income_details(bundle.salary.rows,bundle.declarations.rows,identity_mappings)
         if bundle.bond_interest.status=="ready" and bundle.declarations.status=="ready": details += bond_interest_details(bundle.bond_interest.rows,bundle.declarations.rows)
         if bundle.restricted_stock.status=="ready" and bundle.declarations.status=="ready": details += restricted_stock_details(bundle.restricted_stock.rows,bundle.declarations.rows)
         details = _stabilize_detail_identity_keys(details)
