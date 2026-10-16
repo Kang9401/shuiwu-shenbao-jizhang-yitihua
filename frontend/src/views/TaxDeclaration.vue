@@ -78,7 +78,7 @@
                 选择文件
                 <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
               </label>
-              <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
+              <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'" :title="files[item.role] || '未选择'">
                 {{ files[item.role] || '未选择' }}
               </span>
               <button class="btn btn-xs btn-ghost" :disabled="!files[item.role]" @click="clearFile(item.role)">清除</button>
@@ -93,7 +93,7 @@
                 选择文件
                 <input :key="`${item.role}-${inputVersion}`" class="hidden-file-input" type="file" accept=".xlsx,.xls" @change="pickFile(item.role, $event)" />
               </label>
-              <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'">
+              <span class="upload-status" :class="files[item.role] ? 'ready' : 'empty'" :title="files[item.role] || '未选择'">
                 {{ files[item.role] || '未选择' }}
               </span>
               <button class="btn btn-xs btn-ghost" :disabled="!files[item.role]" @click="clearFile(item.role)">清除</button>
