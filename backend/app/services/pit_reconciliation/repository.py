@@ -35,7 +35,7 @@ class PitReconciliationRepository:
         for row in result["details"]:
             row["name"] = row.pop("person_or_customer_name")
         result["sources"] = [deepcopy(row) for key, row in (pre.source_snapshot_json or {}).items()
-                             if key not in {"tax_certificate", "bank_statement"}]
+                             if key not in {"tax_certificate", "bank_statement", "identity_mappings", "pre_payment_snapshot"}]
         for row in result["sources"]:
             row.pop("rows", None)
         result["declaration_rows"] = deepcopy(declaration_snapshot_rows(self.db, pre))
@@ -43,6 +43,7 @@ class PitReconciliationRepository:
         return result
     def replace(self, workpaper, result):
         workpaper_id = workpaper.id
+        identity_mappings = deepcopy((workpaper.source_snapshot_json or {}).get("identity_mappings", {}))
         manual={PitTaxAmountCheck:self._manual(PitTaxAmountCheck,("org_code","subject_code"),("current_manual_reason","cumulative_manual_reason","business_declared_manual_reason","remark"),workpaper_id),PitOccurrenceCheck:self._manual(PitOccurrenceCheck,("org_code","subject_code"),("broker_occurrence_manual_reason","declared_income_manual_reason","remark"),workpaper_id),PitReconciliationOrgSummary:self._manual(PitReconciliationOrgSummary,("org_code",),("difference_1_manual_reason","difference_2_manual_reason","difference_3_manual_reason","difference_4_manual_reason","difference_5_manual_reason","difference_6_manual_reason","difference_7_manual_reason","remark"),workpaper_id),PitReconciliationDifferenceDetail:self._manual(PitReconciliationDifferenceDetail,("detail_type","org_code","identity_key"),("manual_reason","remark"),workpaper_id)}
         for model in (PitReconciliationSource,PitDeclarationSummary,PitTaxAmountCheck,PitOccurrenceCheck,PitReconciliationOrgSummary,PitReconciliationDifferenceDetail,PitBankTaxMatch): self.db.query(model).filter_by(workpaper_id=workpaper_id).delete(synchronize_session=False)
         self.db.flush()
@@ -65,6 +66,8 @@ class PitReconciliationRepository:
         if result.get("stage") != workpaper.stage: raise ValueError("重算阶段与底稿阶段不一致")
         workpaper.data_status=result["data_status"]; workpaper.calculation_status="success"; workpaper.workflow_status="pending_submission" if result["data_status"] == "ready" else "data_preparation"; workpaper.draft_revision += 1; workpaper.missing_sources_json=result["missing_sources"]; workpaper.source_snapshot_json={row["source_type"]:row for row in result["sources"]}; workpaper.last_calculated_at=datetime.utcnow(); workpaper.last_error=None
         snapshot = dict(workpaper.source_snapshot_json)
+        if workpaper.stage == "pre_payment" and identity_mappings:
+            snapshot["identity_mappings"] = identity_mappings
         if "declaration_rows" in result:
             snapshot.setdefault("pit_declaration", {})["rows"] = result["declaration_rows"]
         if "pre_payment_snapshot" in result:

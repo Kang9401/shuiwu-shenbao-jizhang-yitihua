@@ -57,7 +57,7 @@ def parse_tax_certificate_pdf(path: str | Path) -> tuple[list[dict], list[dict]]
     if total_matches:
         declared_total = sum((Decimal(value.replace(",", "")).quantize(Decimal("0.01")) for value in total_matches), Decimal("0.00"))
         detail_total = sum((row["amount"] for row in rows), Decimal("0.00"))
-        if abs(detail_total - declared_total) > Decimal("0.01"):
+    if abs(detail_total - declared_total) >= Decimal("0.01"):
             issues.append({
                 "issue_type": "certificate_total_mismatch",
                 "message": f"完税凭证解析校验失败：明细合计 {detail_total:.2f} 与 PDF 总金额 {declared_total:.2f} 不一致（容差 0.01）",

@@ -126,7 +126,9 @@ def build_monthly_personnel_change_table(
     for key in sorted(previous_active.keys() - current_active.keys()):
         previous = previous_active[key]
         current = current_non_normal.get(key, previous)
-        rows.append(_change_row(previous, status="非正常", year=year, month=month, leave_date=current["leave_date"]))
+        # Keep this month's confirmed profile updates on the departure row.
+        profile = {field: current.get(field) or value for field, value in previous.items()}
+        rows.append(_change_row(profile, status="非正常", year=year, month=month, leave_date=current["leave_date"]))
     for key in sorted(current_active.keys() - previous_active.keys()):
         rows.append(_change_row(current_active[key], status="正常", year=year, month=month))
 

@@ -8,6 +8,7 @@ import pandas as pd
 
 from app.services.excel import normalize_emp_id
 from app.services.intern_org_mapping import INTERN_ORG_CODE_MAP
+from app.services.personnel_fields import phone_text
 
 
 ORG_CODE_MAP = {
@@ -696,7 +697,7 @@ def intern_tax_transform(frames_by_role: Dict[str, pd.DataFrame]) -> Dict[str, A
             "出生国家(地区)": (_clean_cell(row.get("出生国家(地区)")) or "国籍") if cert_type != "居民身份证" else nationality,
             "涉税事由": (_clean_cell(row.get("涉税事由")) or "其他") if cert_type != "居民身份证" else _clean_cell(row.get("涉税事由")),
             "任职受雇从业日期": row.get("实习开始时间", ""),
-            "手机号码": _clean_cell(row.get("联系方式", row.get("手机号码"))),
+            "手机号码": phone_text(row.get("联系方式", row.get("手机号码"))),
             "人员状态": "正常",
             "任职受雇从业类型": "实习学生（全日制学历教育）",
             "*所得项目": "其他连续劳务报酬",
@@ -847,7 +848,7 @@ def restricted_stock_interest_transform(frames_by_role: Dict[str, pd.DataFrame])
             lxs["利息税申报金额"] * 0.2
         ).round(2)
         source_withheld_mismatch = source_withheld_present & (
-            (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() > 0.01
+            (actual_withheld.abs() - lxs["利息税税费(申报表)"]).abs() >= 0.01
         )
         if source_withheld_mismatch.any():
             interest_source_withheld_warnings = int(source_withheld_mismatch.sum())

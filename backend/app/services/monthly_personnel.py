@@ -11,7 +11,7 @@ from app.models.accounting import OrganizationMapping
 from app.models.core import Artifact, Job, Period, UploadedFile
 from app.services.excel import write_workbook
 from app.services.excel import read_excel
-from app.services.personnel_fields import text, with_foreign_defaults, missing_personnel_fields
+from app.services.personnel_fields import text, phone_text, with_foreign_defaults, missing_personnel_fields
 from app.services.personnel_master import PersonnelMasterResolver
 from app.services.personnel_review import PERSONNEL_CHANGE_COLUMNS
 from app.services.personnel_update import build_personnel_collection_files
@@ -47,6 +47,7 @@ def normalize(frame):
         for key in ("员工编号", "机构代码(人员信息表)"):
             if record[key].endswith(".0"):
                 record[key] = record[key][:-2]
+        record["手机号码"] = phone_text(record["手机号码"])
         record["人员状态"] = record["人员状态"] or "正常"
         if record["证件类型"] == "身份证":
             record["证件类型"] = "居民身份证"

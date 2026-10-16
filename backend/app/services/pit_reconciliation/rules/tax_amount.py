@@ -10,5 +10,8 @@ def declared_by_subject(rows, org_code):
         if "证券经纪人佣金收入" in item: values["21510016"] += tax; scoped["21510016"] += tax
         elif "限售股" in item or "限售股" in kind: values["21510009"] += tax; scoped["21510009"] += tax
         elif "其他利息、股息、红利所得" in item: values["21510008"] += tax; scoped["21510008"] += tax
-        elif "证券经纪" not in item: values["21510006"] += tax; scoped["21510006"] += tax
+        elif "证券经纪" not in item:
+            values["21510006"] += tax
+            if any(term in item for term in ("正常工资薪金", "工资薪金", "一般劳务报酬所得")):
+                scoped["21510006"] += tax
     return values, scoped

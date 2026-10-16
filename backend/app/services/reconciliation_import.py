@@ -34,6 +34,18 @@ def _clean(value: Any) -> str:
     return "" if text.lower() in {"nan", "none", "nat"} else text
 
 
+def _first_present(record: dict[str, Any], *names: str) -> Any:
+    """按字段优先级取第一个有值字段，保留合法数值 0。"""
+    for name in names:
+        if name not in record:
+            continue
+        value = record[name]
+        if value is None or _clean(value) == "":
+            continue
+        return value
+    return None
+
+
 def _first_existing(columns: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
     column_set = set(columns)
     for candidate in candidates:
@@ -194,7 +206,7 @@ def import_pit_declaration_file(db: Session, *, period_id: int, file: UploadFile
     batch = ReconciliationImportBatch(period_id=period_id, import_type="pit_declaration", original_name=file.filename or "pit_declaration.xlsx", stored_path=str(source_path), row_count=len(records), validation_issues=issues, file_results=[{"file_name": file.filename or "pit_declaration.xlsx", "status": "success", "error": ";".join(issue.get("message", "") for issue in issues) if issues else None}])
     db.add(batch); db.flush()
     for number, raw in enumerate(records, start=1):
-        db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(raw.get("纳税人姓名") or raw.get("姓名") or raw.get("*姓名")), income_amount=_to_decimal(raw.get("收入额") or raw.get("本期收入") or raw.get("收入")), tax_amount=_to_decimal(raw.get("应补退税额") or raw.get("应补/退税额") or raw.get("扣缴税额") or raw.get("税额")), tax_period=_clean(raw.get("tax_period")), raw_data=raw))
+        db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(_first_present(raw, "纳税人姓名", "姓名", "*姓名")), income_amount=_to_decimal(_first_present(raw, "收入额", "本期收入", "收入", "转让收入额")), tax_amount=_to_decimal(_first_present(raw, "应补退税额", "应补/退税额", "扣缴税额", "税额")), tax_period=_clean(raw.get("tax_period")), raw_data=raw))
     db.commit(); db.refresh(batch); return batch
 
 
@@ -215,7 +227,7 @@ def import_pit_declaration_files(db: Session, *, period_id: int, files: list[Upl
             all_issues.extend(file_issues)
             for raw in records:
                 row_number += 1
-                db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=row_number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(raw.get("纳税人姓名") or raw.get("姓名") or raw.get("*姓名")), income_amount=_to_decimal(raw.get("收入额") or raw.get("本期收入") or raw.get("收入")), tax_amount=_to_decimal(raw.get("应补退税额") or raw.get("应补/退税额") or raw.get("扣缴税额") or raw.get("税额")), tax_period=_clean(raw.get("tax_period")), raw_data={**raw, "file_name": file_name}))
+                db.add(ReconciliationImportRow(batch_id=batch.id, period_id=period_id, import_type="pit_declaration", row_number=row_number, organization_code=_clean(raw.get("机构代码")), declaration_type=_clean(raw.get("sheet_name")), taxpayer_name=_clean(_first_present(raw, "纳税人姓名", "姓名", "*姓名")), income_amount=_to_decimal(_first_present(raw, "收入额", "本期收入", "收入", "转让收入额")), tax_amount=_to_decimal(_first_present(raw, "应补退税额", "应补/退税额", "扣缴税额", "税额")), tax_period=_clean(raw.get("tax_period")), raw_data={**raw, "file_name": file_name}))
             file_results.append({"file_name": file_name, "status": "success" if records or not issues else "failed", "period": next((issue.get("tax_period", "") for issue in records if issue.get("tax_period")), ""), "error": ";".join(issue.get("message", "") for issue in issues) if issues else None})
         except Exception as exc:
             issue = {"issue_type": "file_import_error", "message": str(exc), "file_name": file_name}

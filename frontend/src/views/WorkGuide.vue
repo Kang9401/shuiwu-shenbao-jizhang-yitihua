@@ -92,7 +92,7 @@ const sections: GuideSection[] = [
   {
     id: 'workpaper', title: '底稿核对', description: '导入来源数据，计算并复核个税核对底稿。', icon: Collection,
     items: [
-      { id: 'pit-import', title: '导入底稿来源数据', description: '导入银行流水、个税申报 Excel、余额表和完税证明。', view: 'reconciliation_imports', auto: 'pit_import' },
+      { id: 'pit-import', title: '导入底稿来源数据', description: '导入银行流水、个税申报表、余额表和完税证明。', view: 'reconciliation_imports', auto: 'pit_import' },
       { id: 'pit-calculate', title: '计算本期核对底稿', description: '确认来源数据齐全后重新计算底稿。', view: 'pit_reconciliation', auto: 'pit_calculate' },
       { id: 'pit-review', title: '复核差异并完成处理', description: '逐项查看差异，填写原因或备注后确认完成。', view: 'pit_reconciliation' },
     ],

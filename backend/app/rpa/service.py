@@ -19,6 +19,8 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session
 
 from app.models.core import Artifact, Job
+from app.models.tax import VerificationSession
+from app.core.config import settings
 from app.rpa.commands import build_chrome_command, build_task_command
 from app.rpa.log_parser import parse_log_line
 from app.rpa.paths import company_rpa_root, state_dir, uploads_dir
@@ -393,6 +395,38 @@ class RpaService:
             if prior and sha256_file(prior) != sha256_file(source):
                 raise FileExistsError(f"本期产物存在同名不同内容文件：{name}")
             candidates[name] = source
+
+        # 工资薪金申报文件由个税核对会话直接生成到 tax/<session>/output，
+        # 不经过 Job/Artifact 登记。将已完成会话的申报文件纳入本期 RPA input，
+        # 与其他工作流产物使用相同的同名和内容校验规则。
+        try:
+            session = (
+                db.query(VerificationSession)
+                .filter(VerificationSession.period_id == period_id, VerificationSession.status == "done")
+                .order_by(VerificationSession.updated_at.desc())
+                .first()
+            )
+        except Exception:
+            # 保持轻量测试替身和旧数据库兼容；没有会话产物时继续使用原有来源。
+            session = None
+        if session is not None:
+            company_part = str(self.company_id) if self.company_id is not None else ""
+            session_root = settings.artifact_dir / company_part / "tax" / str(session.id) if company_part else settings.artifact_dir / str(session.id)
+            output_dir = session_root / "output"
+            if output_dir.is_dir():
+                for source in output_dir.iterdir():
+                    if source.suffix.lower() not in {".xls", ".xlsx"}:
+                        continue
+                    # 仅复制工资薪金申报表和员工人员信息采集表，避免将底稿、报告等
+                    # 内部产物误作为电子税务局导入文件。
+                    if "_3-" not in source.name and "_1-人员信息采集_员工" not in source.name:
+                        continue
+                    name = safe_name(source.name)
+                    source = source.resolve()
+                    prior = candidates.get(name)
+                    if prior and sha256_file(prior) != sha256_file(source):
+                        raise FileExistsError(f"本期产物存在同名不同内容文件：{name}")
+                    candidates[name] = source
         if not candidates:
             raise ValueError("本期没有可用于 RPA 导入的已生成文件")
         root = self._input_root()

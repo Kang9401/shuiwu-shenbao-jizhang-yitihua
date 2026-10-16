@@ -18,6 +18,10 @@ LEGACY_SALARY_ROLE_ALIASES = {
 
 BROKER_KEYWORDS = ("经纪人", "证券经纪")
 MARKETING_KEYWORDS = ("营销", "投顾", "投资顾问", "理财经理", "数字化", "机构业务")
+HEADQUARTERS_SIGNATURE = {
+    "薪资期间", "个税申报地", "个税扣缴义务人纳税人识别号", "个税类型",
+    "本期收入", "本期免税收入", "本期应预扣预缴税额",
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,10 @@ def _first_column(frame: pd.DataFrame, names: Iterable[str]):
 
 
 def classify_salary_frame(frame: pd.DataFrame, filename: str = "") -> SalaryClassification:
+    # 新版总部导出即使文件名、薪资方案和明细均为空，也可由稳定的
+    # 申报字段结构识别；空模板只用于结构校验，后续导入层仍不得创建业务数据。
+    if len(HEADQUARTERS_SIGNATURE.intersection({str(column).strip() for column in frame.columns})) >= 5:
+        return SalaryClassification("headquarters_salary", "总部31列表头结构")
     text_parts = [filename]
     suite_column = _first_column(frame, ("薪资套", "工资套", "薪资方案", "工资类别"))
     if suite_column:

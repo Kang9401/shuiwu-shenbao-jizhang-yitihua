@@ -33,7 +33,7 @@ from app.services.personnel_master import (
     resolve_employee_history_path,
     save_generated_employee_master,
 )
-from app.services.salary_classifier import normalize_payroll_files
+from app.services.salary_classifier import classify_salary_file, normalize_payroll_files
 from app.services.personnel_review import (
     PERSONNEL_CHANGE_COLUMNS,
     build_personnel_change_review_table,
@@ -205,6 +205,39 @@ def _previous_period(db: Session, period: Period | None) -> Period | None:
         .filter(Period.year == previous_year, Period.month == previous_month)
         .first()
     )
+
+
+def _previous_payroll_files(period: Period | None, roles: set[str]) -> list[tuple[str, str]]:
+    """读取上期已上传工资单，按当前工资角色选择最近文件。
+
+    工资上传文件由 storage.save_upload 保存到按期间/角色划分的目录，
+    不登记 UploadedFile 记录，因此这里从上期目录扫描并用同一套表头分类器
+    识别角色。找不到上期文件时返回空列表，当前期仍按本期累计值处理。
+    """
+    if period is None or not roles:
+        return []
+    company_id = current_company_id(default=None)
+    root = (
+        settings.upload_dir / str(company_id) / str(period.id)
+        if company_id is not None
+        else settings.upload_dir / str(period.id)
+    )
+    if not root.is_dir():
+        return []
+    selected: dict[str, Path] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".xls", ".xlsx"}:
+            continue
+        try:
+            role = classify_salary_file(path).role
+        except Exception:
+            continue
+        if role not in roles:
+            continue
+        prior = selected.get(role)
+        if prior is None or path.stat().st_mtime > prior.stat().st_mtime:
+            selected[role] = path
+    return [(role, str(path)) for role, path in selected.items()]
 
 
 def _build_monthly_personnel_declaration_changes(db: Session, period: Period | None) -> pd.DataFrame:
@@ -466,6 +499,10 @@ async def run_verify(
 
     period = db.query(Period).filter(Period.id == session.period_id).first()
     year, month = period.year if period else 2025, period.month if period else 1
+    previous_period = _previous_period(db, period)
+    previous_payroll_files = _previous_payroll_files(
+        previous_period, {role for role, _ in payroll_files}
+    )
 
     staff_path = _resolve_staff_path_for_verification(
         db,
@@ -538,6 +575,7 @@ async def run_verify(
             review_sheet, review_staff_df = build_working_sheet(
                 payroll_files, effective_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids,
                 retirement_welfare_path, retirement_welfare_column,
+                previous_payroll_files=previous_payroll_files,
             )
         except RetirementWelfareColumnSelectionError as exc:
             session.status = "needs_review"
@@ -567,6 +605,7 @@ async def run_verify(
                 payroll_files, effective_staff_path, deduction_dir,
                 taxpayer_org_map, duplicate_taxpayer_ids,
                 retirement_welfare_path, retirement_welfare_column,
+                previous_payroll_files=previous_payroll_files,
             )
             if employee_id_changes
             else (review_sheet, review_staff_df)

@@ -55,3 +55,7 @@ class PitRecalculateRequest(BaseModel):
 
 class PitReasonAggregationRequest(BaseModel):
     mode: Literal["fill_empty", "refresh_generated"] = "refresh_generated"
+
+
+class PitIdentityMappingUpdate(BaseModel):
+    mappings: dict[str, str] = Field(default_factory=dict)

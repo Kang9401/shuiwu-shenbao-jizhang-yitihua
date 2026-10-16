@@ -13,7 +13,7 @@
       <div class="card-header">
         <div>
           <strong>核对数据导入</strong>
-          <p>导入银行流水、个税申报 Excel、完税证明，或自动获取余额表，用于个税核对。</p>
+          <p>导入银行流水、个税申报表、完税证明，或自动获取余额表，用于个税核对。</p>
         </div>
         <span class="tag tag-info">{{ importTypeLabel }}</span>
       </div>
@@ -23,7 +23,7 @@
             <span>导入类型</span>
             <select v-model="importType" class="period-native-select">
               <option value="bank_statement">银行流水</option>
-              <option value="pit_declaration">个税申报 Excel</option>
+              <option value="pit_declaration">个税申报表</option>
               <option value="tax_certificate">完税证明 PDF</option>
               <option value="balance_sheet">余额表</option>
             </select>
@@ -138,7 +138,7 @@ function typeLabel(type: ReconciliationImportType) {
     declaration_result: '申报结果',
     accounting_ledger: '账务数据',
     balance_sheet: '余额表',
-    pit_declaration: '个税申报 Excel',
+    pit_declaration: '个税申报表',
     tax_certificate: '完税证明 PDF',
   }[type]
 }

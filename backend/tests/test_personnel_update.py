@@ -75,6 +75,31 @@ def test_apply_staff_info_update_rehires_in_place_with_period_start_when_date_mi
     assert result["applied_changes"][0]["任职受雇从业日期"] == "2025-02-01"
 
 
+def test_apply_staff_info_update_preserves_leaver_phone_and_hire_date(tmp_path: Path):
+    staff_path = tmp_path / "人员信息表.xlsx"
+    change_path = tmp_path / "人员信息变动表.xlsx"
+    pd.DataFrame([{
+        "员工编号": "1001", "*姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "机构代码": "10301", "人员状态": "正常",
+        "手机号码": "13800000000", "任职受雇从业日期": "2025-01-01",
+    }]).to_excel(staff_path, index=False)
+    pd.DataFrame([{
+        "员工编号": "1001", "*姓名": "张三", "证件类型": "居民身份证",
+        "证件号码": "110101199001010011", "机构代码(人员信息表)": "10301",
+        "人员状态": "非正常", "手机号码": "13900000000",
+        "任职受雇从业日期": "2024-03-01", "离职日期": "2025-02-28",
+    }]).to_excel(change_path, index=False)
+
+    result = apply_staff_info_update(str(staff_path), str(change_path), str(tmp_path / "out"), 2025, 2)
+    updated = pd.read_excel(result["full_staff_path"], dtype=str).fillna("")
+    row = updated.iloc[0]
+    assert row["手机号码"] == "13900000000"
+    assert row["任职受雇从业日期"] == "2024-03-01"
+    collection = pd.read_excel(result["collection_files"][0], dtype=str).fillna("")
+    assert collection.loc[0, "手机号码"] == "13900000000"
+    assert collection.loc[0, "任职受雇从业日期"] == "2024-03-01"
+
+
 def test_apply_staff_info_update_reports_missing_columns(tmp_path: Path):
     staff_path = tmp_path / "人员信息表.xlsx"
     change_path = tmp_path / "人员信息变动表.xlsx"

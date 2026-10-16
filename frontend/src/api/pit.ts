@@ -11,8 +11,13 @@ export interface PitBankTaxMatch { id: number; org_code: string; org_full_name: 
 export interface PitSheetData { sheet_name: string; columns: string[]; column_labels?: string[]; rows: Array<Record<string, unknown>>; total: number; page: number; page_size: number }
 export type PitListParams = { org_code?: string; subject_code?: string; only_differences?: boolean; detail_type?: string; search?: string }
 export type PitStage = 'pre_payment' | 'post_payment'
+export interface PitIdentityMappingRow { row_key: string; org_code: string; name: string; masked_id: string; document_type: string; file_name: string; sheet_name: string; source_row: string | number; tax_amount: string | number | null; candidates: string[]; status: string; selected_id: string; selected_target: string; resolved_target: string; resolved_id: string; warnings: string[] }
+export interface PitPayrollIdentityOption { target_key: string; org_code: string; name: string; id_number: string; employee_nos: string[]; tax_amount: string | number; row_count: number }
 
 export const pitReconciliationApi = {
+  getIdentityMappings: (periodId: number) => api.get<PitIdentityMappingRow[]>('/pit-reconciliations/identity-mappings', { params: { period_id: periodId } }),
+  getIdentityMappingOptions: (periodId: number) => api.get<PitPayrollIdentityOption[]>('/pit-reconciliations/identity-mapping-options', { params: { period_id: periodId } }),
+  saveIdentityMappings: (periodId: number, mappings: Record<string, string>) => api.put('/pit-reconciliations/identity-mappings', { mappings }, { params: { period_id: periodId } }),
   getOverview: (periodId: number, stage: PitStage) => api.get<PitOverviewResponse>('/pit-reconciliations/overview', { params: { period_id: periodId, stage } }),
   getReadiness: (periodId: number, stage: PitStage) => api.get<PitReadinessItem[]>('/pit-reconciliations/readiness', { params: { period_id: periodId, stage } }),
   recalculate: (periodId: number, stage: 'pre_payment' | 'post_payment' = 'pre_payment') => api.post('/pit-reconciliations/recalculate', {}, { params: { period_id: periodId, stage }, timeout: 120000 }),

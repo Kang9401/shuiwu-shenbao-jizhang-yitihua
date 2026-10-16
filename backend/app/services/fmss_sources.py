@@ -23,7 +23,8 @@ COMMON_FIELDS = {
     "branchNo": "机构代码", "branchName": "营业部名称", "clientName": "客户姓名",
     "idKind": "证件类型", "idNo": "证件号码", "stockAccount": "证券账号",
     "stockCode": "证券代码", "stockName": "证券名称", "initDate": "业务日期",
-    "mobileTel": "手机号码", "nationality": "国籍(地区)", "birthday": "出生日期",
+    "clientId": "客户编号", "fundAccount": "资产账号", "mobileTel": "手机号码",
+    "homePhone": "家庭电话", "address": "联系地址", "nationality": "国籍(地区)", "birthday": "出生日期",
     "clientGender": "性别",
 }
 SECURITY_FIELDS = {
@@ -32,7 +33,8 @@ SECURITY_FIELDS = {
         "businessAmount": "成交数量", "businessPrice": "成交价格", "sdsBalance": "成交金额",
         "originalBalance": "原值总金额", "taxFare": "利息税", "sellFare0": "卖出经手费",
         "sellFare1": "卖出印花税", "totalFare": "手续费", "sellFare2": "卖出过户费",
-        "corpName": "企业名称", "uscc": "上市公司纳税人识别号",
+        "corpName": "企业名称", "uscc": "上市公司纳税人识别号", "tradeType": "交易类别",
+        "seatNo": "席位编号", "dealNo": "成交编号", "assetType": "资产属性代码",
     },
 }
 BALANCE_COLUMNS = ["公司段", "会计科目", "描述", "币种", "期初余额", "借方金额", "贷方金额", "期末余额"]
