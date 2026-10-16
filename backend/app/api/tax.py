@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import shutil
 import logging
 from pathlib import Path
@@ -33,7 +34,15 @@ from app.services.personnel_master import (
     resolve_employee_history_path,
     save_generated_employee_master,
 )
-from app.services.salary_classifier import classify_salary_file, normalize_payroll_files
+from app.services.salary_classifier import classify_salary_file, normalize_payroll_files, normalize_salary_role
+from app.services.payroll_database import (
+    load_payroll_frames_from_db,
+    normalized_payroll_frames,
+    replace_payroll_imports,
+    save_payroll_workpaper,
+    workpaper_frame,
+)
+from app.models.payroll import PayrollWorkpaper
 from app.services.personnel_review import (
     PERSONNEL_CHANGE_COLUMNS,
     build_personnel_change_review_table,
@@ -180,9 +189,14 @@ def _resolve_previous_month_employee_master_path(db: Session, period: Period | N
 
     previous_year = period.year if period.month > 1 else period.year - 1
     previous_month = period.month - 1 if period.month > 1 else 12
+    company_id = getattr(period, "company_id", None) or current_company_id(default=None)
     previous_period = (
         db.query(Period)
-        .filter(Period.year == previous_year, Period.month == previous_month)
+        .filter(
+            Period.company_id == company_id,
+            Period.year == previous_year,
+            Period.month == previous_month,
+        )
         .first()
     )
     label = f"{previous_year}年{previous_month:02d}月"
@@ -200,23 +214,65 @@ def _previous_period(db: Session, period: Period | None) -> Period | None:
         return None
     previous_year = period.year if period.month > 1 else period.year - 1
     previous_month = period.month - 1 if period.month > 1 else 12
+    company_id = getattr(period, "company_id", None) or current_company_id(default=None)
     return (
         db.query(Period)
-        .filter(Period.year == previous_year, Period.month == previous_month)
+        .filter(
+            Period.company_id == company_id,
+            Period.year == previous_year,
+            Period.month == previous_month,
+        )
         .first()
     )
 
 
-def _previous_payroll_files(period: Period | None, roles: set[str]) -> list[tuple[str, str]]:
+def _previous_payroll_files(
+    period: Period | None,
+    roles: set[str],
+    *,
+    db: Session | None = None,
+) -> list[tuple[str, str]]:
     """读取上期已上传工资单，按当前工资角色选择最近文件。
 
-    工资上传文件由 storage.save_upload 保存到按期间/角色划分的目录，
-    不登记 UploadedFile 记录，因此这里从上期目录扫描并用同一套表头分类器
-    识别角色。找不到上期文件时返回空列表，当前期仍按本期累计值处理。
+    新流程优先从数据库读取工资明细。仅在历史月份尚未迁入新表时，
+    从成功核对轮次保存的原始路径元数据回退；不扫描目录，也不按文件修改时间选取。
+
+    保留无 db 参数时的旧目录扫描行为，兼容旧的内部调用和历史测试。
     """
     if period is None or not roles:
         return []
-    company_id = current_company_id(default=None)
+    if db is not None:
+        company_id = getattr(period, "company_id", None) or current_company_id(default=None)
+        query = db.query(VerificationRound).join(
+            VerificationSession, VerificationSession.id == VerificationRound.session_id
+        ).filter(
+            VerificationRound.company_id == company_id,
+            VerificationSession.company_id == company_id,
+            VerificationSession.period_id == period.id,
+            VerificationRound.status == "done",
+        ).order_by(VerificationRound.round_number.desc())
+        rounds = query.all()
+        selected: dict[str, str] = {}
+        # A later successful recheck may upload only a subset of payroll
+        # roles. Walk older successful rounds until every missing role has a
+        # usable source path, while keeping the newest path per role.
+        for round_obj in rounds:
+            for item in round_obj.uploaded_files or []:
+                role = item.get("file_role") if isinstance(item, dict) else None
+                path = item.get("stored_path") if isinstance(item, dict) else None
+                if not role or not path:
+                    continue
+                try:
+                    normalized_role = normalize_salary_role(role)
+                except ValueError:
+                    continue
+                if normalized_role in roles and normalized_role not in selected and Path(path).is_file():
+                    selected[normalized_role] = str(path)
+            if selected.keys() >= roles:
+                break
+        return list(selected.items())
+
+    company_id = getattr(period, "company_id", None) or current_company_id(default=None)
     root = (
         settings.upload_dir / str(company_id) / str(period.id)
         if company_id is not None
@@ -250,6 +306,40 @@ def _previous_payroll_files(period: Period | None, roles: set[str]) -> list[tupl
         if prior is None or path.stat().st_mtime > prior.stat().st_mtime:
             selected[role] = path
     return [(role, str(path)) for role, path in selected.items()]
+
+
+def _previous_payroll_frames(
+    db: Session,
+    period: Period | None,
+    roles: set[str],
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> list[pd.DataFrame]:
+    """Load the previous period from structured rows, with a legacy fallback."""
+    if period is None or not roles:
+        return []
+    company_id = getattr(period, "company_id", None) or current_company_id(default=None)
+    if company_id is not None:
+        db_frames = load_payroll_frames_from_db(
+            db,
+            company_id=int(company_id),
+            period_id=period.id,
+            roles=roles,
+        )
+    else:
+        db_frames = []
+    found_roles = {role for role, _ in db_frames}
+    frames = [frame for _, frame in db_frames]
+    missing_roles = roles - found_roles
+    if missing_roles:
+        legacy_paths = _previous_payroll_files(period, missing_roles, db=db)
+        frames.extend(
+            frame
+            for _, frame in normalized_payroll_frames(
+                legacy_paths, taxpayer_org_map, duplicate_taxpayer_ids
+            )
+        )
+    return frames
 
 
 def _build_monthly_personnel_declaration_changes(db: Session, period: Period | None) -> pd.DataFrame:
@@ -513,7 +603,7 @@ async def run_verify(
     year, month = period.year if period else 2025, period.month if period else 1
     previous_period = _previous_period(db, period)
     previous_payroll_files = _previous_payroll_files(
-        previous_period, {role for role, _ in payroll_files}
+        previous_period, {role for role, _ in payroll_files}, db=db
     )
 
     staff_path = _resolve_staff_path_for_verification(
@@ -579,17 +669,46 @@ async def run_verify(
             source_session_id=session_id,
         )
 
+    savepoint = None
     try:
         # 构建底稿 + 核对
         taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(db)
         effective_staff_path = (personnel_update_result or {}).get("updated_staff_path", source_staff_path)
+        savepoint = db.begin_nested()
+        replace_payroll_imports(
+            db,
+            period=period,
+            payroll_files=payroll_files,
+            taxpayer_org_map=taxpayer_org_map,
+            duplicate_taxpayer_ids=duplicate_taxpayer_ids,
+            staff_info_path=effective_staff_path,
+        )
+        current_company = int(getattr(period, "company_id", None) or current_company_id(default=0) or 0)
+        current_db_frames = load_payroll_frames_from_db(
+            db,
+            company_id=current_company,
+            period_id=session.period_id,
+            roles={role for role, _ in payroll_files},
+        )
+        current_frames = [frame for _, frame in current_db_frames]
+        previous_payroll_frames = _previous_payroll_frames(
+            db,
+            previous_period,
+            {role for role, _ in payroll_files},
+            taxpayer_org_map,
+            duplicate_taxpayer_ids,
+        )
         try:
             review_sheet, review_staff_df = build_working_sheet(
                 payroll_files, effective_staff_path, deduction_dir, taxpayer_org_map, duplicate_taxpayer_ids,
                 retirement_welfare_path, retirement_welfare_column,
                 previous_payroll_files=previous_payroll_files,
+                payroll_frames=current_frames,
+                previous_payroll_frames=previous_payroll_frames,
             )
         except RetirementWelfareColumnSelectionError as exc:
+            if savepoint is not None and savepoint.is_active:
+                savepoint.rollback()
             session.status = "needs_review"
             db.commit()
             raise HTTPException(status_code=422, detail={
@@ -618,6 +737,8 @@ async def run_verify(
                 taxpayer_org_map, duplicate_taxpayer_ids,
                 retirement_welfare_path, retirement_welfare_column,
                 previous_payroll_files=previous_payroll_files,
+                payroll_frames=current_frames,
+                previous_payroll_frames=previous_payroll_frames,
             )
             if employee_id_changes
             else (review_sheet, review_staff_df)
@@ -656,8 +777,15 @@ async def run_verify(
         )
         report["monthly_personnel_changes"] = monthly_personnel_changes.to_dict(orient="records")
 
-        # 保存轮次
         stored_report = report_for_json(report)
+        save_payroll_workpaper(
+            db,
+            period=period,
+            sheet=sheet,
+            report=stored_report,
+        )
+
+        # 保存轮次
         round_obj = VerificationRound(
             session_id=session_id,
             round_number=round_num,
@@ -671,14 +799,10 @@ async def run_verify(
         artifact_path.mkdir(parents=True, exist_ok=True)
         working_sheet_path = artifact_path / "底稿.xlsx"
         sheet.to_excel(str(working_sheet_path), index=False)
-        monthly_artifact = _upsert_monthly_working_sheet(
-            db,
-            period_id=session.period_id,
-            period=period,
-            source_path=working_sheet_path,
-            session_id=session_id,
-            round_number=round_num,
-        )
+        # The monthly workpaper is now kept in payroll_workpapers.  Keep the
+        # round-local Excel file for the existing review/download endpoint,
+        # but do not copy it into tax_monthly_artifacts or store a BLOB.
+        monthly_file_name = _period_working_sheet_name(period)
         artifacts = [
             {
                 "name": "底稿.xlsx",
@@ -686,7 +810,7 @@ async def run_verify(
                 "file_type": "working_sheet",
             },
             {
-                "name": monthly_artifact.file_name,
+                "name": monthly_file_name,
                 "download_url": f"/api/tax/monthly-artifacts/{session.period_id}/working-sheet/download",
                 "file_type": "monthly_working_sheet",
             }
@@ -737,6 +861,8 @@ async def run_verify(
         # 关键：本轮已落库为 round_num，session.current_round 递增为下一轮做准备
         # 避免下一轮核对用相同 round_number 覆盖本轮底稿与数据库记录
         session.current_round = round_num + 1
+        if savepoint is not None and savepoint.is_active:
+            savepoint.commit()
         db.commit()
 
         return {
@@ -747,6 +873,8 @@ async def run_verify(
             "artifacts": artifacts,
         }
     except HTTPException:
+        if savepoint is not None and savepoint.is_active:
+            savepoint.rollback()
         raise
     except Exception as exc:
         logger.exception("工资薪金核对失败")
@@ -827,18 +955,32 @@ def generate(session_id: int, db: Session = Depends(get_db)):
     output_dir = tax_artifact_dir(session_id) / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 读取最新底稿
+    period = db.query(Period).filter(Period.id == session.period_id).first()
+    year, month = period.year if period else 2025, period.month if period else 1
+
+    # 读取数据库中的最新工作底稿；旧月份仍可回退到轮次 Excel。
     last_round = (
         db.query(VerificationRound)
         .filter(VerificationRound.session_id == session_id)
         .order_by(VerificationRound.round_number.desc())
         .first()
     )
-    sheet_path = tax_artifact_dir(session_id) / f"round_{last_round.round_number}" / "底稿.xlsx"
-    sheet = pd.read_excel(sheet_path)
-
-    period = db.query(Period).filter(Period.id == session.period_id).first()
-    year, month = period.year if period else 2025, period.month if period else 1
+    if last_round is None:
+        session.status = "needs_review"
+        db.commit()
+        raise HTTPException(status_code=404, detail="该月份尚未完成工资核对")
+    company_id = int(getattr(period, "company_id", None) or current_company_id(default=0) or 0)
+    workpaper = db.query(PayrollWorkpaper).filter(
+        PayrollWorkpaper.company_id == company_id,
+        PayrollWorkpaper.period_id == session.period_id,
+        PayrollWorkpaper.status == "valid",
+    ).first()
+    sheet = workpaper_frame(workpaper)
+    if sheet.empty:
+        sheet_path = tax_artifact_dir(session_id) / f"round_{last_round.round_number}" / "底稿.xlsx"
+        if not sheet_path.exists():
+            raise HTTPException(status_code=404, detail="该月份尚未保存有效工资底稿")
+        sheet = pd.read_excel(sheet_path)
 
     # 使用本月已确认的员工人员主数据；首次核对时自动回退到上月主数据。
     staff_df = None
@@ -941,6 +1083,25 @@ def download_all(session_id: int):
 
 @router.get("/monthly-artifacts/{period_id}/working-sheet/download")
 def download_monthly_working_sheet(period_id: int, db: Session = Depends(get_db)):
+    period = db.query(Period).filter(Period.id == period_id).first()
+    company_id = int(getattr(period, "company_id", None) or current_company_id(default=0) or 0)
+    workpaper = db.query(PayrollWorkpaper).filter(
+        PayrollWorkpaper.company_id == company_id,
+        PayrollWorkpaper.period_id == period_id,
+        PayrollWorkpaper.status == "valid",
+    ).first()
+    sheet = workpaper_frame(workpaper)
+    if not sheet.empty:
+        buf = io.BytesIO()
+        sheet.to_excel(buf, index=False)
+        buf.seek(0)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{_period_working_sheet_name(period)}"'},
+        )
+
+    # Legacy fallback for months created before payroll_workpapers existed.
     artifact = (
         db.query(TaxMonthlyArtifact)
         .filter(

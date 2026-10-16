@@ -8,8 +8,10 @@ import pandas as pd
 
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 from app.models.core import Artifact, Job
+from app.models.payroll import PayrollWorkpaper
 from app.models.tax import TaxMonthlyArtifact
 from app.services.bank_accounts import normalize_bank_account
+from app.services.payroll_database import workpaper_frame
 from .constants import BALANCE_FIELD_ALIASES
 from .domain import (BalanceRow, BankRow, BondInterestRow, BrokerRow, DeclarationRow, PitSourceBundle, RestrictedStockRow, SalaryRow, SourceResult, TaxCertificateRow)
 from .money import money_or_none
@@ -171,11 +173,10 @@ class PitSourceService:
             result.append(DeclarationRow(org, _text(_pick(raw,"sheet_name","申报类型","申报表类型") or row.declaration_type), agent, agent_id, _text(_pick(raw,"纳税人姓名","姓名","*姓名") or row.taxpayer_name), _text(_pick(raw,"身份证件号码","证件号码","身份证号码","*证件号码")), _text(_pick(raw,"所得项目","*所得项目") or row.declaration_type), money_or_none(income_value if income_value is not None else row.income_amount), money_or_none(tax_value if tax_value is not None else row.tax_amount), _text(_pick(raw,"税率/预扣率","税率","预扣率")), money_or_none(_pick(raw,"累计应纳税所得额")), money_or_none(_pick(raw,"累计减除费用")), money_or_none(_pick(raw,"累计专项扣除")), money_or_none(_pick(raw,"子女教育")), money_or_none(_pick(raw,"赡养老人")), money_or_none(_pick(raw,"住房贷款利息")), money_or_none(_pick(raw,"住房租金")), money_or_none(_pick(raw,"继续教育")), money_or_none(_pick(raw,"婴幼儿照护","3岁以下婴幼儿照护","3岁以下婴幼儿")), money_or_none(_pick(raw,"累计个人养老金","个人养老金")), money_or_none(_pick(raw,"累计其他扣除","其他扣除")), money_or_none(_pick(raw,"住房公积金调整")), _text(_pick(raw,"tax_period","税款所属期") or row.tax_period), raw))
         return SourceResult("pit_declaration", "ready_empty" if not result else "ready", result, source_kind="reconciliation_import_batch", source_id=batch.id, source_ref=batch.stored_path, issues=issues)
 
-    def load_salary_source(self) -> SourceResult:
-        artifact=self.db.query(TaxMonthlyArtifact).filter(TaxMonthlyArtifact.company_id == self.company_id, TaxMonthlyArtifact.period_id == self.period_id, TaxMonthlyArtifact.artifact_type == "working_sheet").first()
-        if artifact is None:return SourceResult("salary","missing")
+    def _salary_source_from_frame(self, frame: pd.DataFrame, *, source_kind: str, source_id: int | None = None, source_ref: str = "") -> SourceResult:
         try:
-            frame=pd.read_excel(artifact.stored_path).fillna(""); rows=[]
+            frame = frame.fillna("")
+            rows=[]
             records = frame.to_dict(orient="records")
             has_a2_payroll = any(_salary_kind(record) in {"five_digit", "seven_digit"} for record in records)
             missing_headers = [name for name in PAYROLL_A2_WORKING_SHEET_FIELDS if name not in frame.columns]
@@ -186,8 +187,8 @@ class PitSourceService:
                     f"实际工资表表头：{headers}"
                 )
                 return SourceResult(
-                    "salary", "invalid", source_kind="tax_monthly_artifact",
-                    source_id=artifact.id, source_ref=artifact.stored_path,
+                    "salary", "invalid", source_kind=source_kind,
+                    source_id=source_id, source_ref=source_ref,
                     issues=[{"issue_type": "payroll_header_missing", "message": message, "headers": headers}],
                 )
             for record in records:
@@ -219,8 +220,35 @@ class PitSourceService:
                     money_or_none(record.get("工资单_累计个人养老金")) if is_a2_payroll else None,
                     other_deduction,
                 ))
-            return SourceResult("salary","ready_empty" if not rows else "ready",rows,source_kind="tax_monthly_artifact",source_id=artifact.id,source_ref=artifact.stored_path)
-        except Exception as exc:return SourceResult("salary","invalid",source_kind="tax_monthly_artifact",source_id=artifact.id,source_ref=artifact.stored_path,issues=[{"issue_type":"artifact_parse_error","message":str(exc)}])
+            return SourceResult("salary","ready_empty" if not rows else "ready",rows,source_kind=source_kind,source_id=source_id,source_ref=source_ref)
+        except Exception as exc:
+            return SourceResult("salary","invalid",source_kind=source_kind,source_id=source_id,source_ref=source_ref,issues=[{"issue_type":"artifact_parse_error","message":str(exc)}])
+
+    def load_salary_source(self) -> SourceResult:
+        workpaper = self.db.query(PayrollWorkpaper).filter(
+            PayrollWorkpaper.company_id == self.company_id,
+            PayrollWorkpaper.period_id == self.period_id,
+            PayrollWorkpaper.status == "valid",
+        ).first()
+        if workpaper is not None:
+            return self._salary_source_from_frame(
+                workpaper_frame(workpaper),
+                source_kind="payroll_workpaper",
+                source_id=workpaper.id,
+            )
+
+        artifact=self.db.query(TaxMonthlyArtifact).filter(TaxMonthlyArtifact.company_id == self.company_id, TaxMonthlyArtifact.period_id == self.period_id, TaxMonthlyArtifact.artifact_type == "working_sheet").first()
+        if artifact is None:return SourceResult("salary","missing")
+        try:
+            frame = pd.read_excel(artifact.stored_path)
+        except Exception as exc:
+            return SourceResult("salary","invalid",source_kind="tax_monthly_artifact",source_id=artifact.id,source_ref=artifact.stored_path,issues=[{"issue_type":"artifact_parse_error","message":str(exc)}])
+        return self._salary_source_from_frame(
+            frame,
+            source_kind="tax_monthly_artifact",
+            source_id=artifact.id,
+            source_ref=artifact.stored_path,
+        )
 
     def load_broker_source(self):
         result=self._source_from_artifact("broker_tax", "broker_tax_result", lambda r: BrokerRow(_org_code(_pick(r,"分支机构代码","机构代码")), _text(_pick(r,"姓名","*姓名")), money_or_none(_pick(r,"个人所得税(经纪人)","个人所得税")), money_or_none(_pick(r,"应发合计（补足前）","经纪人本期收入","本期收入")), money_or_none(_pick(r,"增值税"))))

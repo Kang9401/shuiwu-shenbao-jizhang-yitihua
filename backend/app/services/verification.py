@@ -167,8 +167,12 @@ class PayrollHeaderValidationError(ValueError):
         self.missing_fields = missing_fields
         self.headers = headers
         role_label = PAYROLL_ROLE_LABELS.get(role, role or "未知工资表")
+        display_names = {
+            "工资表_累计应纳税所得额": "累计预扣预缴应纳税所得额（底稿字段：工资表_累计应纳税所得额）",
+        }
+        missing_display = "、".join(display_names.get(field, field) for field in missing_fields)
         super().__init__(
-            f"{role_label}缺少附A2必填字段：{'、'.join(missing_fields)}；"
+            f"{role_label}缺少附A2必填字段：{missing_display}；"
             f"文件：{Path(file_path).name}；实际工资表表头：{headers}"
         )
 
@@ -681,6 +685,15 @@ def _load_payroll_frames(
     return frames
 
 
+def load_payroll_frames(
+    payroll_files: list[tuple[str, str]],
+    taxpayer_org_map: dict[str, str] | None = None,
+    duplicate_taxpayer_ids: set[str] | None = None,
+) -> list[pd.DataFrame]:
+    """Public wrapper used by the database payroll adapter."""
+    return _load_payroll_frames(payroll_files, taxpayer_org_map, duplicate_taxpayer_ids)
+
+
 def _apply_previous_commercial_insurance(
     current: pd.DataFrame,
     previous: list[pd.DataFrame],
@@ -895,6 +908,8 @@ def build_working_sheet(
     retirement_welfare_path: str = "",
     retirement_welfare_column: str = "",
     previous_payroll_files: list[tuple[str, str]] | None = None,
+    payroll_frames: list[pd.DataFrame] | None = None,
+    previous_payroll_frames: list[pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """构建完整底稿（大表）。返回 (sheet, staff_df)。"""
     # ---- 1. 加载人员信息表 ----
@@ -934,14 +949,16 @@ def build_working_sheet(
     )
 
     # ---- 2. 分类型加载工资单 ----
-    all_frames = _load_payroll_frames(payroll_files, taxpayer_org_map, duplicate_taxpayer_ids)
+    all_frames = payroll_frames if payroll_frames is not None else _load_payroll_frames(
+        payroll_files, taxpayer_org_map, duplicate_taxpayer_ids
+    )
 
     if not all_frames:
         return pd.DataFrame()
 
     all_payroll = pd.concat(all_frames, ignore_index=True, join="outer")
 
-    previous_frames = _load_payroll_frames(
+    previous_frames = previous_payroll_frames if previous_payroll_frames is not None else _load_payroll_frames(
         previous_payroll_files or [], taxpayer_org_map, duplicate_taxpayer_ids
     )
     _apply_previous_commercial_insurance(all_payroll, previous_frames)

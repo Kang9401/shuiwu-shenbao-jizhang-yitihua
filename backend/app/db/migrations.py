@@ -443,6 +443,113 @@ def _migration_15(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_fmss_branch_code ON companies (fmss_branch_code)")
 
 
+def _migration_16(connection: sqlite3.Connection) -> None:
+    """Add database-backed payroll storage without changing legacy tables."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payroll_import_batches (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            salary_type VARCHAR(80) NOT NULL,
+            org_code VARCHAR(80) NOT NULL DEFAULT '',
+            source_file_name VARCHAR(255) NOT NULL DEFAULT '',
+            source_path VARCHAR(500) NOT NULL DEFAULT '',
+            source_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            row_count INTEGER NOT NULL DEFAULT 0,
+            status VARCHAR(32) NOT NULL DEFAULT 'valid',
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_payroll_import_company_period_type_org
+                UNIQUE (company_id, period_id, salary_type, org_code)
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_import_batches_company_id ON payroll_import_batches(company_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_import_batches_period_id ON payroll_import_batches(period_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_import_batches_salary_type ON payroll_import_batches(salary_type)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_import_batches_org_code ON payroll_import_batches(org_code)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_import_batches_status ON payroll_import_batches(status)")
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payroll_employee_records (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            import_batch_id INTEGER NOT NULL REFERENCES payroll_import_batches(id),
+            salary_type VARCHAR(80) NOT NULL,
+            org_code VARCHAR(80) NOT NULL DEFAULT '',
+            source_row_number INTEGER NOT NULL DEFAULT 0,
+            employee_no VARCHAR(80) NOT NULL DEFAULT '',
+            person_name VARCHAR(255) NOT NULL DEFAULT '',
+            id_type VARCHAR(80) NOT NULL DEFAULT '',
+            id_number VARCHAR(120) NOT NULL DEFAULT '',
+            salary_scheme VARCHAR(255) NOT NULL DEFAULT '',
+            data_json JSON NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_payroll_record_batch_row UNIQUE (import_batch_id, source_row_number)
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_company_id ON payroll_employee_records(company_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_period_id ON payroll_employee_records(period_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_import_batch_id ON payroll_employee_records(import_batch_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_salary_type ON payroll_employee_records(salary_type)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_org_code ON payroll_employee_records(org_code)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_employee_records_employee_no ON payroll_employee_records(employee_no)")
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payroll_calculation_results (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            salary_type VARCHAR(80) NOT NULL,
+            org_code VARCHAR(80) NOT NULL DEFAULT '',
+            source_row_number INTEGER NOT NULL DEFAULT 0,
+            employee_no VARCHAR(80) NOT NULL DEFAULT '',
+            person_name VARCHAR(255) NOT NULL DEFAULT '',
+            input_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            status VARCHAR(32) NOT NULL DEFAULT 'valid',
+            result_json JSON NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_payroll_result_company_period_row
+                UNIQUE (company_id, period_id, salary_type, org_code, source_row_number)
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_company_id ON payroll_calculation_results(company_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_period_id ON payroll_calculation_results(period_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_salary_type ON payroll_calculation_results(salary_type)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_org_code ON payroll_calculation_results(org_code)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_employee_no ON payroll_calculation_results(employee_no)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_calculation_results_status ON payroll_calculation_results(status)")
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payroll_workpapers (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            input_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            status VARCHAR(32) NOT NULL DEFAULT 'valid',
+            sheet_rows_json JSON NOT NULL,
+            report_json JSON,
+            manual_json JSON,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_payroll_workpaper_company_period UNIQUE (company_id, period_id)
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_workpapers_company_id ON payroll_workpapers(company_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_workpapers_period_id ON payroll_workpapers(period_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_workpapers_status ON payroll_workpapers(status)")
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -459,6 +566,7 @@ MIGRATIONS = {
     13: _migration_13,
     14: _migration_14,
     15: _migration_15,
+    16: _migration_16,
 }
 
 

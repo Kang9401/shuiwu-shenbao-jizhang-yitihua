@@ -10,6 +10,12 @@ from app.models.accounting import (
 )
 from app.models.core import Artifact, Company, Job, Period, UploadedFile
 from app.models.tax import TaxMonthlyArtifact, VerificationRound, VerificationSession
+from app.models.payroll import (
+    PayrollCalculationResult,
+    PayrollEmployeeRecord,
+    PayrollImportBatch,
+    PayrollWorkpaper,
+)
 from app.models.pit_reconciliation import (
     PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck, PitReconciliationDifferenceDetail,
     PitReconciliationOrgSummary, PitReconciliationSource, PitReconciliationWorkpaper, PitTaxAmountCheck,
@@ -32,6 +38,10 @@ COMPANY_SCOPED_MODELS = (
     VerificationSession,
     VerificationRound,
     TaxMonthlyArtifact,
+    PayrollImportBatch,
+    PayrollEmployeeRecord,
+    PayrollCalculationResult,
+    PayrollWorkpaper,
     PitReconciliationWorkpaper,
     PitReconciliationSource,
     PitDeclarationSummary,
