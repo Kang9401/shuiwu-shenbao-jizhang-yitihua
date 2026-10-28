@@ -12,8 +12,8 @@ from sqlalchemy.pool import StaticPool
 from app.api import tax as tax_api
 from app.core.config import settings
 from app.db.session import Base
-from app.models.accounting import PersonnelMasterArtifact
-from app.models.core import Period
+from app.models.accounting import OrganizationMapping, PersonnelMasterArtifact
+from app.models.core import Company, Period
 from app.models.tax import TaxMonthlyArtifact, VerificationRound, VerificationSession
 
 
@@ -26,6 +26,67 @@ def _db_session():
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     Base.metadata.create_all(bind=engine)
     return TestingSessionLocal()
+
+
+def test_taxpayer_org_mapping_is_scoped_to_period_company():
+    db = _db_session()
+    try:
+        first = Company(name="公司一", code="C1", operator_name="测试")
+        second = Company(name="成都分公司", code="17020", operator_name="测试")
+        db.add_all([first, second])
+        db.flush()
+        taxpayer_id = "915101006909438061"
+        db.add_all([
+            OrganizationMapping(
+                company_id=first.id,
+                branch_name="成都分公司",
+                org_code="17020",
+                taxpayer_id=taxpayer_id,
+                active=1,
+            ),
+            OrganizationMapping(
+                company_id=second.id,
+                branch_name="成都分公司",
+                org_code="17020",
+                taxpayer_id=taxpayer_id,
+                active=1,
+            ),
+        ])
+        db.commit()
+
+        from app.api.tax import _taxpayer_org_mapping
+
+        mapping, duplicates = _taxpayer_org_mapping(db, company_id=second.id)
+        assert mapping[taxpayer_id] == "17020"
+        assert taxpayer_id not in duplicates
+    finally:
+        db.close()
+
+
+def test_taxpayer_org_mapping_falls_back_to_unique_headquarters_mapping():
+    db = _db_session()
+    try:
+        head_office = Company(name="总部公司", code="HQ", operator_name="测试")
+        branch = Company(name="佛山分公司", code="17007", operator_name="测试")
+        db.add_all([head_office, branch])
+        db.flush()
+        taxpayer_id = "915101006909438061"
+        db.add(OrganizationMapping(
+            company_id=head_office.id,
+            branch_name="成都分公司",
+            org_code="17020",
+            taxpayer_id=taxpayer_id,
+            active=1,
+        ))
+        db.commit()
+
+        from app.api.tax import _taxpayer_org_mapping
+
+        mapping, duplicates = _taxpayer_org_mapping(db, company_id=branch.id)
+        assert mapping[taxpayer_id] == "17020"
+        assert taxpayer_id not in duplicates
+    finally:
+        db.close()
 
 
 def test_previous_payroll_scan_ignores_personnel_master_directory(tmp_path, monkeypatch):

@@ -550,6 +550,83 @@ def _migration_16(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS ix_payroll_workpapers_status ON payroll_workpapers(status)")
 
 
+def _migration_17(connection: sqlite3.Connection) -> None:
+    """Add database-first storage for broker, labour, intern, securities and bonus sources."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS income_import_batches (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            workflow_code VARCHAR(80) NOT NULL,
+            source_role VARCHAR(80) NOT NULL,
+            org_code VARCHAR(80) NOT NULL DEFAULT '',
+            source_file_name VARCHAR(255) NOT NULL DEFAULT '',
+            source_path VARCHAR(500) NOT NULL DEFAULT '',
+            source_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            row_count INTEGER NOT NULL DEFAULT 0,
+            status VARCHAR(32) NOT NULL DEFAULT 'valid',
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_income_import_company_period_workflow_role_org
+                UNIQUE (company_id, period_id, workflow_code, source_role, org_code)
+        );
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_company_id ON income_import_batches(company_id);
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_period_id ON income_import_batches(period_id);
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_workflow_code ON income_import_batches(workflow_code);
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_source_role ON income_import_batches(source_role);
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_org_code ON income_import_batches(org_code);
+        CREATE INDEX IF NOT EXISTS ix_income_import_batches_status ON income_import_batches(status);
+
+        CREATE TABLE IF NOT EXISTS income_records (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            batch_id INTEGER NOT NULL REFERENCES income_import_batches(id),
+            workflow_code VARCHAR(80) NOT NULL,
+            source_role VARCHAR(80) NOT NULL,
+            org_code VARCHAR(80) NOT NULL DEFAULT '',
+            source_row_number INTEGER NOT NULL DEFAULT 0,
+            person_name VARCHAR(255) NOT NULL DEFAULT '',
+            id_number VARCHAR(120) NOT NULL DEFAULT '',
+            employee_no VARCHAR(80) NOT NULL DEFAULT '',
+            data_json JSON NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_income_record_batch_row UNIQUE (batch_id, source_row_number)
+        );
+        CREATE INDEX IF NOT EXISTS ix_income_records_company_id ON income_records(company_id);
+        CREATE INDEX IF NOT EXISTS ix_income_records_period_id ON income_records(period_id);
+        CREATE INDEX IF NOT EXISTS ix_income_records_batch_id ON income_records(batch_id);
+        CREATE INDEX IF NOT EXISTS ix_income_records_workflow_code ON income_records(workflow_code);
+        CREATE INDEX IF NOT EXISTS ix_income_records_source_role ON income_records(source_role);
+        CREATE INDEX IF NOT EXISTS ix_income_records_org_code ON income_records(org_code);
+        CREATE INDEX IF NOT EXISTS ix_income_records_employee_no ON income_records(employee_no);
+
+        CREATE TABLE IF NOT EXISTS income_workpapers (
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL REFERENCES companies(id),
+            period_id INTEGER NOT NULL REFERENCES periods(id),
+            workflow_code VARCHAR(80) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'valid',
+            input_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            detail_json JSON NOT NULL,
+            summary_json JSON NOT NULL,
+            issues_json JSON NOT NULL,
+            manual_json JSON,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_income_workpaper_company_period_workflow
+                UNIQUE (company_id, period_id, workflow_code)
+        );
+        CREATE INDEX IF NOT EXISTS ix_income_workpapers_company_id ON income_workpapers(company_id);
+        CREATE INDEX IF NOT EXISTS ix_income_workpapers_period_id ON income_workpapers(period_id);
+        CREATE INDEX IF NOT EXISTS ix_income_workpapers_workflow_code ON income_workpapers(workflow_code);
+        CREATE INDEX IF NOT EXISTS ix_income_workpapers_status ON income_workpapers(status);
+        """
+    )
+
+
 MIGRATIONS = {
     1: _migration_1,
     2: _migration_2,
@@ -567,6 +644,7 @@ MIGRATIONS = {
     14: _migration_14,
     15: _migration_15,
     16: _migration_16,
+    17: _migration_17,
 }
 
 

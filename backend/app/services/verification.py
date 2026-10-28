@@ -657,6 +657,17 @@ def load_headquarters_payroll(
     result["调增应纳税所得额"] = 0
     result["年累计专项附加扣除"] = 0
 
+    # Keep the original headquarters export context alongside the normalized
+    # calculation fields.  These values are needed for audit/reconciliation
+    # and must survive the database round-trip unchanged.
+    for field in ("薪资期间", "薪资方案", "个税申报地", "个税类型"):
+        if field in df.columns:
+            result[field] = df[field].map(_clean_text)
+    result["总部原始字段"] = [
+        {str(key): value for key, value in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
+
     _copy_payroll_reconciliation_fields(result, df)
     _copy_payroll_a2_fields(result, df, "headquarters_salary", file_path)
 
@@ -1189,6 +1200,12 @@ def build_working_sheet(
     )
 
     # ---- 5. 关联人员信息表（right join = 以工资表为准） ----
+    # Database-backed payroll rows may already carry the personnel snapshot
+    # under the derived name ``机构代码_人员信息表``.  The merge below creates
+    # that same suffixed column from the current personnel master; retaining
+    # both would produce duplicate column names, so ``sheet[... ]`` would
+    # return a DataFrame and later ``.str`` operations would fail.
+    all_payroll = all_payroll.drop(columns=["机构代码_人员信息表"], errors="ignore")
     sheet = all_payroll.merge(
         staff[["员工编号", "*姓名", "证件类型", "证件号码", "机构代码",
                "手机号码", "任职受雇从业日期", "离职日期"]],
@@ -1196,6 +1213,21 @@ def build_working_sheet(
         how="left",
         suffixes=("_工资单", "_人员信息表"),
     )
+
+    # Structured payroll rows can already contain identity fields copied from
+    # the personnel snapshot.  Because the current personnel master has the
+    # same columns, pandas suffixes both sides during the merge and no longer
+    # leaves the canonical ``证件类型``/``证件号码`` columns.  Downstream
+    # validation reads those canonical names, so coalesce them explicitly:
+    # prefer the current personnel master and fall back to the payroll copy.
+    for field in ("证件类型", "证件号码"):
+        canonical = pd.Series("", index=sheet.index, dtype=object)
+        for candidate in (f"{field}_人员信息表", f"{field}_工资单", field):
+            if candidate not in sheet.columns:
+                continue
+            values = sheet[candidate].map(_clean_text)
+            canonical = canonical.mask(canonical.eq(""), values)
+        sheet[field] = canonical
 
     # 工资单里有些人员员工编号为空，但人员信息表中用 0 表示。
     # 这种场景按姓名 + 工资单机构做唯一兜底匹配，避免误报入职/离职。
@@ -1461,6 +1493,70 @@ def _enrich_transfer_like_changes(items: list[dict], year: int | None = None, mo
         item["action_required"] = "疑似变动单位，已沿用原人员身份证号、员工编号等信息，可线上确认或下载雇员表确认"
 
 
+def _enrich_payroll_org_for_changes(items: list[dict], sheet: pd.DataFrame) -> None:
+    """Attach the current payroll organization to change rows when available.
+
+    A departure row is normally produced from the personnel master and has no
+    payroll-side columns.  That is correct when the employee is absent from
+    the current payroll, but it loses the organization when an identity/name
+    mismatch causes the row to be reported as a departure even though a wage
+    row is present.  Keep the source/change organization semantics intact and
+    expose the matched wage organization separately for the review workbook.
+    """
+    if not items or sheet is None or sheet.empty:
+        return
+
+    def key(value: Any) -> str:
+        return _clean_text(value)
+
+    employee_col = _normalize_emp_id(
+        sheet.get("员工编号", pd.Series("", index=sheet.index))
+    )
+    name_col = sheet.get("*姓名", pd.Series("", index=sheet.index)).map(key)
+    id_col = sheet.get("证件号码", pd.Series("", index=sheet.index)).map(_normalize_id_number)
+    org_col_name = "机构代码_工资单" if "机构代码_工资单" in sheet.columns else "机构代码"
+    org_col = sheet.get(org_col_name, pd.Series("", index=sheet.index)).map(normalize_org_code)
+
+    employee_orgs: dict[str, set[str]] = {}
+    identity_orgs: dict[tuple[str, str], set[str]] = {}
+    name_orgs: dict[tuple[str, str], set[str]] = {}
+    for idx in sheet.index:
+        org = key(org_col.loc[idx])
+        if not org:
+            continue
+        employee = key(employee_col.loc[idx])
+        identity = key(id_col.loc[idx])
+        name = key(name_col.loc[idx])
+        if employee:
+            employee_orgs.setdefault(employee, set()).add(org)
+        if identity:
+            identity_orgs.setdefault((identity, name), set()).add(org)
+        if name:
+            name_orgs.setdefault((name, org), set()).add(org)
+
+    for item in items:
+        if item.get("change_type") not in {"离职", "调岗"}:
+            continue
+        if key(item.get("payroll_org_code")):
+            continue
+        candidates: set[str] = set()
+        employee = key(item.get("employee_id"))
+        if employee:
+            candidates.update(employee_orgs.get(employee, set()))
+        if not candidates:
+            identity = key(item.get("id_number"))
+            name = key(item.get("name"))
+            if identity:
+                candidates.update(identity_orgs.get((identity, name), set()))
+        if not candidates:
+            name = key(item.get("name"))
+            source_org = normalize_org_code(item.get("org_code_from", ""))
+            if name and source_org:
+                candidates.update(name_orgs.get((name, source_org), set()))
+        if len(candidates) == 1:
+            item["payroll_org_code"] = next(iter(candidates))
+
+
 def check_personnel_changes(
     sheet: pd.DataFrame,
     confirmed_personnel: list | None = None,
@@ -1534,6 +1630,7 @@ def check_personnel_changes(
                 ))
 
     _enrich_transfer_like_changes(items, year, month)
+    _enrich_payroll_org_for_changes(items, sheet)
     visible_items = [
         item for item in items
         if not _is_personnel_change_confirmed(item, confirmed_personnel)

@@ -16,6 +16,7 @@ from app.models.payroll import (
     PayrollImportBatch,
     PayrollWorkpaper,
 )
+from app.models.income import IncomeImportBatch, IncomeRecord, IncomeWorkpaper
 from app.models.pit_reconciliation import (
     PitBankTaxMatch, PitDeclarationSummary, PitOccurrenceCheck, PitReconciliationDifferenceDetail,
     PitReconciliationOrgSummary, PitReconciliationSource, PitReconciliationWorkpaper, PitTaxAmountCheck,
@@ -42,6 +43,9 @@ COMPANY_SCOPED_MODELS = (
     PayrollEmployeeRecord,
     PayrollCalculationResult,
     PayrollWorkpaper,
+    IncomeImportBatch,
+    IncomeRecord,
+    IncomeWorkpaper,
     PitReconciliationWorkpaper,
     PitReconciliationSource,
     PitDeclarationSummary,

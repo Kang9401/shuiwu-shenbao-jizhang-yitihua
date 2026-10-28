@@ -9,6 +9,7 @@ import pandas as pd
 from app.models.accounting import ReconciliationImportBatch, ReconciliationImportRow
 from app.models.core import Artifact, Job
 from app.models.payroll import PayrollWorkpaper
+from app.models.income import IncomeWorkpaper
 from app.models.tax import TaxMonthlyArtifact
 from app.services.bank_accounts import normalize_bank_account
 from app.services.payroll_database import workpaper_frame
@@ -146,6 +147,39 @@ class PitSourceService:
             return SourceResult(workflow, "ready_empty" if not rows else "ready", rows, source_kind="artifact", source_id=artifact.id, source_ref=artifact.stored_path, issues=issues)
         except Exception as exc: return SourceResult(workflow, "invalid", source_kind="artifact", source_id=artifact.id, source_ref=artifact.stored_path, issues=[{"issue_type": "artifact_parse_error", "message": str(exc)}])
 
+    def _source_from_income_workpaper(self, workflow: str, mapper, predicate=None) -> SourceResult | None:
+        """Use the latest structured calculation snapshot when available.
+
+        An invalid snapshot is explicit: callers must not silently fall back to
+        an older Excel artifact after a failed current-period check.
+        """
+        workpaper = self.db.query(IncomeWorkpaper).filter(
+            IncomeWorkpaper.company_id == self.company_id,
+            IncomeWorkpaper.period_id == self.period_id,
+            IncomeWorkpaper.workflow_code == workflow,
+        ).first()
+        if workpaper is None:
+            return None
+        if workpaper.status != "valid":
+            return SourceResult(
+                workflow,
+                "invalid",
+                source_kind="income_workpaper",
+                source_id=workpaper.id,
+                issues=[{"issue_type": "income_workpaper_invalid", "message": "本期收入核对未通过，数据库底稿已失效"}],
+            )
+        try:
+            frame = pd.DataFrame(workpaper.detail_json or []).fillna("")
+            mapped_rows = [mapper(record) for record in frame.to_dict(orient="records") if predicate is None or predicate(record)]
+            allowed_codes = set(self.resolver.items)
+            rows = [row for row in mapped_rows if not getattr(row, "org_code", "") or row.org_code in allowed_codes]
+            issues = []
+            if mapped_rows and not rows:
+                issues.append({"issue_type": "out_of_scope_workpaper_rows", "message": f"底稿共 {len(mapped_rows)} 行，但没有当前公司机构范围内的数据，已排除"})
+            return SourceResult(workflow, "ready_empty" if not rows else "ready", rows, source_kind="income_workpaper", source_id=workpaper.id, issues=issues)
+        except Exception as exc:
+            return SourceResult(workflow, "invalid", source_kind="income_workpaper", source_id=workpaper.id, issues=[{"issue_type": "workpaper_parse_error", "message": str(exc)}])
+
     def load_balance_source(self) -> SourceResult:
         batch, rows = self._batch_rows("balance_sheet")
         if batch is None: return SourceResult("balance_sheet", "missing")
@@ -228,9 +262,16 @@ class PitSourceService:
         workpaper = self.db.query(PayrollWorkpaper).filter(
             PayrollWorkpaper.company_id == self.company_id,
             PayrollWorkpaper.period_id == self.period_id,
-            PayrollWorkpaper.status == "valid",
         ).first()
         if workpaper is not None:
+            if workpaper.status != "valid":
+                return SourceResult(
+                    "salary",
+                    "invalid",
+                    source_kind="payroll_workpaper",
+                    source_id=workpaper.id,
+                    issues=[{"issue_type": "payroll_workpaper_invalid", "message": "工资核对未通过，数据库工资底稿已失效"}],
+                )
             return self._salary_source_from_frame(
                 workpaper_frame(workpaper),
                 source_kind="payroll_workpaper",
@@ -251,13 +292,19 @@ class PitSourceService:
         )
 
     def load_broker_source(self):
-        result=self._source_from_artifact("broker_tax", "broker_tax_result", lambda r: BrokerRow(_org_code(_pick(r,"分支机构代码","机构代码")), _text(_pick(r,"姓名","*姓名")), money_or_none(_pick(r,"个人所得税(经纪人)","个人所得税")), money_or_none(_pick(r,"应发合计（补足前）","经纪人本期收入","本期收入")), money_or_none(_pick(r,"增值税"))))
+        result = self._source_from_income_workpaper("broker_tax", lambda r: BrokerRow(_org_code(_pick(r,"分支机构代码","机构代码")), _text(_pick(r,"姓名","*姓名")), money_or_none(_pick(r,"个人所得税(经纪人)","个人所得税")), money_or_none(_pick(r,"应发合计（补足前）","经纪人本期收入","本期收入")), money_or_none(_pick(r,"增值税"))))
+        if result is None:
+            result=self._source_from_artifact("broker_tax", "broker_tax_result", lambda r: BrokerRow(_org_code(_pick(r,"分支机构代码","机构代码")), _text(_pick(r,"姓名","*姓名")), money_or_none(_pick(r,"个人所得税(经纪人)","个人所得税")), money_or_none(_pick(r,"应发合计（补足前）","经纪人本期收入","本期收入")), money_or_none(_pick(r,"增值税"))))
         result.source_type="broker"; return result
     def load_bond_source(self):
-        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: BondInterestRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),money_or_none(_pick(r,"债券兑息","利息税原始收入")),money_or_none(_pick(r,"兑息扣税","实际扣缴税额","利息税税费(申报表)"))), predicate=lambda r: security_income_kind(r) == "利息税")
+        result = self._source_from_income_workpaper("restricted_stock_interest_tax", lambda r: BondInterestRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),money_or_none(_pick(r,"债券兑息","利息税原始收入")),money_or_none(_pick(r,"兑息扣税","实际扣缴税额","利息税税费(申报表)"))), predicate=lambda r: security_income_kind(r) == "利息税")
+        if result is None:
+            result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: BondInterestRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),money_or_none(_pick(r,"债券兑息","利息税原始收入")),money_or_none(_pick(r,"兑息扣税","实际扣缴税额","利息税税费(申报表)"))), predicate=lambda r: security_income_kind(r) == "利息税")
         result.source_type="bond_interest"; return result
     def load_restricted_source(self):
-        result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: RestrictedStockRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),_text(_pick(r,"证券名称","股票名称")),money_or_none(_pick(r,"限售股申报金额","成交金额")),money_or_none(_pick(r,"利息税","限售股税费(申报表)","扣缴税额"))), predicate=lambda r: security_income_kind(r) == "限售股")
+        result = self._source_from_income_workpaper("restricted_stock_interest_tax", lambda r: RestrictedStockRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),_text(_pick(r,"证券名称","股票名称")),money_or_none(_pick(r,"限售股申报金额","成交金额")),money_or_none(_pick(r,"利息税","限售股税费(申报表)","扣缴税额"))), predicate=lambda r: security_income_kind(r) == "限售股")
+        if result is None:
+            result=self._source_from_artifact("restricted_stock_interest_tax", "restricted_stock_interest_result", lambda r: RestrictedStockRow(_text(_pick(r,"机构代码","分支机构代码")),_text(_pick(r,"客户姓名","姓名","*姓名")),_text(_pick(r,"证件号码","身份证号码")),_text(_pick(r,"证券名称","股票名称")),money_or_none(_pick(r,"限售股申报金额","成交金额")),money_or_none(_pick(r,"利息税","限售股税费(申报表)","扣缴税额"))), predicate=lambda r: security_income_kind(r) == "限售股")
         result.source_type="restricted_stock"; return result
 
     def load_certificate_source(self) -> SourceResult:

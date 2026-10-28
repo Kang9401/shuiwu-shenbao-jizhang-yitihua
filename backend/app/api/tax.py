@@ -97,13 +97,47 @@ def monthly_tax_artifact_dir(period_id: int) -> Path:
 ARTIFACT_TYPE_WORKING_SHEET = "working_sheet"
 
 
-def _taxpayer_org_mapping(db: Session) -> tuple[dict[str, str], set[str]]:
+def _taxpayer_org_mapping(
+    db: Session,
+    company_id: int | None = None,
+) -> tuple[dict[str, str], set[str]]:
+    """Build the taxpayer-id -> payroll-organization map for one company.
+
+    Organization mappings are tenant-scoped.  The same taxpayer id is expected
+    to appear in separate company records when the database is shared by
+    several branches; treating those rows as duplicates globally makes a valid
+    headquarters payroll row lose its organization code.
+    """
     grouped: dict[str, list[str]] = {}
-    mappings = db.query(OrganizationMapping).filter(OrganizationMapping.active == 1).all()
+    resolved_company_id = company_id or current_company_id(default=None)
+    query = db.query(OrganizationMapping).filter(OrganizationMapping.active == 1)
+    if resolved_company_id is not None:
+        query = query.filter(OrganizationMapping.company_id == int(resolved_company_id))
+    mappings = query.all()
     for item in mappings:
         taxpayer_id = "".join((item.taxpayer_id or "").split()).upper()
         if taxpayer_id:
             grouped.setdefault(taxpayer_id, []).append((item.org_code or "").strip())
+
+    # Headquarters payroll uses the head-office taxpayer id even when the
+    # filing period belongs to a branch company.  Such an id may be maintained
+    # only on the head-office tenant.  If the current company has no local
+    # entry, use the globally unique mapping as a compatibility fallback; a
+    # taxpayer id pointing to different organizations remains ambiguous.
+    if resolved_company_id is not None:
+        global_grouped: dict[str, list[str]] = {}
+        for item in db.query(OrganizationMapping).filter(OrganizationMapping.active == 1).all():
+            taxpayer_id = "".join((item.taxpayer_id or "").split()).upper()
+            if taxpayer_id:
+                global_grouped.setdefault(taxpayer_id, []).append((item.org_code or "").strip())
+        for taxpayer_id, codes in global_grouped.items():
+            if taxpayer_id in grouped:
+                continue
+            unique_codes = {code for code in codes if code}
+            if len(unique_codes) == 1:
+                grouped[taxpayer_id] = [next(iter(unique_codes))]
+            elif unique_codes:
+                grouped[taxpayer_id] = list(unique_codes)
     duplicates = {taxpayer_id for taxpayer_id, codes in grouped.items() if len(codes) != 1}
     return {
         taxpayer_id: codes[0]
@@ -602,9 +636,9 @@ async def run_verify(
     period = db.query(Period).filter(Period.id == session.period_id).first()
     year, month = period.year if period else 2025, period.month if period else 1
     previous_period = _previous_period(db, period)
-    previous_payroll_files = _previous_payroll_files(
-        previous_period, {role for role, _ in payroll_files}, db=db
-    )
+    # The effective current source may include valid role batches from an
+    # earlier upload; resolve the full set after the replacement transaction.
+    previous_payroll_files: list[tuple[str, str]] = []
 
     staff_path = _resolve_staff_path_for_verification(
         db,
@@ -672,7 +706,10 @@ async def run_verify(
     savepoint = None
     try:
         # 构建底稿 + 核对
-        taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(db)
+        taxpayer_org_map, duplicate_taxpayer_ids = _taxpayer_org_mapping(
+            db,
+            company_id=getattr(period, "company_id", None),
+        )
         effective_staff_path = (personnel_update_result or {}).get("updated_staff_path", source_staff_path)
         savepoint = db.begin_nested()
         replace_payroll_imports(
@@ -688,13 +725,16 @@ async def run_verify(
             db,
             company_id=current_company,
             period_id=session.period_id,
-            roles={role for role, _ in payroll_files},
         )
         current_frames = [frame for _, frame in current_db_frames]
+        current_roles = {role for role, _ in current_db_frames}
+        previous_payroll_files = _previous_payroll_files(
+            previous_period, current_roles, db=db
+        )
         previous_payroll_frames = _previous_payroll_frames(
             db,
             previous_period,
-            {role for role, _ in payroll_files},
+            current_roles,
             taxpayer_org_map,
             duplicate_taxpayer_ids,
         )
@@ -783,6 +823,7 @@ async def run_verify(
             period=period,
             sheet=sheet,
             report=stored_report,
+            status="valid" if check_no_blocking_issues(report) else "invalid",
         )
 
         # 保存轮次
@@ -973,8 +1014,9 @@ def generate(session_id: int, db: Session = Depends(get_db)):
     workpaper = db.query(PayrollWorkpaper).filter(
         PayrollWorkpaper.company_id == company_id,
         PayrollWorkpaper.period_id == session.period_id,
-        PayrollWorkpaper.status == "valid",
     ).first()
+    if workpaper is not None and workpaper.status != "valid":
+        raise HTTPException(status_code=409, detail="本月工资核对未通过，底稿已失效，请先重新核对")
     sheet = workpaper_frame(workpaper)
     if sheet.empty:
         sheet_path = tax_artifact_dir(session_id) / f"round_{last_round.round_number}" / "底稿.xlsx"
@@ -1088,8 +1130,9 @@ def download_monthly_working_sheet(period_id: int, db: Session = Depends(get_db)
     workpaper = db.query(PayrollWorkpaper).filter(
         PayrollWorkpaper.company_id == company_id,
         PayrollWorkpaper.period_id == period_id,
-        PayrollWorkpaper.status == "valid",
     ).first()
+    if workpaper is not None and workpaper.status != "valid":
+        raise HTTPException(status_code=409, detail="本月工资核对未通过，底稿已失效，请先重新核对")
     sheet = workpaper_frame(workpaper)
     if not sheet.empty:
         buf = io.BytesIO()
