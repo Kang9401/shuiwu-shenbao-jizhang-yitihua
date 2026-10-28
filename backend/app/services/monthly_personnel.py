@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.models.accounting import OrganizationMapping
+from app.models.accounting import OrganizationMapping, PersonnelMasterArtifact
 from app.models.core import Artifact, Job, Period, UploadedFile
 from app.services.excel import write_workbook
 from app.services.excel import read_excel
@@ -16,6 +16,7 @@ from app.services.personnel_master import PersonnelMasterResolver
 from app.services.personnel_review import PERSONNEL_CHANGE_COLUMNS
 from app.services.personnel_update import build_personnel_collection_files
 from app.services.storage import artifact_path
+from app.services.income_database import load_income_frames, replace_income_sources, save_income_workpaper
 from app.workflows.base import WorkflowResult
 
 SPECS = {
@@ -157,6 +158,16 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
         source_files = db.query(UploadedFile).filter(UploadedFile.id.in_(initial.input_file_ids), UploadedFile.file_role == role).all()
         if not source_files:
             source_files = db.query(UploadedFile).filter(UploadedFile.id.in_(initial.input_file_ids)).all()
+    stored_source = None
+    if db is not None and period_id is not None and not source_files:
+        stored = load_income_frames(
+            db,
+            company_id=period.company_id,
+            period_id=period_id,
+            workflow_code=workflow.info.code,
+            roles={role},
+        )
+        stored_source = stored.get(role)
     root = artifact_path(job_id, "review").parent
     root.mkdir(parents=True, exist_ok=True)
     snapshot = None
@@ -179,15 +190,19 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
     baseline = root / f"{label}_本轮人员基准.xlsx"
     write_workbook(baseline, {"人员信息表":source_master},text_values=True)
     if person_type == "intern":
-        frames = workflow._prepare_frames(db, workflow._frames_with_aliases(source_files))
-        raw = frames.get("intern_salary_sheet",pd.DataFrame())
+        if source_files:
+            frames = workflow._prepare_frames(db, workflow._frames_with_aliases(source_files))
+            raw = frames.get("intern_salary_sheet",pd.DataFrame())
+        else:
+            raw = stored_source.copy() if isinstance(stored_source, pd.DataFrame) else pd.DataFrame()
+            frames = workflow._prepare_frames(db, {"intern_salary_sheet": raw})
     elif person_type == "broker":
         # This screen has exactly one income input. Read it directly so an
         # old role alias or an xls workbook sheet name cannot hide the data.
-        raw = pd.concat([read_excel(f.stored_path) for f in source_files], ignore_index=True, sort=False) if source_files else pd.DataFrame()
+        raw = pd.concat([read_excel(f.stored_path) for f in source_files], ignore_index=True, sort=False) if source_files else (stored_source.copy() if isinstance(stored_source, pd.DataFrame) else pd.DataFrame())
         frames = {"broker_salary_sheet": raw}
     else:
-        raw = pd.concat([pd.read_excel(f.stored_path,dtype=str) for f in source_files],ignore_index=True) if source_files else pd.DataFrame()
+        raw = pd.concat([pd.read_excel(f.stored_path,dtype=str) for f in source_files],ignore_index=True) if source_files else (stored_source.copy() if isinstance(stored_source, pd.DataFrame) else pd.DataFrame())
         frames = {}
     payroll = normalize(raw)
     org_names = {r.branch_name:r.org_code for r in db.query(OrganizationMapping).filter_by(active=1)}
@@ -211,6 +226,7 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
         if row.get("机构代码(人员信息表)") and row["机构代码(人员信息表)"] not in org_names.values():
             issues.append({"issue_type":"unknown_org","message":f"{row['*姓名']} 的机构代码未维护"})
     detail = pd.DataFrame()
+    result = {"summary": {}}
     if not issues:
         if person_type == "broker":
             frames["broker_staff_info"] = pd.DataFrame([{**r, "机构代码":r["机构代码(人员信息表)"]} for r in master]).drop(columns=["机构代码(人员信息表)"], errors="ignore")
@@ -240,6 +256,15 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
             result = {"detail":pd.DataFrame(rows),"issues":[]}
         detail = result.get("detail",pd.DataFrame())
         issues.extend(result.get("issues",[]))
+    if db is not None and period_id is not None and isinstance(raw, pd.DataFrame) and not raw.empty:
+        replace_income_sources(
+            db,
+            period=period,
+            workflow_code=workflow.info.code,
+            frames={role: raw},
+            source_paths={role: source_files[0].stored_path} if source_files else {},
+            source_roles={role},
+        )
     blocking = any(i.get("severity") != "warning" for i in issues)
     review_path = root / f"{label}_人员信息变更表.xlsx"
     _write_review(review_path,review)
@@ -248,6 +273,37 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
     artifacts = [("personnel_baseline",str(baseline)),("personnel_change_review",str(review_path)),(result_type,str(output))]
     finalized = operation == "generate" and not blocking
     if finalized:
+        # Keep the legacy personnel-master pointer usable for older screens,
+        # while the income rows themselves are stored in SQLite.  This is a
+        # compatibility snapshot, not the source of monthly income data.
+        master_frame = pd.DataFrame(master)
+        if not master_frame.empty:
+            master_path = root / f"{label}_人员信息表_{period.year}{period.month:02d}.xlsx"
+            write_workbook(master_path, {"人员信息表": master_frame}, text_values=True)
+            master_artifact = db.query(PersonnelMasterArtifact).filter(
+                PersonnelMasterArtifact.period_id == period_id,
+                PersonnelMasterArtifact.person_type == person_type,
+                PersonnelMasterArtifact.scope_type == "month",
+                PersonnelMasterArtifact.scope_code == "",
+            ).first()
+            if master_artifact is None:
+                master_artifact = PersonnelMasterArtifact(
+                    period_id=period_id,
+                    person_type=person_type,
+                    scope_type="month",
+                    scope_code="",
+                    file_name=master_path.name,
+                    stored_path=str(master_path),
+                    row_count=len(master_frame),
+                    validation_issues=[],
+                )
+                db.add(master_artifact)
+            else:
+                master_artifact.file_name = master_path.name
+                master_artifact.stored_path = str(master_path)
+                master_artifact.row_count = len(master_frame)
+                master_artifact.validation_issues = []
+            artifacts.append(("personnel_master_current", str(master_path)))
         collection = pd.DataFrame(review).drop(columns=["核对行号","变更类型"],errors="ignore")
         if not collection.empty:
             collection["任职受雇从业类型"] = {"intern":"实习学生（全日制学历教育）","broker":"其他","part_time":"其他"}[person_type]
@@ -260,4 +316,16 @@ def run_monthly_personnel(workflow, db, job_id, period_id, files, operation):
                 artifacts.append(("declaration",str(path)))
         else:
             artifacts += workflow._write_split_artifacts(job_id,detail,period.year,period.month)
+    if db is not None and period_id is not None:
+        stored_summary = result.get("summary", {})
+        summary_frame = stored_summary if isinstance(stored_summary, pd.DataFrame) else pd.DataFrame([stored_summary])
+        save_income_workpaper(
+            db,
+            period=period,
+            workflow_code=workflow.info.code,
+            detail=detail,
+            summary=summary_frame,
+            issues=issues,
+            status="invalid" if blocking else "valid",
+        )
     return WorkflowResult(status="needs_review" if blocking else "success",summary={"operation":operation,"rows":len(detail),"issues":len(issues),"issue_details":issues,"can_generate":not blocking,"finalized":finalized,"new_count":sum(r['变更类型']=='新增' for r in review),"leaver_count":sum(r['变更类型']=='离职' for r in review),"matched_count":sum(i is not None for i in matches),"payroll_count":len(payroll)},artifact_paths=artifacts)

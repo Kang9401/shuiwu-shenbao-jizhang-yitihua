@@ -97,6 +97,30 @@ def test_departure_is_exported_as_current_month_non_normal_change():
     assert table.iloc[0]["人员状态"] == "非正常"
 
 
+def test_departure_keeps_current_payroll_org_when_wage_row_is_present():
+    report = {
+        "personnel_changes": {
+            "items": [
+                {
+                    "change_type": "离职",
+                    "name": "总部人员",
+                    "id_number": "110101199001010011",
+                    "org_code_from": "17020",
+                    "org_code_to": "",
+                    "payroll_org_code": "17020",
+                    "employee_id": "16082",
+                    "leave_date": "2026/08/31",
+                },
+            ]
+        }
+    }
+
+    table = build_personnel_change_review_table(report, 2026, 9)
+
+    assert table.iloc[0]["机构代码(人员信息表)"] == "17020"
+    assert table.iloc[0]["机构代码(工资单)"] == "17020"
+
+
 def test_export_marks_missing_required_cells_yellow(tmp_path):
     report = {
         "personnel_changes": {

@@ -39,6 +39,7 @@ from app.services.part_time_tax import (
     write_part_time_artifacts,
 )
 from app.services.storage import artifact_path
+from app.services.income_database import load_income_frames, replace_income_sources, save_income_workpaper
 from app.workflows.base import WorkflowInfo, WorkflowResult
 from app.workflows.common import (
     CertificationWorkflow,
@@ -144,6 +145,9 @@ class TaxTransformWorkflow(ExcelWorkflow):
     supports_balance_reconciliation = False
     expose_issue_details = False
     role_aliases: dict[str, list[str]] = {}
+    # Source-shaped frames persisted in SQLite.  Generated helper frames such
+    # as balance sheets and organisation mappings are intentionally excluded.
+    db_source_roles: tuple[str, ...] = ()
     org_column_candidates = [
         "机构代码",
         "分支机构代码",
@@ -247,7 +251,29 @@ class TaxTransformWorkflow(ExcelWorkflow):
             and "staff_info" in self.info.required_file_roles
             and not any(file.file_role == "staff_info" for file in files)
         )
-        result = self.transform(self._prepare_frames(db, self._frames_with_aliases(files)))
+        frames = self._frames_with_aliases(files)
+        source_roles = set(self.db_source_roles)
+        if db is not None and period_id is not None and source_roles:
+            period = db.query(Period).filter(Period.id == period_id).first()
+            if period is not None:
+                # A rerun can omit an unchanged upload.  Fill only missing
+                # roles from the latest valid structured source.
+                stored = load_income_frames(
+                    db,
+                    company_id=period.company_id,
+                    period_id=period_id,
+                    workflow_code=self.info.code,
+                    roles=source_roles,
+                )
+                for role, frame in stored.items():
+                    if role not in frames or not isinstance(frames[role], pd.DataFrame) or frames[role].empty:
+                        frames[role] = frame
+        prepared_frames = self._prepare_frames(db, frames)
+        if isinstance(prepared_frames.get("staff_info"), pd.DataFrame) and not prepared_frames["staff_info"].empty:
+            # A structured personnel source is equivalent to the shared
+            # personnel upload for database-first reruns.
+            missing_shared_staff_info = False
+        result = self.transform(prepared_frames)
         detail = result.get("detail", pd.DataFrame())
         summary = result.get("summary", pd.DataFrame())
         issues = [*self._input_issues(files, operation), *result.get("issues", [])]
@@ -311,6 +337,33 @@ class TaxTransformWorkflow(ExcelWorkflow):
         if self.expose_issue_details:
             summary_payload["issue_details"] = issues
         has_blocking_issues = any(issue.get("severity") != "warning" for issue in issues)
+
+        if db is not None and period_id is not None and self.db_source_roles:
+            period = db.query(Period).filter(Period.id == period_id).first()
+            if period is not None:
+                source_paths: dict[str, str] = {}
+                for role in source_roles:
+                    candidates = [role, *self.role_aliases.get(role, [])]
+                    source = next((file.stored_path for file in files if file.file_role in candidates), "")
+                    if source:
+                        source_paths[role] = source
+                replace_income_sources(
+                    db,
+                    period=period,
+                    workflow_code=self.info.code,
+                    frames=frames,
+                    source_paths=source_paths,
+                    source_roles=source_roles,
+                )
+                save_income_workpaper(
+                    db,
+                    period=period,
+                    workflow_code=self.info.code,
+                    detail=detail,
+                    summary=summary,
+                    issues=issues,
+                    status="invalid" if has_blocking_issues or result.get("block_declarations", False) else "valid",
+                )
 
         return WorkflowResult(
             status="needs_review" if has_blocking_issues else "success",
@@ -450,6 +503,7 @@ class AnnualBonusTaxWorkflow(TaxTransformWorkflow):
     split_file_label = "全年一次性奖金申报表"
     person_type = "employee"
     role_aliases = {"annual_bonus_sheet": ["bonus_sheet"]}
+    db_source_roles = ("annual_bonus_sheet", "salary_sheet", "staff_info")
 
 
 class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
@@ -471,6 +525,7 @@ class RestrictedStockInterestTaxWorkflow(TaxTransformWorkflow):
         "interest_tax_sheet": ["interest_tax"],
         "balance_sheet": ["balance", "ledger_balance"],
     }
+    db_source_roles = ("restricted_stock_sheet", "interest_tax_sheet")
 
     def _input_issues(self, files: list[UploadedFile], operation: str) -> list[dict[str, Any]]:
         source_roles = {"tax_sheet", "restricted_stock_tax", "interest_tax"}
@@ -664,7 +719,17 @@ class PartTimeTaxWorkflow(ExcelWorkflow):
                 payroll_files = db.query(UploadedFile).filter(
                     UploadedFile.id.in_(initial_job.input_file_ids)
                 ).filter(UploadedFile.file_role == "payroll").all()
-        payroll = pd.concat([pd.read_excel(file.stored_path, dtype=str) for file in payroll_files], ignore_index=True, sort=False) if payroll_files else pd.DataFrame()
+        period = db.query(Period).filter(Period.id == period_id).first() if db is not None and period_id is not None else None
+        stored_payroll = None
+        if not payroll_files and period is not None:
+            stored_payroll = load_income_frames(
+                db,
+                company_id=period.company_id,
+                period_id=period.id,
+                workflow_code=self.info.code,
+                roles={"payroll"},
+            ).get("payroll")
+        payroll = pd.concat([pd.read_excel(file.stored_path, dtype=str) for file in payroll_files], ignore_index=True, sort=False) if payroll_files else (stored_payroll.copy() if isinstance(stored_payroll, pd.DataFrame) else pd.DataFrame())
         changes = pd.concat([pd.read_excel(file.stored_path, dtype=str) for file in change_files], ignore_index=True, sort=False) if change_files else None
         if db is None or period_id is None:
             result = {"master": pd.DataFrame(), "rows": pd.DataFrame(), "issues": [{"issue_type": "missing_period", "message": "非全日制申报必须选择所属期间"}], "blocking": [{"issue_type": "missing_period"}], "pending": pd.DataFrame(), "matching": pd.DataFrame(), "changes": pd.DataFrame(), "summary": {}}
@@ -674,6 +739,24 @@ class PartTimeTaxWorkflow(ExcelWorkflow):
             result["summary"]["master_source_materialized"] = bool(master_source.get("materialized"))
             result["summary"]["master_source_target_file"] = Path(master_source.get("target_path", "")).name if master_source.get("target_path") else ""
         artifacts: list[tuple[str, str]] = []
+        if period is not None and not payroll.empty:
+            replace_income_sources(
+                db,
+                period=period,
+                workflow_code=self.info.code,
+                frames={"payroll": payroll},
+                source_paths={"payroll": payroll_files[0].stored_path} if payroll_files else {},
+                source_roles={"payroll"},
+            )
+            save_income_workpaper(
+                db,
+                period=period,
+                workflow_code=self.info.code,
+                detail=result.get("rows", pd.DataFrame()),
+                summary=pd.DataFrame([result.get("summary", {})]),
+                issues=result.get("issues", []),
+                status="invalid" if result.get("blocking") else "valid",
+            )
         finalized = operation == "recheck" and not result["blocking"]
         if period_id is not None and db is not None and finalized:
             save_part_time_master(db, period_id, result["master"])
@@ -707,6 +790,7 @@ class InternTaxWorkflow(TaxTransformWorkflow):
     person_type = None
     expose_issue_details = True
     role_aliases = {"intern_salary_sheet": ["intern_salary"]}
+    db_source_roles = ("intern_salary_sheet",)
     org_column_candidates = ["分支机构名称", "分支机构代码", "机构代码", "单位编号"]
 
     def _frames_with_aliases(self, files: list[UploadedFile]) -> dict[str, pd.DataFrame]:
@@ -805,6 +889,7 @@ class BrokerTaxWorkflow(TaxTransformWorkflow):
         "broker_salary_sheet": ["broker_income"],
         "broker_staff_info": ["staff_info"],
     }
+    db_source_roles = ("broker_salary_sheet", "staff_info")
     org_column_candidates = ["分支机构代码", "机构代码", "单位编号"]
 
     def _write_split_artifacts(

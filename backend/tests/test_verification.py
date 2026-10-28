@@ -90,6 +90,27 @@ def test_headquarters_31_column_new_amounts_are_preserved(tmp_path):
     assert result["个人所得税 SUM"] == 444
 
 
+def test_headquarters_payroll_maps_org_from_taxpayer_id_when_org_column_is_absent(tmp_path):
+    path = tmp_path / "headquarters_without_org_column.xlsx"
+    pd.DataFrame([{
+        "薪资期间": "2026-09",
+        "个税扣缴义务人纳税人识别号": "915101006909438061",
+        "姓名": "总部员工",
+        "員工编号": "16082",
+        "证件类型": "居民身份证",
+        "证件号码": "513901198402136424",
+        "本期收入": 10000,
+    }]).to_excel(path, index=False)
+
+    result = load_headquarters_payroll(
+        str(path),
+        taxpayer_org_map={"915101006909438061": "17020"},
+    )
+
+    assert result.iloc[0]["机构代码"] == "17020"
+    assert result.iloc[0]["机构映射异常"] == ""
+
+
 def test_headquarters_payroll_preserves_explicit_zero_tax_with_new_header(tmp_path):
     path = tmp_path / "headquarters.xlsx"
     pd.DataFrame([{
@@ -655,6 +676,36 @@ def test_org_code_mismatch_is_reported_as_declaration_org_change():
     assert hire["is_transfer_like"] is True
     assert departure["org_code_from"] == "10301"
     assert hire["org_code_to"] == "10302"
+
+
+def test_departure_change_uses_payroll_org_when_employee_id_still_has_wage_row():
+    # A name mismatch can make the personnel left-join report a departure
+    # even though the current payroll still contains the employee number.
+    sheet = pd.DataFrame([
+        {
+            "员工编号": "16082",
+            "*姓名": "总部人员（工资单）",
+            "机构代码_工资单": "17020",
+            "机构代码_人员信息表": "",
+            "证件类型": "居民身份证",
+            "证件号码": "110101199001010011",
+        }
+    ])
+    staff_df = pd.DataFrame([
+        {
+            "员工编号": "16082",
+            "*姓名": "总部人员",
+            "人员状态": "正常",
+            "机构代码": "17020",
+            "证件类型": "居民身份证",
+            "证件号码": "110101199001010011",
+        }
+    ])
+
+    report = check_personnel_changes(sheet, staff_df=staff_df, year=2026, month=9)
+
+    departure = next(item for item in report["items"] if item["change_type"] == "离职")
+    assert departure["payroll_org_code"] == "17020"
 
 
 def test_verify_returns_four_frontend_checks():

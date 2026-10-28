@@ -140,30 +140,35 @@ def _delete_current_rows(
     company_id: int,
     period_id: int,
     salary_type: str,
-    org_codes: Iterable[str],
+    org_codes: Iterable[str] | None = None,
 ) -> None:
-    codes = list(dict.fromkeys(org_codes))
-    if not codes:
-        return
-    batches = db.query(PayrollImportBatch).filter(
+    codes = list(dict.fromkeys(org_codes or []))
+    query = db.query(PayrollImportBatch).filter(
         PayrollImportBatch.company_id == company_id,
         PayrollImportBatch.period_id == period_id,
         PayrollImportBatch.salary_type == salary_type,
-        PayrollImportBatch.org_code.in_(codes),
-    ).all()
+    )
+    if codes:
+        query = query.filter(PayrollImportBatch.org_code.in_(codes))
+    batches = query.all()
     batch_ids = [batch.id for batch in batches]
     if batch_ids:
         db.query(PayrollEmployeeRecord).filter(
             PayrollEmployeeRecord.import_batch_id.in_(batch_ids)
         ).delete(synchronize_session=False)
-    for batch in batches:
-        db.delete(batch)
-    db.query(PayrollCalculationResult).filter(
+    # Use a bulk DELETE so SQLite executes the parent-row removal immediately
+    # in this transaction.  Marking loaded ORM objects for deletion can leave
+    # the INSERT ahead of the DELETE in a nested flush and violate the unique
+    # current-batch key during same-organization reimports.
+    query.delete(synchronize_session=False)
+    result_query = db.query(PayrollCalculationResult).filter(
         PayrollCalculationResult.company_id == company_id,
         PayrollCalculationResult.period_id == period_id,
         PayrollCalculationResult.salary_type == salary_type,
-        PayrollCalculationResult.org_code.in_(codes),
-    ).delete(synchronize_session=False)
+    )
+    if codes:
+        result_query = result_query.filter(PayrollCalculationResult.org_code.in_(codes))
+    result_query.delete(synchronize_session=False)
 
 
 def replace_payroll_imports(
@@ -218,16 +223,26 @@ def replace_payroll_imports(
             PayrollWorkpaper.period_id == period_id,
         ).update({PayrollWorkpaper.status: "invalidated"}, synchronize_session=False)
 
-    for item in prepared:
-        role = item["role"]
-        org_code = item["org_code"]
+    replacement_roles = sorted({item["role"] for item in prepared})
+    for role in replacement_roles:
+        # One uploaded workbook is the complete current source for its role.
+        # Remove every prior organization for that role before inserting the
+        # newly parsed rows, so an old organization cannot survive a reimport.
         _delete_current_rows(
             db,
             company_id=company_id,
             period_id=period_id,
             salary_type=role,
-            org_codes=[org_code],
         )
+        # Force the old batch and its child rows out before inserting a new
+        # batch with the same (company, period, role, organization) key.
+        # Without this flush SQLite may schedule the INSERT first and raise
+        # the unique constraint during a same-organization reimport.
+        db.flush()
+
+    for item in prepared:
+        role = item["role"]
+        org_code = item["org_code"]
         batch = PayrollImportBatch(
             company_id=company_id,
             period_id=period_id,
@@ -262,6 +277,13 @@ def replace_payroll_imports(
                 salary_scheme=_clean_text(row.get("工资单类型", "")),
                 data_json=row,
             ))
+    # ``SessionLocal`` deliberately disables autoflush.  The last batch in
+    # ``prepared`` therefore has pending employee rows when callers
+    # immediately load the current payroll frames in the same transaction.
+    # Flush once after the complete replacement so every role, including the
+    # final headquarters source, is visible to the database-first reader.
+    if prepared:
+        db.flush()
     return {
         "company_id": company_id,
         "period_id": period_id,
@@ -305,6 +327,7 @@ def save_payroll_workpaper(
     sheet: pd.DataFrame,
     report: dict[str, Any] | None,
     input_sha256: str = "",
+    status: str = "valid",
 ) -> PayrollWorkpaper:
     company_id = _company_id(period)
     period_id = int(period.id)
@@ -335,7 +358,7 @@ def save_payroll_workpaper(
             employee_no=_employee_id(row.get("员工编号", "")),
             person_name=_clean_text(row.get("*姓名", "")),
             input_sha256=input_sha256,
-            status="valid",
+            status=status,
             result_json=row,
         ))
     workpaper = db.query(PayrollWorkpaper).filter(
@@ -346,7 +369,7 @@ def save_payroll_workpaper(
         workpaper = PayrollWorkpaper(company_id=company_id, period_id=period_id)
         db.add(workpaper)
     workpaper.input_sha256 = input_sha256
-    workpaper.status = "valid"
+    workpaper.status = status
     workpaper.sheet_rows_json = _safe_records(sheet)
     workpaper.report_json = _safe_value(report) if report is not None else None
     workpaper.manual_json = {

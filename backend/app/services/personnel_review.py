@@ -106,7 +106,7 @@ def build_personnel_change_review_table(report: dict, year: int, month: int) -> 
                 item,
                 "非正常",
                 _clean(item.get("org_code_from")),
-                "",
+                _clean(item.get("payroll_org_code")) or _clean(item.get("org_code_to")),
                 _clean(item.get("hire_date")),
                 _clean(item.get("leave_date")),
             )
@@ -115,7 +115,7 @@ def build_personnel_change_review_table(report: dict, year: int, month: int) -> 
                 item,
                 "非正常",
                 _clean(item.get("org_code_from")),
-                "",
+                _clean(item.get("payroll_org_code")),
                 _clean(item.get("hire_date")),
                 _clean(item.get("leave_date")),
             )
